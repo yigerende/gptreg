@@ -381,7 +381,7 @@ test('the mail channel travels with the plan so a task can pick it per run', () 
   assert.equal(normalizeRunPlan({ taskKind: 'register_session', mailCount: 1, workerConcurrency: 1, mailProvider: 'xiaopingguo' }, rentalDefaults()).mailProvider, 'xiaopingguo');
   const effective = applyRunPlan(rentalDefaults(), rentalPlan());
   assert.equal(effective.mail.provider, 'smsbower');
-  assert.equal(effective.mail.maxPollAttempts, 3);
+  assert.equal(effective.mail.maxPollAttempts, 24);
 });
 
 test('a persisted remote provider also selects its own endpoint on resume', () => {

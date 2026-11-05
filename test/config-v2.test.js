@@ -33,7 +33,7 @@ test('normalizes the v2 scheduler defaults and fixed SMSBower market', () => {
     aliases: { plusAddressingEnabled: true },
     sms: { maxPrice: 0.03 },
   }, { cwd: 'C:\\workspace' });
-  assert.equal(smsbower.mail.maxPollAttempts, 3);
+  assert.equal(smsbower.mail.maxPollAttempts, 24);
   assert.equal(config.registration.authRequestTimeoutMs, 30000);
   assert.equal(config.registration.securityRequestTimeoutMs, 30000);
   assert.equal(config.registration.prewarmSentinelSdk, true);

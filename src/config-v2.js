@@ -33,7 +33,7 @@ const MAX_SMSBOWER_PRICE_USD = 0.1;
 const DEFAULT_AUTH_REQUEST_TIMEOUT_MS = 30000;
 const DEFAULT_SECURITY_REQUEST_TIMEOUT_MS = 30000;
 const DEFAULT_MAIL_MAX_POLL_ATTEMPTS = 15;
-const SMSBOWER_MAIL_MAX_POLL_ATTEMPTS = 3;
+const SMSBOWER_MAIL_MAX_POLL_ATTEMPTS = 24;
 // Per HTTP hop inside an extraction. Deliberately an order of magnitude below
 // the run budget above.
 

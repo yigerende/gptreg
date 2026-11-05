@@ -26,7 +26,7 @@ const groups: NavGroup[] = [
       { path: "/admin", name: "运营概览", icon: LayoutDashboard },
       { path: "/admin/orders", name: "订单监控", icon: Activity },
       { path: "/admin/risk", name: "风控监控", icon: ShieldCheck },
-      { path: "/admin/finance", name: "积分报表", icon: ChartNoAxesCombined },
+      { path: "/admin/finance", name: "财务报表", icon: ChartNoAxesCombined },
     ],
   },
   {

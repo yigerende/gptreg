@@ -1695,11 +1695,15 @@ test('a pre-registration transport fault rotates in-run when a large pool has a 
       async run(sessionState) {
         used.push(worker.proxyId);
         if (used.length === 1) {
+          sessionState.clientIdentity = { proxy: 'old-transaction-proxy', did: 'kept-device' };
+          sessionState.sentinelRequestProofs = { old: 'must-not-carry' };
           throw Object.assign(new Error('Proxy request timed out: https://chatgpt.com/api/auth/session'), {
             code: 'CHATGPT_SESSION_TIMEOUT',
             retryable: true,
           });
         }
+        assert.equal(sessionState.clientIdentity, undefined, 'initial-step proxy recovery rebuilds stale identity');
+        assert.ok(!sessionState.sentinelRequestProofs?.old, 'old challenge proof is not replayed');
         finishSession(sessionState, job);
       },
     }),
@@ -8230,6 +8234,23 @@ function rentalMailClient(options = {}) {
     async markBound() { return true; },
   };
 }
+
+test('SMSBower accepts a delayed code after the third empty poll within the configured window', async t => {
+  const config=rentalConfig(1,1);
+  config.mail.timeoutMs=1000;config.mail.pollIntervalMs=1;
+  const plan=normalizeRunPlan({taskKind:'register_session',mailProvider:'smsbower',mailCount:1,workerConcurrency:1,security:{setPassword:true,enrollTotp:true}},config);
+  const state=makeInitialBranchState(config,plan,{runId:'rental-delayed-code'}),mail=rentalMailClient();
+  let polls=0;
+  mail.findVerificationCode=async()=>++polls>=5?{code:'123456',messageId:'late'}:null;
+  await runBranchOrchestrator({log:{entries:[]}},state,config,{
+    assetStore:temporaryStore(t),mailClient:mail,
+    sessionRunnerFactory:({job,options})=>({async run(s){
+      const boundary=await options.beforeEmailSend(job.email,s,{purpose:'registration'});
+      s.step='email_otp_sent';await options.getEmailCode(job.email,boundary);finishSession(s,job);
+    }}),
+  });
+  assert.equal(polls,5);assert.equal(state.jobs[0].status,'complete');
+});
 
 test('hang-rental uses one broker poll and claims the configured batch when a Worker is free', async (t) => {
   const config = rentalConfig(4, 1);

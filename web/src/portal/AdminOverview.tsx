@@ -15,7 +15,7 @@ import {
 import { Link } from "../router";
 import { type Row, date } from "./client";
 import { Status, Table } from "./Workspace";
-import { StatCards, Trend, number, ledgerNames } from "./Insights";
+import { StatCards, Trend, number } from "./Insights";
 export default function AdminOverview({
   data,
   onOrder,
@@ -190,7 +190,7 @@ export default function AdminOverview({
             积分仅在完整交付后扣除，失败及取消的未交付部分释放预留。
           </p>
           <Link className="p-link" to="/admin/finance">
-            查看积分报表 →
+            查看财务报表 →
           </Link>
         </section>
       </div>
@@ -232,78 +232,6 @@ export default function AdminOverview({
                 </button>
               ),
             },
-          ]}
-        />
-      </section>
-    </>
-  );
-}
-export function AdminFinance({ data }: { data: Row }) {
-  const stats = data.stats || {};
-  return (
-    <>
-      <AdminCosts cost={data.execution_cost} title={`最近 ${data.days || 30} 天发起任务的执行成本`} />
-      <StatCards
-        items={[
-          {
-            name: "实际交付扣费",
-            value: stats.charged,
-            unit: "积分",
-            hint: "按账本扣费发生时间统计",
-            icon: <CheckCircle2 size={18} />,
-          },
-          {
-            name: "兑换充值入账",
-            value: stats.redeemed,
-            unit: "积分",
-            hint: "已成功兑换的积分",
-            icon: <Wallet size={18} />,
-          },
-          {
-            name: "人工调账净额",
-            value: stats.adjusted,
-            unit: "积分",
-            hint: "管理员加减积分的净变动",
-            icon: <Users size={18} />,
-          },
-          {
-            name: "未交付退回",
-            value: stats.released,
-            unit: "积分",
-            hint: "释放至客户可用积分",
-            icon: <LockKeyhole size={18} />,
-          },
-        ]}
-      />
-      <div className="p-inline-help">
-        积分报表按北京时间统计所选时段，预留与扣费分别记录，不把订单预留重复计算为收入。
-      </div>
-      <section className="p-card p-record-card">
-        <Table
-          rows={data.items || []}
-          columns={[
-            {
-              title: "客户",
-              render: (r) => (
-                <>
-                  <b>{r.name}</b>
-                  <small className="p-block">{r.email}</small>
-                </>
-              ),
-            },
-            { title: "账务类型", render: (r) => ledgerNames[r.kind] || r.kind },
-            {
-              title: "可用积分变动",
-              render: (r) => (
-                <span className={r.points_delta > 0 ? "p-positive" : ""}>
-                  {r.points_delta > 0 ? "+" : ""}
-                  {number(r.points_delta)}
-                </span>
-              ),
-            },
-            { title: "预留积分变动", render: (r) => number(r.frozen_delta) },
-            { title: "说明", render: (r) => r.note },
-            { title: "发生时间", render: (r) => date(r.created_at) },
           ]}
         />
       </section>

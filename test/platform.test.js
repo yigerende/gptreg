@@ -1245,7 +1245,7 @@ test(
         },
       );
       await t.test(
-        "missing checkpoint after restart enters review instead of duplicate registration",
+        "missing checkpoint after restart enters bounded recovery instead of duplicate registration",
         async () => {
           const o = (
             await orders.create(
@@ -1280,7 +1280,7 @@ test(
           const w = new OrderWorker(store, orders, manager);
           await w.cycle();
           assert.equal(started, false);
-          assert.equal((await orders.detail(alice.id, o.id)).status, "review");
+          assert.equal((await orders.detail(alice.id, o.id)).status, "running");
         },
       );
       await t.test(

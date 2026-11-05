@@ -4657,6 +4657,10 @@ async function rotateJobProxyForRecovery(job, worker, context) {
 
   const hadDurableState = registrationInFlight(job);
   if (!hadDurableState) {
+    // Even step=initial can hold a Sentinel identity from a failed first hop.
+    // Clear that transaction before binding a different proxy; dropping only
+    // the lease leaves every later request failing the continuity guard.
+    restartEarlySessionForProxy(job, context);
     unbindWorkerProxy(worker, job, context, {
       code: 'PROXY_LOCAL_RECOVERY',
       reason: 'job_local_proxy_recovery',
@@ -10017,6 +10021,8 @@ async function runJob(job, worker, context) {
           error.waitPhase = MAINTENANCE_PROXY_PHASE;
         }
         if (!registrationWasInFlight || inRunProxyRotation) {
+          if (!registrationWasInFlight && !inRunProxyRotation && !maintenanceProxy)
+            restartEarlySessionForProxy(job, context);
           // A local rotation has already cleared or safely rebuilt the prior
           // proxy context. For a pre-registration failure, do the same here
           // before letting the attempt start over somewhere else.

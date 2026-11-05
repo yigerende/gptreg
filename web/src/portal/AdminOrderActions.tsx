@@ -6,6 +6,8 @@ export default function AdminOrderActions({ data }: { data: Row }) {
   return (
     <>
       <Feedback a={a} />
+      {data.cleanup_runs?.some((r: Row) => !r.finished_at) && <p className="p-inline-help">供应商资源正在后台清理，客户结算不受影响；失败会自动退避重试。</p>}
+      {data.quarantined_assets?.length > 0 && <div className="p-alert">有 {data.quarantined_assets.length} 个迟到或归属异常的账号结果已隔离，不会再次扣费或交付。</div>}
       <AdminCosts cost={data.execution_cost} title="本订单执行成本" />
       <Table rows={data.items} columns={[
         { title: "账号序号", render: r => r.position },
@@ -13,12 +15,12 @@ export default function AdminOrderActions({ data }: { data: Row }) {
         { title: "短信消耗", render: r => <CostAmount cost={r.execution_cost} kind="sms" /> },
       ]} />
       {data.items
-        .filter((r: Row) => r.status === "review")
+        .filter((r: Row) => r.status === "review" || (r.status === "running" && r.recovery_attempts > 0))
         .map((r: Row) => (
           <div className="p-card" key={r.id}>
-            <b>第 {r.position} 个账号待核实</b>
+            <b>第 {r.position} 个账号自动恢复中</b>
             <p className="p-muted">
-              先检查下方内部执行记录，再选择恢复或确认未交付。
+              系统会在执行时限内自动恢复，无法交付则自动退款。以下操作仅用于管理员提前干预。
             </p>
             <div className="p-inline">
               <button
@@ -30,11 +32,11 @@ export default function AdminOrderActions({ data }: { data: Row }) {
                       call(`/api/v1/platform/items/${r.id}/resolve`, "POST", {
                         action: "resume",
                       }),
-                    "已恢复执行",
+                    "已处理恢复请求，状态已同步",
                   )
                 }
               >
-                恢复原任务
+                立即尝试恢复
               </button>
               <button
                 className="p-button secondary"
@@ -48,7 +50,7 @@ export default function AdminOrderActions({ data }: { data: Row }) {
                         call(`/api/v1/platform/items/${r.id}/resolve`, "POST", {
                           action: "fail",
                         }),
-                      "已结束并退回积分",
+                      "操作已处理，结算结果已同步",
                     );
                 }}
               >
@@ -95,7 +97,7 @@ export default function AdminOrderActions({ data }: { data: Row }) {
             ]}
           />
           <p className="p-muted">
-            待核实任务可在原管理台检查和恢复；确认完成或取消后，订单会同步结果。
+            恢复次数和总执行时限均有上限；退款后禁止再次扣费或交付，资源清理由系统独立重试。
           </p>
         </details>
       )}

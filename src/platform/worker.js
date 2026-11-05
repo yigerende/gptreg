@@ -1,10 +1,10 @@
 "use strict";
 const fs = require("node:fs");
 const runtimeSecrets = require("./runtime-secrets");
-const { id } = require("./security");
+const { id, fail } = require("./security");
 const { executionFailure } = require("./execution-failure");
 const { syncAttemptCosts, backfillCosts } = require("./execution-costs");
-const TERMINAL = new Set(["complete", "partial", "failed", "cancelled"]);
+const { TERMINAL, ITEM_TERMINAL, expired, creationUncertain, cleanupRuns } = require("./order-recovery");
 class OrderWorker {
   constructor(db, orders, manager) {
     this.db = db;
@@ -12,6 +12,7 @@ class OrderWorker {
     this.manager = manager;
     this.closed = false;
     this.pending = null;
+    this.operations = new Map();
   }
   async start(lock) {
     this.lock = lock || (await this.db.pool.connect());
@@ -34,7 +35,10 @@ class OrderWorker {
     this.heartbeatTimer.unref();
     this.timer = setInterval(() => this.tick(), 2000);
     this.timer.unref();
+    this.cleanupTimer = setInterval(() => this.kickCleanup(), 5000);
+    this.cleanupTimer.unref();
     await this.tick();
+    this.kickCleanup();
   }
   async tick() {
     if (this.closed || this.pending) return;
@@ -61,10 +65,70 @@ class OrderWorker {
         item.order_id,
       ]);
       await q.query(
-        "UPDATE platform_items SET status='review',message=$2,updated_at=now() WHERE id=$1",
-        [item.id, message],
+        "UPDATE platform_items SET status='running',message=$2,available_at=now()+interval '30 seconds',updated_at=now() WHERE id=$1 AND run_id IS NOT DISTINCT FROM $3 AND status IN ('running','review') AND NOT EXISTS(SELECT 1 FROM platform_ledger WHERE reference IN ('release:'||$1,'charge:'||$1))",
+        [item.id, message, item.run_id],
       );
       await this.orders.refresh(q, item.order_id);
+    });
+  }
+  operation(itemId, fn) {
+    const previous = this.operations.get(itemId) || Promise.resolve();
+    const next = previous.catch(() => {}).then(fn);
+    this.operations.set(itemId, next);
+    return next.finally(() => { if (this.operations.get(itemId) === next) this.operations.delete(itemId); });
+  }
+  kickCleanup() {
+    if (this.closed || this.cleanupPending) return;
+    this.cleanupPending = cleanupRuns(this).catch(() => {}).finally(() => { this.cleanupPending = null; });
+  }
+  async current(itemId) {
+    return this.db.one(`SELECT i.*,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.cancel_requested,
+      COALESCE(LEAST(i.execution_started_at,(SELECT min(a.created_at) FROM platform_attempts a WHERE a.item_id=i.id)),i.attempt_started_at) AS execution_started_at
+      FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.id=$1`, [itemId]);
+  }
+  async refund(item, reason) {
+    return this.orders.finish(item.id, null, `${reason}，未交付部分积分已退回`, item.run_id);
+  }
+  async recover(item, message, allowResume, resume = true) {
+    if (expired(item) || item.cancel_requested)
+      return this.refund(item, item.cancel_requested ? "已取消后续执行" : "执行超过总时限");
+    if (!allowResume || new Date(item.available_at).getTime() > Date.now()) return;
+    if (item.recovery_attempts >= item.attempt_limit)
+      return this.refund(item, `${message}，自动恢复次数已用尽`);
+    const claimed = await this.db.tx(async q => {
+      await q.query("SELECT id FROM platform_orders WHERE id=$1 FOR UPDATE", [item.order_id]);
+      const changed = (await q.query(`UPDATE platform_items SET status='running',recovery_attempts=recovery_attempts+1,
+        available_at=now()+LEAST(120,30*power(2,recovery_attempts))*interval '1 second',
+        message=$3,updated_at=now() WHERE id=$1 AND run_id=$2 AND status IN ('running','review')
+        AND NOT EXISTS(SELECT 1 FROM platform_ledger WHERE reference IN ('release:'||$1,'charge:'||$1)) RETURNING id`,
+      [item.id,item.run_id,`${message}，系统自动恢复 ${item.recovery_attempts+1}/${item.attempt_limit}`])).rowCount;
+      if (changed) await this.orders.refresh(q, item.order_id);
+      return changed;
+    });
+    if (!claimed || !resume) return;
+    try { await this.manager.resume(item.run_id); }
+    catch (e) {
+      const failure = executionFailure(e, "ENGINE_EXECUTION_FAILED");
+      await this.recordFailure(item.run_id, failure);
+      if (["CUSTOMER_TASK_CAPACITY", "CUSTOMER_USER_CAPACITY", "SESSION_ASSET_IN_USE"].includes(failure.code))
+        await this.db.query("UPDATE platform_items SET recovery_attempts=GREATEST(0,recovery_attempts-1) WHERE id=$1 AND run_id=$2 AND status='running'", [item.id,item.run_id]);
+    }
+  }
+  async resolve(itemId, action) {
+    fail(["resume", "fail"].includes(action), "操作无效");
+    return this.operation(itemId, async () => {
+      const settled = await this.orders.repairSettled(itemId);
+      if (settled) return { ok: true, ...settled };
+      const item = await this.current(itemId);
+      fail(item && ["running", "review"].includes(item.status), "任务不在恢复状态", 409);
+      if (action === "fail") {
+        const result = await this.refund(item, "管理员确认终止交付");
+        this.kickCleanup();
+        return { ok: true, ...result };
+      }
+      await this.db.query("UPDATE platform_items SET available_at=now() WHERE id=$1 AND status IN ('running','review')", [itemId]);
+      await this.reconcile(await this.current(itemId));
+      return { ok: true, status: (await this.current(itemId)).status };
     });
   }
   credentials(asset, needOauth) {
@@ -114,8 +178,20 @@ class OrderWorker {
         "SELECT i.*,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.cancel_requested FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.status IN ('running','review')",
       )
     ).rows;
-    this.manager.setCustomerPendingRuns(running.map((item) => item.run_id));
-    for (const item of running) await this.reconcile(item, s.worker_enabled);
+    const cleanup = (await this.db.query("SELECT run_id FROM platform_run_cleanup WHERE finished_at IS NULL")).rows;
+    this.manager.setCustomerPendingRuns([...running,...cleanup].map((item) => item.run_id));
+    for (const item of running) {
+      try { await this.operation(item.id, () => this.reconcile(item, s.worker_enabled)); }
+      catch (e) {
+        console.error("Customer item reconciliation:", e.code || e.name);
+        // One corrupt asset or temporary failure must not stop unrelated customers.
+        try { await this.recover(await this.current(item.id), "执行状态同步异常", s.worker_enabled, false); } catch {}
+      }
+    }
+    const overdue = (await this.db.query(`SELECT i.* FROM platform_items i JOIN platform_orders o ON o.id=i.order_id
+      WHERE i.status IN ('queued','oauth_pending') AND i.execution_started_at IS NOT NULL
+      AND i.execution_started_at+o.timeout_minutes*interval '1 minute'<=now()`)).rows;
+    for (const item of overdue) await this.refund(item, "执行超过总时限");
     if (!s.worker_enabled || this.closed) return;
     // The durable count also covers jobs whose engine checkpoint is missing
     // after a crash. Never replace uncertain work with a duplicate execution.
@@ -124,7 +200,7 @@ class OrderWorker {
         "SELECT i.status,i.run_id,o.user_id FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.status IN ('running','review')",
       )
     ).rows;
-    this.manager.setCustomerPendingRuns(pending.map((item) => item.run_id));
+    this.manager.setCustomerPendingRuns([...pending,...cleanup].map((item) => item.run_id));
     const occupied = pending.filter((item) => {
       if (item.status === "running" || this.manager.activeRun(item.run_id))
         return true;
@@ -156,6 +232,7 @@ class OrderWorker {
       [excludedUsers],
     );
     if (!candidate) return false;
+    if (expired(candidate)) { await this.refund(candidate, "执行超过总时限"); return; }
     // Each customer receives one account per turn. Durable run IDs are written
     // before invoking the engine so a restart can never silently start a duplicate.
     const runId = `customer-${id()}`,
@@ -174,7 +251,7 @@ class OrderWorker {
       ).rows[0];
       if (!["queued", "oauth_pending"].includes(item.status)) return false;
       await q.query(
-        "UPDATE platform_items SET status='running',run_id=$2,stage=$3,attempts=attempts+$4,oauth_attempts=oauth_attempts+$5,attempt_started_at=now(),updated_at=now(),message=$6 WHERE id=$1",
+        "UPDATE platform_items SET status='running',run_id=$2,stage=$3,attempts=attempts+$4,oauth_attempts=oauth_attempts+$5,attempt_started_at=now(),execution_started_at=COALESCE(execution_started_at,now()),available_at=now(),updated_at=now(),message=$6 WHERE id=$1",
         [
           item.id,
           runId,
@@ -239,13 +316,13 @@ class OrderWorker {
       if (persisted) {
         await this.review(
           { ...candidate, run_id: runId },
-          "任务已保存，等待管理员检查恢复",
+          "任务已保存，系统将自动恢复",
         );
         return candidate.user_id;
       }
       // start() fails before launching a job: safe to retry within the saved budget.
       const fresh = await this.db.one(
-        "SELECT i.*,o.attempt_limit,o.cancel_requested FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.id=$1",
+        "SELECT i.*,o.attempt_limit,o.timeout_minutes,o.cancel_requested FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.id=$1",
         [candidate.id],
       );
       if (failure.wait && !fresh.cancel_requested) {
@@ -324,11 +401,12 @@ class OrderWorker {
       [item.run_id],
     );
     const used = item.stage === "oauth" ? item.oauth_attempts : item.attempts;
-    if (item.cancel_requested || used >= item.attempt_limit) {
+    if (item.cancel_requested || expired(item) || used >= item.attempt_limit) {
       await this.orders.finish(
         item.id,
         null,
         `${message}，未交付部分积分已退回`,
+        item.run_id,
       );
       return;
     }
@@ -352,6 +430,8 @@ class OrderWorker {
         ])
       ).rows[0];
       if (["delivered", "failed", "cancelled"].includes(current.status)) return;
+      if (current.run_id !== item.run_id) return;
+      if (await this.orders.settlement(q, o, current)) { await this.orders.refresh(q, o.id); return; }
       if (o.cancel_requested) {
         await q.query("SELECT id FROM platform_users WHERE id=$1 FOR UPDATE", [
           o.user_id,
@@ -373,13 +453,14 @@ class OrderWorker {
     });
   }
   async reconcile(item, allowResume = true) {
+    // Re-read after acquiring the per-item executor lock. Financial evidence is
+    // authoritative even when an older worker overwrote the terminal status.
+    if (await this.orders.repairSettled(item.id)) return;
+    item = await this.current(item.id);
+    if (!item || ITEM_TERMINAL.has(item.status)) return;
     let state;
-    try {
-      state = this.manager.load(item.run_id);
-    } catch {
-      await this.review(item, "执行记录暂不可读，等待管理员核实，积分继续预留");
-      return;
-    }
+    try { state = this.manager.load(item.run_id); }
+    catch { return this.recover(item, "执行记录暂不可读", allowResume, false); }
     const active = this.manager.activeRun(item.run_id);
     if (!active || !this.costSyncAt?.has(item.run_id) || Date.now() - this.costSyncAt.get(item.run_id) > 10000) {
       this.costSyncAt ||= new Map();
@@ -387,143 +468,62 @@ class OrderWorker {
       if (active) this.costSyncAt.set(item.run_id, Date.now());
       else this.costSyncAt.delete(item.run_id);
     }
-    const expired =
-      Date.now() - new Date(item.attempt_started_at).getTime() >
-      item.timeout_minutes * 60000;
     if (active) {
-      if (expired && state.control?.requestedAction !== "cancel")
-        await this.manager.cancel(
-          item.run_id,
-          "Customer order execution deadline",
-        );
+      if (expired(item)) await this.refund(item, "执行超过总时限");
       return;
     }
-    if (!TERMINAL.has(state.status)) {
-      if (state.status === "paused" && !expired && item.status !== "review") {
-        if (!allowResume) return;
-        try {
-          await this.manager.resume(item.run_id);
-          return;
-        } catch (e) {
-          // Lowering concurrency keeps already admitted work queued for
-          // recovery, without turning a normal capacity wait into a review.
-          if (
-            ["CUSTOMER_TASK_CAPACITY", "CUSTOMER_USER_CAPACITY"].includes(
-              executionFailure(e).code,
-            )
-          )
-            return;
-        }
-      }
-      if (expired) {
-        try {
-          await this.manager.cancel(
-            item.run_id,
-            "Customer order execution deadline",
-          );
-          state = this.manager.load(item.run_id);
-        } catch {}
-      }
-      if (!TERMINAL.has(state.status)) {
-        await this.review(item, "任务等待资源或恢复确认，请联系管理员");
-        return;
-      }
-    }
-    await this.db.query(
-      "UPDATE platform_attempts SET status='finished',finished_at=now() WHERE run_id=$1",
-      [item.run_id],
-    );
-    const jobs = state.jobs || [],
-      assetIds = [
-        ...new Set(
-          [
-            item.asset_id,
-            ...jobs.map((j) => j.sessionAssetId || j.assetId),
-          ].filter(Boolean),
-        ),
-      ];
-    if (assetIds.length > 1) {
-      await this.review(item, "执行结果数量异常，需要人工核实归属");
-      return;
-    }
+    const jobs = state.jobs || [];
+    const assetIds = [...new Set([item.asset_id, ...jobs.map(j => j.sessionAssetId || j.assetId)].filter(Boolean))];
+    if (assetIds.length > 1) return this.refund(item, "执行结果归属异常，已隔离");
     let asset;
     try {
       if (assetIds[0]) asset = this.manager.sessionAssets().get(assetIds[0]);
-    } catch {}
+    } catch { return this.recover(item, "账号资料暂不可读", allowResume, false); }
+    if (assetIds[0] && !asset) return this.recover(item, "账号资料尚未同步", allowResume, false);
     const result = asset && this.credentials(asset, item.need_oauth);
+    // A complete durable asset can be delivered while the stopped engine still
+    // has mailbox/SMS cleanup pending. Cleanup has its own persistent queue.
     if (result) {
       try {
-        await this.orders.finish(item.id, result);
+        const done = await this.orders.finish(item.id, result, undefined, item.run_id);
+        if (done?.delivered) await this.syncSold(asset.id);
       } catch (e) {
-        if (e.code === "23505") {
-          await this.review(item, "账号已关联其他交付记录，需要管理员核实");
-          return;
-        }
+        if (e.code === "23505" || e.statusCode === 409)
+          return this.refund(item, "账号归属或交付资料校验失败，已隔离");
         throw e;
       }
-      await this.syncSold(asset.id);
       return;
     }
-    const failure = executionFailure(
-      jobs.find((job) => job.error)?.error || {},
-      "ENGINE_EXECUTION_FAILED",
-    );
+    if (expired(item) || item.cancel_requested)
+      return this.refund(item, item.cancel_requested ? "已取消后续执行" : "执行超过总时限");
+    const failure = executionFailure(jobs.find(job => job.error)?.error || {}, "ENGINE_EXECUTION_FAILED");
     await this.recordFailure(item.run_id, failure);
+    if (!TERMINAL.has(state.status))
+      return this.recover(item, failure.detail, allowResume);
+    await this.db.query("UPDATE platform_attempts SET status='finished',finished_at=COALESCE(finished_at,now()) WHERE run_id=$1", [item.run_id]);
     if (asset) {
-      // A registered account is never replaced just because OAuth failed.
-      await this.db.query("UPDATE platform_items SET asset_id=$2 WHERE id=$1", [
-        item.id,
-        asset.id,
-      ]);
+      await this.db.query("UPDATE platform_items SET asset_id=$2 WHERE id=$1 AND run_id=$3 AND status IN ('running','review')", [item.id,asset.id,item.run_id]);
       item.asset_id = asset.id;
-      if (
-        item.need_oauth &&
-        item.stage === "register" &&
-        this.credentials(asset, false)
-      ) {
-        if (item.cancel_requested) {
-          await this.orders.finish(
-            item.id,
-            null,
-            "已取消后续 OAuth 授权，积分已退回",
-          );
-          return;
-        }
-        await this.queueNext(
-          item,
-          "oauth_pending",
-          "账号已注册，等待 OAuth 授权",
-        );
-        return;
-      }
-      if (item.stage === "oauth") {
-        await this.retryOrFinish(item, "OAuth 授权未完成");
-        return;
-      }
-      await this.orders.finish(
-        item.id,
-        null,
-        "账号安全凭据未完整配置，未交付部分积分已退回",
-      );
-      return;
+      if (item.need_oauth && item.stage === "register" && this.credentials(asset, false))
+        return this.queueNext(item, "oauth_pending", "账号已注册，等待 OAuth 授权");
+      if (item.stage === "oauth") return this.retryOrFinish(item, "OAuth 授权未完成");
+      // Restore security on this account; never replace an already-created one.
+      return this.recover(item, "账号安全设置未完成", allowResume);
     }
-    const uncertain = jobs.some(
-      (j) =>
-        j.accountCreatedAt ||
-        j.targetTouchedAt ||
-        j.registration?.accountCreated,
-    );
-    if (uncertain) {
-      await this.review(item, "注册结果需核实，避免重复创建账号");
-      return;
-    }
-    await this.retryOrFinish(item, "本次注册未成功");
+    if (jobs.some(creationUncertain))
+      return this.recover(item, "正在恢复原账号注册结果", allowResume);
+    // targetTouchedAt only means registration was started (e.g. password sent).
+    // It is not evidence that create_account succeeded. An OTP timeout before
+    // account creation may retry within the original time/attempt budget.
+    await this.retryOrFinish(item, failure.detail);
   }
   async close() {
     this.closed = true;
     clearInterval(this.timer);
     clearInterval(this.heartbeatTimer);
+    clearInterval(this.cleanupTimer);
     await this.pending;
+    await this.cleanupPending;
     if (this.lock) {
       await this.lock
         .query("SELECT pg_advisory_unlock(8963002)")

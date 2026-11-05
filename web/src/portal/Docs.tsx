@@ -668,7 +668,7 @@ export default function Docs({
                   。成功完整交付才扣费，失败或取消的未交付部分退回。
                   <code>points</code> 已是可用余额，
                   <strong>不要再减 frozen</strong>
-                  。待核实部分继续预留，等待确认后结算。
+                  。恢复中的部分继续预留，超时或恢复次数耗尽后自动退款。
                 </p>
               </div>
               <p>
@@ -743,7 +743,7 @@ export default function Docs({
                 </li>
                 <li>
                   每 5 秒<a href="#get_order">查询该订单</a>
-                  。进入结束状态后停止轮询；review 时联系支持并保留原订单。
+                  。进入结束状态后停止轮询；review 时继续查询原订单，系统自动恢复或退款。
                 </li>
                 <li>
                   以 <code>order_id</code>{" "}
@@ -895,7 +895,7 @@ export default function Docs({
                 <li>
                   429 若带 Retry-After，按指定秒数等待；没有时至少等待 60
                   秒。达到未完成订单上限时，需等待旧订单结算；review
-                  需联系支持。
+                  继续查询原订单，系统自动恢复或退款。
                 </li>
                 <li>
                   500 / 503 和网络错误可退避重试。下单始终复用原键；401 / 403 /

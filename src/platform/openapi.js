@@ -23,7 +23,7 @@ const obj = (properties, required = Object.keys(properties), extra = {}) => ({
 const orderStates = {
   queued: "排队等待执行",
   running: "注册或 OAuth 授权处理中",
-  review: "结果待人工核实，积分继续预留，请联系支持",
+  review: "兼容旧状态：系统自动恢复，超过时限或次数后自动退款",
   completed: "全部交付完成",
   partial: "部分交付完成，其余已退回积分",
   failed: "没有交付，积分已退回",
@@ -33,7 +33,7 @@ const itemStates = {
   queued: "等待执行",
   running: "注册或授权执行中",
   oauth_pending: "注册完成，等待授权或重试授权",
-  review: "待人工核实",
+  review: "自动恢复中",
   delivered: "已交付并扣费",
   failed: "未交付，已退回积分",
   cancelled: "已取消，已退回积分",
@@ -66,7 +66,7 @@ const errors = {
   413: ["请求体过大", "总请求体不能超过 1 MiB；账号导出每次最多 1000 个 ID。"],
   429: [
     "请求过频或未完成订单达到上限",
-    "有 Retry-After 时按该秒数等待；否则至少等待 60 秒。订单上限需等待已有订单结算，review 需联系支持。",
+    "有 Retry-After 时按该秒数等待；否则至少等待 60 秒。订单上限需等待已有订单结算，review 继续查询原订单，系统自动恢复或退款。",
   ],
   500: [
     "服务暂时不可用",
@@ -179,9 +179,13 @@ const schemas = {
     status: str("单个账号当前状态", { enum: Object.keys(itemStates) }),
     attempts: num("注册阶段已尝试次数"),
     oauth_attempts: num("OAuth 阶段已尝试次数"),
+    recovery_attempts: num("原任务自动恢复次数，恢复不会重置总执行期限"),
+    next_retry_at: { type: ["string", "null"], format:"date-time", description:"下一次恢复或排队检查时间；执行中不表示会再次启动任务" },
+    execution_started_at: { type: ["string", "null"], format:"date-time", description:"首次开始执行时间，排队期间为空" },
+    execution_deadline_at: { type: ["string", "null"], format:"date-time", description:"总执行期限；首次执行前为空，恢复和 OAuth 不重置" },
     message: str("当前进度或处理说明"),
     updated_at: stamp("子项最后更新时间"),
-  }),
+  }, ["id","position","status","attempts","oauth_attempts","message","updated_at"]),
   OrderDetail: {
     allOf: [
       ref("Order"),
@@ -518,7 +522,7 @@ operation(
   "查询订单进度",
   "注册订单",
   "orders:read",
-  "订单字段与子项 items 一并返回。HTTP 200 表示查询成功，是否交付须检查 status、delivered 和子项状态。queued/running 建议每 5 秒查询；review 暂停自动重试并联系支持。",
+  "订单字段与子项 items 一并返回。HTTP 200 表示查询成功，是否交付须检查 status、delivered 和子项状态。queued/running 建议每 5 秒查询；review 继续查询原订单，系统会自动恢复或结束退款。",
   {
     parameters: [identifier("order")],
     result: ref("OrderDetail"),
@@ -532,7 +536,7 @@ operation(
   "取消未执行部分",
   "注册订单",
   "orders:write",
-  "不需要请求正文。取消等待执行或等待授权的部分，并退回对应预留积分。运行中及待核实部分须确认结果后结算；可重复取消，已结束订单保持原状态。响应含完整订单及子项。",
+  "不需要请求正文。取消等待执行或等待授权的部分，并退回对应预留积分。运行中部分按执行结果结算，恢复中的未交付部分自动结束退款；可重复取消，已结束订单保持原状态。响应含完整订单及子项。",
   {
     parameters: [identifier("order")],
     result: ref("OrderDetail"),
@@ -783,7 +787,7 @@ const openapi = {
   openapi: "3.1.0",
   info: {
     title: "GPT Register 开放 API",
-    version: "1.3.0",
+    version: "1.4.0",
     description:
       "通过服务端 API 创建标准或含 OAuth 的注册订单，查询进度并领取交付凭据。下单预留积分，按实际交付结算；失败/取消未交付部分释放。所有示例为虚构演示资料，实际价格与上限以接口返回为准。",
   },

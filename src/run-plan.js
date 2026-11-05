@@ -406,6 +406,8 @@ function applyRunPlan(config, input = {}) {
       // would send an old Mail.com task to the current Fastmail endpoint.
       baseUrl: providerBaseUrl(config.mail, plan.mailProvider),
       maxPollAttempts: plan.mailProvider === 'smsbower'
+        ? Math.max(defaultMailMaxPollAttempts('smsbower'), config.mail.maxPollAttempts || 0)
+        : plan.mailProvider !== config.mail.provider
         ? defaultMailMaxPollAttempts(plan.mailProvider)
         : config.mail.maxPollAttempts,
       aliasBatchSize: remoteProvider ? selectedAliasSettings.aliasBatchSize : config.mail.aliasBatchSize,

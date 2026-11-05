@@ -2,6 +2,12 @@
 // Only fixed descriptions and known codes cross into platform diagnostics.
 // Never persist upstream messages, URLs, credentials, or entire preflight data.
 const reasons = {
+  EMAIL_OTP_TIMEOUT: ["mail", "邮箱验证码等待超时"],
+  SENTINEL_PROXY_IDENTITY_CHANGED: ["proxy", "代理切换后会话身份不一致"],
+  SENTINEL_CLIENT_IDENTITY_CHANGED: ["execution", "会话设备身份不一致"],
+  ERR_SSL_WRONG_VERSION_NUMBER: ["proxy", "代理连接 TLS 协议异常"],
+  TERMINAL_RUN: ["execution", "原任务已结束，无法继续恢复"],
+  MAILBOX_STATE_REJECTED: ["mail", "邮箱供应商拒绝租约状态变更"],
   COUNTRY_PROXY_POOL_EMPTY: ["proxy", "所选国家代理池为空，请补充代理"],
   COUNTRY_PROXY_POOL_CAPACITY: ["proxy", "所选代理池可用容量不足"],
   COUNTRY_PROXY_POOL_OVERLAP: ["proxy", "所选代理池存在重复代理"],

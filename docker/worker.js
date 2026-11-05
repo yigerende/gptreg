@@ -41,53 +41,15 @@ async function main() {
     queue = new OrderWorker(db, orders, app.services.runManager);
   app.get("/healthz", async () => ({ ok: !queue.closed }));
   app.post("/api/v1/platform/items/:id/resolve", async (r) => {
-    const item = await db.one(
-      "SELECT * FROM platform_items WHERE id=$1 AND status='review'",
-      [r.params.id],
-    );
-    fail(item, "待核实子任务不存在", 404);
-    fail(
-      !app.services.runManager.activeRun(item.run_id),
-      "任务仍在执行，不能人工结算",
-      409,
-    );
     const action = r.body?.action;
-    fail(["resume", "fail"].includes(action), "操作无效");
-    if (action === "resume") {
-      await app.services.runManager.resume(item.run_id);
-      await db.query(
-        "UPDATE platform_items SET status='running',attempt_started_at=now(),message='管理员已恢复执行' WHERE id=$1",
-        [item.id],
-      );
-    } else {
-      let state;
-      try {
-        state = app.services.runManager.load(item.run_id);
-      } catch {}
-      if (
-        state &&
-        !["complete", "partial", "cancelled", "failed"].includes(state.status)
-      ) {
-        await app.services.runManager.cancel(
-          item.run_id,
-          "Administrator resolved customer order",
-        );
-        state = app.services.runManager.load(item.run_id);
-        fail(
-          ["complete", "partial", "cancelled", "failed"].includes(state.status),
-          "资源清理尚未完成，请稍后核实",
-          409,
-        );
-      }
-      await orders.finish(item.id, null, "管理员核实为未交付，预留积分已退回");
-    }
+    const result = await queue.resolve(r.params.id, action);
     await audit(
       db,
       String(r.headers["x-gptreg-actor"] || ""),
       `item.${action}`,
-      item.id,
+      r.params.id,
     );
-    return { ok: true };
+    return result;
   });
   await queue.start(queueLock);
   await app.listen({

@@ -72,6 +72,20 @@ ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS error_detail text NOT NUL
 ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS cost_snapshot jsonb;
 ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS cost_checked_at timestamptz;
 CREATE INDEX IF NOT EXISTS platform_attempt_item ON platform_attempts(item_id);
+ALTER TABLE platform_items ADD COLUMN IF NOT EXISTS execution_started_at timestamptz;
+ALTER TABLE platform_items ADD COLUMN IF NOT EXISTS recovery_attempts integer NOT NULL DEFAULT 0;
+UPDATE platform_items i SET execution_started_at=COALESCE(
+ (SELECT min(a.created_at) FROM platform_attempts a WHERE a.item_id=i.id),i.attempt_started_at)
+ WHERE execution_started_at IS NULL AND attempt_started_at IS NOT NULL;
+CREATE TABLE IF NOT EXISTS platform_run_cleanup (
+ run_id text PRIMARY KEY,item_id text NOT NULL REFERENCES platform_items(id),
+ attempts integer NOT NULL DEFAULT 0,next_attempt_at timestamptz NOT NULL DEFAULT now(),
+ last_error text NOT NULL DEFAULT '',finished_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS platform_quarantined_assets (
+ asset_id text PRIMARY KEY,item_id text NOT NULL REFERENCES platform_items(id),run_id text NOT NULL,
+ reason text NOT NULL,created_at timestamptz NOT NULL DEFAULT now()
+);
 ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS engine_sold_at timestamptz;
 ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS engine_sold_retry_at timestamptz NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS platform_account_sold_pending ON platform_accounts(engine_sold_retry_at,id) WHERE engine_sold_at IS NULL;

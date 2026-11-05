@@ -1,0 +1,50 @@
+"use strict";
+const {test}=require("node:test"),assert=require("node:assert/strict"),fs=require("node:fs"),crypto=require("node:crypto");
+const {Database}=require("../src/platform/db"),{Orders,ledger}=require("../src/platform/orders");
+const {cipher,id,digest}=require("../src/platform/security"),{buildPlatform}=require("../src/platform/app");
+const {financeQuery}=require("../src/platform/finance");
+test("finance dates and periods reject invalid or unbounded input",()=>{
+  for(const query of [{start:'2026-02-30'},{start:'2026-11-06',end:'2026-11-05'},{period:'minute'},{include_admin:'yes'},{start:'2000-01-01',end:'2026-01-01'}])assert.throws(()=>financeQuery(query));
+  assert.equal(financeQuery({}).include_admin,false);
+});
+const connection=process.env.GPTREG_TEST_DATABASE_URL||(fs.existsSync('.local/platform-test/connection.json')?JSON.parse(fs.readFileSync('.local/platform-test/connection.json')).url:'');
+test("finance uses Beijing dates, excludes admins consistently, separates currencies and exports every filtered customer",{skip:!connection},async t=>{
+  const setup=new Database(connection),schema='finance_'+crypto.randomBytes(8).toString('hex');await setup.query('CREATE SCHEMA '+schema);
+  const url=new URL(connection);url.searchParams.set('options','-c search_path='+schema);
+  const db=new Database(url.href),crypt=cipher(crypto.randomBytes(32).toString('base64')),orders=new Orders(db,crypt);
+  const app=buildPlatform({db,crypt,orders,secrets:{internal:'test'},proxy:false});
+  t.after(async()=>{await app.close();await db.close();await setup.query('DROP SCHEMA '+schema+' CASCADE');await setup.close();});
+  await db.initialize();
+  const user=await db.one("INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,'finance@example.test','=FORMULA()','unused') RETURNING *",[id()]);
+  const admin=await db.one("INSERT INTO platform_users(id,email,name,password_hash,role) VALUES($1,'admin@example.test','admin','unused','admin') RETURNING *",[id()]);
+  for(const u of [user,admin])await db.query("INSERT INTO platform_sessions VALUES($1,$2,now()+interval '1 hour')",[digest(u.id),u.id]);
+  await db.query("UPDATE platform_settings SET value=value||'{\"orders_open\":true}'::jsonb");
+  await db.tx(q=>ledger(q,user.id,'credit','redeem',1000,0,'充值'));
+  await db.tx(q=>ledger(q,admin.id,'credit','redeem',9000,0,'管理员充值'));
+  const order=(await orders.create(user,{quantity:2},id(),'web')).order;
+  const items=(await orders.detail(user.id,order.id)).items;
+  await orders.finish(items[0].id,{asset_id:id(),email:'delivered@example.test',password:'fake',totp_secret:'fake'});
+  await orders.finish(items[1].id,null);
+  await db.query("UPDATE platform_ledger SET created_at='2026-11-04 16:00:00+00'");
+  await db.tx(q=>ledger(q,user.id,'adjust','adjust',25,0,'调整'));
+  await db.query("UPDATE platform_ledger SET created_at='2026-11-05 16:00:00+00' WHERE kind='adjust'");
+  await db.query("INSERT INTO platform_attempts(id,item_id,run_id,stage,created_at,cost_snapshot) VALUES($1,$2,$3,'register','2026-11-04 16:00:00+00',$4)",[id(),items[0].id,id(),{version:1,complete:true,mail:{USD:{confirmed:.034,pending:0,refunded:0}},sms:{CNY:{confirmed:.5,pending:0,refunded:.1}}}]);
+  const get=(path,u=admin)=>app.inject({url:path,headers:u?{cookie:'gptreg_session='+u.id}:{}});
+  const base='/api/admin/v1/finance?start=2026-11-05&end=2026-11-05';
+  let r=await get(base);assert.equal(r.statusCode,200,r.body);const d=r.json();
+  assert.deepEqual(d.totals,{credited:1000,spent:50,adjusted:0,released:50,entries:4});
+  assert.equal(d.current.balance,975);assert.equal(d.current.frozen,0);assert.equal(d.users_total,1);
+  assert.equal(d.users[0].balance,975);assert.equal(d.trend[0].period,'2026-11-05');
+  assert.equal(d.execution_cost.mail.USD.confirmed,.034);assert.equal(d.execution_cost.sms.CNY.confirmed,.5);
+  assert.equal((await get(base+'&include_admin=true')).json().totals.credited,10000);
+  assert.equal((await get(base+'&q=absent')).json().users_total,0);
+  assert.equal((await get(base+'&q=%25')).json().users_total,0);
+  for(const period of ['day','week','month','year'])assert.equal((await get(base+'&period='+period)).json().trend.reduce((n,x)=>n+x.spent,0),50);
+  for(const suffix of ['','/export']) {
+    const path='/api/admin/v1/finance'+suffix+'?start=2026-11-05&end=2026-11-05';
+    assert.equal((await get(path,null)).statusCode,401);assert.equal((await get(path,user)).statusCode,403);
+  }
+  r=await get('/api/admin/v1/finance/export?start=2026-11-05&end=2026-11-05');assert.equal(r.statusCode,200,r.body);
+  assert.ok(r.body.startsWith('\ufeff'));assert.match(r.body,/'=FORMULA\(\)/);assert.match(r.body,/USD/);assert.match(r.body,/CNY/);assert.ok(!r.body.includes('admin@example.test'));
+  assert.equal((await get(base+'&start=not-a-date')).statusCode,400);
+});

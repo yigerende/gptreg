@@ -202,6 +202,8 @@ export function OrderDetail({
               { title: "序号", render: (r) => r.position },
               { title: "状态", render: (r) => <Status value={r.status} /> },
               { title: "进度", render: (r) => r.message || "等待执行" },
+              { title: "自动恢复", render: (r) => r.recovery_attempts ? `${r.recovery_attempts} 次` : "—" },
+              { title: "执行截止", render: (r) => date(r.execution_deadline_at) },
               { title: "更新时间", render: (r) => date(r.updated_at) },
             ]}
           />

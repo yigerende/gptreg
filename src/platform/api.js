@@ -533,7 +533,9 @@ function registerApi(app, db, orders, crypt) {
         [r.params.id],
       )
     ).rows;
-    return { ...detail, items: await attachCosts(db, detail.items, "item_id"), attempts,
+    const cleanup_runs = (await db.query("SELECT c.run_id,c.attempts,c.next_attempt_at,c.last_error,c.finished_at FROM platform_run_cleanup c JOIN platform_items i ON i.id=c.item_id WHERE i.order_id=$1", [r.params.id])).rows;
+    const quarantined_assets = (await db.query("SELECT a.asset_id,a.run_id,a.reason,a.created_at FROM platform_quarantined_assets a JOIN platform_items i ON i.id=a.item_id WHERE i.order_id=$1", [r.params.id])).rows;
+    return { ...detail, items: await attachCosts(db, detail.items, "item_id"), attempts, cleanup_runs, quarantined_assets,
       execution_cost: sumCosts(attempts.map(a => a.cost_snapshot)) };
   });
   app.post("/api/admin/v1/orders/:id/cancel", async (r) => {

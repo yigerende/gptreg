@@ -150,8 +150,8 @@ class Orders {
     fail(row, "订单不存在", 404);
     const items = (
       await this.db.query(
-        "SELECT id,position,status,attempts,oauth_attempts,message,updated_at FROM platform_items WHERE order_id=$1 ORDER BY position",
-        [orderId],
+        "SELECT id,position,status,attempts,oauth_attempts,recovery_attempts,message,CASE WHEN status IN ('queued','oauth_pending','running','review') THEN available_at END AS next_retry_at,execution_started_at,execution_started_at+$2*interval '1 minute' AS execution_deadline_at,updated_at FROM platform_items WHERE order_id=$1 ORDER BY position",
+        [orderId, row.timeout_minutes],
       )
     ).rows;
     return { ...publicOrder(row), items };
@@ -187,6 +187,8 @@ class Orders {
     return this.detail(userId, orderId);
   }
   async release(q, o, item, status, message) {
+    const settled = await this.settlement(q, o, item);
+    if (settled) return settled;
     if (
       await ledger(
         q,
@@ -207,8 +209,40 @@ class Orders {
         [o.id, o.unit_price],
       );
     }
+    await this.queueCleanup(q, item);
+    return { status, refunded: true, delivered: false };
   }
-  async finish(itemId, credentials, reason = "注册未完成，已退回预留积分") {
+  async queueCleanup(q, item) {
+    await q.query(
+      `INSERT INTO platform_run_cleanup(run_id,item_id)
+       SELECT run_id,item_id FROM platform_attempts WHERE item_id=$1
+       UNION SELECT run_id,id FROM platform_items WHERE id=$1 AND run_id IS NOT NULL
+       ON CONFLICT(run_id) DO NOTHING`, [item.id]);
+  }
+  async settlement(q, o, item) {
+    const entries = (await q.query(
+      "SELECT kind,note FROM platform_ledger WHERE user_id=$1 AND reference=ANY($2::text[])",
+      [o.user_id, [`release:${item.id}`, `charge:${item.id}`]],
+    )).rows;
+    if (!entries.length) return null;
+    fail(entries.length === 1, "结算流水冲突，需要检查账本", 409);
+    const delivered = entries[0].kind === "charge";
+    const status = delivered ? "delivered" : o.cancel_requested ? "cancelled" : "failed";
+    await q.query(
+      "UPDATE platform_items SET status=$2,message=$3,updated_at=now() WHERE id=$1 AND status<>$2",
+      [item.id, status, delivered ? "已交付" : entries[0].note],
+    );
+    await this.queueCleanup(q, item);
+    return { status, delivered, refunded: !delivered };
+  }
+  async repairSettled(itemId) {
+    return this.withItem(itemId, async (q, o, item) => {
+      const result = await this.settlement(q, o, item);
+      if (result) await this.refresh(q, o.id);
+      return result;
+    });
+  }
+  async withItem(itemId, fn) {
     return this.db.tx(async (q) => {
       const link = (
         await q.query("SELECT order_id FROM platform_items WHERE id=$1", [
@@ -229,8 +263,22 @@ class Orders {
           itemId,
         ])
       ).rows[0];
-      if (["delivered", "failed", "cancelled"].includes(item.status)) return;
+      return fn(q, o, item);
+    });
+  }
+  async finish(itemId, credentials, reason = "注册未完成，已退回预留积分", runId) {
+    return this.withItem(itemId, async (q, o, item) => {
+      const settled = await this.settlement(q, o, item);
+      if (settled) {
+        await this.refresh(q, o.id);
+        return settled;
+      }
+      if (runId !== undefined && item.run_id !== runId) return null;
+      if (["delivered", "failed", "cancelled"].includes(item.status))
+        return { status: item.status, delivered: item.status === "delivered", refunded: item.status !== "delivered" };
       if (credentials) {
+        fail(!(await q.query("SELECT 1 FROM platform_quarantined_assets WHERE asset_id=$1", [credentials.asset_id])).rowCount,
+          "账号已被隔离，不能交付", 409);
         fail(
           credentials.email &&
             credentials.password &&
@@ -278,6 +326,9 @@ class Orders {
           reason,
         );
       await this.refresh(q, o.id);
+      await this.queueCleanup(q, item);
+      return { status: credentials ? "delivered" : o.cancel_requested ? "cancelled" : "failed",
+        delivered: Boolean(credentials), refunded: !credentials };
     });
   }
   async refresh(q, orderId) {

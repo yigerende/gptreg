@@ -191,6 +191,92 @@ function holdExecutions(f) {
   }
   return { live, finish };
 }
+
+test("refund races, stale review and legacy overwritten status never re-charge or re-open a settled item", { skip: !connection }, async t => {
+  const f = await fixture(t), o = await f.create();
+  await f.worker.cycle();
+  const i = await f.item(o), a = f.asset();
+  await Promise.all([f.orders.finish(i.id, null), f.worker.review(i, "stale observation")]);
+  assert.equal((await f.item(o)).status, "failed");
+  // Reproduce the production legacy corruption: release exists but status was overwritten.
+  await f.db.query("UPDATE platform_items SET status='review' WHERE id=$1", [i.id]);
+  f.states.get(i.run_id).jobs = [{ sessionAssetId: a.id }];
+  await f.worker.cycle();
+  const receipt = await f.worker.resolve(i.id, "fail");
+  assert.equal(receipt.refunded, true);
+  assert.equal((await f.item(o)).status, "failed");
+  assert.equal((await f.orders.detail(f.user.id, o.id)).released, 50);
+  await f.orders.finish(i.id, f.worker.credentials(a, false));
+  assert.equal((await f.db.one("SELECT count(*)::int AS n FROM platform_accounts")).n, 0);
+  assert.equal((await f.db.one("SELECT count(*)::int AS n FROM platform_ledger WHERE kind='release'")).n, 1);
+  assert.equal((await f.db.one("SELECT frozen FROM platform_users WHERE id=$1", [f.user.id])).frozen, 0);
+  await require("../src/platform/order-recovery").cleanupRuns(f.worker);
+  assert.equal((await f.db.one("SELECT count(*)::int AS n FROM platform_quarantined_assets")).n, 1);
+});
+
+test("waiting jobs recover the original run with durable bounded attempts and refund automatically", { skip: !connection }, async t => {
+  const f = await fixture(t), o = await f.create();
+  await f.worker.cycle();
+  const i = await f.item(o), state = f.states.get(i.run_id), resumed = [];
+  state.status = "waiting";
+  state.jobs = [{ targetTouchedAt: new Date().toISOString(), error: { code: "SENTINEL_PROXY_IDENTITY_CHANGED" } }];
+  f.manager.resume = async runId => { resumed.push(runId); };
+  await f.worker.cycle();
+  assert.equal((await f.item(o)).recovery_attempts, 1);
+  const restarted = new OrderWorker(f.db, f.orders, f.manager);
+  for (let n=0;n<3;n++) {
+    await f.db.query("UPDATE platform_items SET available_at=now()");
+    await restarted.cycle();
+  }
+  assert.deepEqual(resumed, [i.run_id,i.run_id]);
+  assert.equal(f.calls.length, 1);
+  assert.equal((await f.item(o)).status, "failed");
+  assert.equal((await f.orders.detail(f.user.id,o.id)).released, 50);
+});
+
+test("a missing checkpoint or unresponsive engine reaches the absolute deadline and later assets cannot deliver", { skip: !connection }, async t => {
+  const f = await fixture(t), o = await f.create();
+  const {live} = holdExecutions(f);
+  await f.worker.cycle();
+  const i = await f.item(o);
+  await f.db.query("UPDATE platform_items SET execution_started_at=now()-interval '1 day',attempt_started_at=now() WHERE id=$1", [i.id]);
+  await f.worker.cycle();
+  assert.equal((await f.item(o)).status, "failed");
+  assert.equal(live.size, 1, "refund does not pretend the external execution disappeared");
+  const a = f.asset();
+  const late = await f.orders.finish(i.id, f.worker.credentials(a,false));
+  assert.equal(late.refunded, true);
+  assert.equal((await f.orders.detail(f.user.id,o.id)).charged, 0);
+});
+
+test("complete credentials deliver despite stopped cleanup wait and cleanup failures do not block another order", { skip: !connection }, async t => {
+  const f = await fixture(t), first = await f.create();
+  await f.worker.cycle();
+  const i = await f.item(first), a=f.asset(), state=f.states.get(i.run_id);
+  state.status="waiting"; state.phase="waiting_resource_cleanup"; state.jobs=[{sessionAssetId:a.id}];
+  f.manager.cancel=async()=>{throw new Error("provider unavailable");};
+  await f.worker.cycle();
+  assert.equal((await f.item(first)).status,"delivered");
+  await require("../src/platform/order-recovery").cleanupRuns(f.worker);
+  assert.equal((await f.db.one("SELECT attempts FROM platform_run_cleanup WHERE run_id=$1",[i.run_id])).attempts,1);
+  const second=await f.create(); await f.worker.cycle();
+  assert.equal((await f.item(second)).status,"running");
+});
+
+test("email timeout before account creation retries safely while uncertain creation only restores the original run", { skip: !connection }, async t => {
+  const f=await fixture(t),o=await f.create(); await f.worker.cycle();
+  let i=await f.item(o);
+  f.states.get(i.run_id).jobs=[{targetTouchedAt:new Date().toISOString(),sessionState:{step:'email_otp_sent'},error:{code:'EMAIL_OTP_TIMEOUT'}}];
+  await f.worker.cycle();
+  assert.equal((await f.item(o)).status,'queued');
+  assert.match((await f.item(o)).message,/邮箱验证码等待超时/);
+  await f.db.query("UPDATE platform_items SET available_at=now()"); await f.worker.cycle();
+  i=await f.item(o); let resumed=0;
+  f.states.get(i.run_id).jobs=[{sessionState:{createAccountAttempt:{status:'uncertain'}}}];
+  f.manager.resume=async()=>{resumed++};
+  await f.worker.cycle();
+  assert.equal(resumed,1); assert.equal(f.calls.length,2);
+});
 test(
   "100 customer accounts execute 15 at a time, refill one slot and settle once across restart",
   { skip: !connection },

@@ -85,7 +85,7 @@ export const statusNames: Row = {
   queued: "排队中",
   running: "执行中",
   oauth_pending: "授权待完成",
-  review: "待核实",
+  review: "自动恢复中",
   completed: "全部完成",
   partial: "部分完成",
   failed: "未完成",

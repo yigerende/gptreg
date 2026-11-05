@@ -11,7 +11,8 @@ import {
 } from "./Workspace";
 import { RefreshCw } from "lucide-react";
 import { Filters, Pagination, number } from "./Insights";
-import AdminOverview, { AdminFinance } from "./AdminOverview";
+import AdminOverview from "./AdminOverview";
+import AdminFinance from "./AdminFinance";
 import AdminCreateUser from "./AdminCreateUser";
 import AdminUserDetail from "./AdminUserDetail";
 import BrandSettings from "./BrandSettings";
@@ -52,7 +53,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
     ...filters,
   });
   const { data, error, refetch, isFetching } = useQuery({
-    enabled: !usagePage,
+    enabled: !usagePage && tab !== "finance",
     queryKey: ["admin", tab, offset, filters, days],
     queryFn: () => call(`/api/admin/v1/${endpoint}?${params}`),
     refetchInterval: (query) =>
@@ -71,7 +72,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
   const tabs: Row = {
     overview: "运营概览",
     orders: "订单监控",
-    finance: "积分报表",
+    finance: "财务报表",
     accounts: "账号交付",
     products: "服务与定价",
     announcements: "站点公告",
@@ -92,7 +93,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                 overview: "掌握客户、交付与积分流转，让每一笔业务都有据可查。",
                 orders: "查看全部客户订单，跟踪执行进度与异常处理。",
                 users: "管理客户状态、查询业务记录与调整账户积分。",
-                finance: "从预留到结算，每一笔积分都有完整记录。",
+                finance: "按时间与账户核对入账、消费和余额，默认排除管理员。",
                 accounts: "查询已交付账号及其客户和订单归属。",
                 products: "设置两种注册服务的单价、限额及执行模板。",
                 codes: "发行积分兑换码，跟踪使用与停用状态。",
@@ -111,7 +112,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
             创建客户账户 +
           </button>
         )}
-        {["overview", "finance"].includes(tab) && (
+        {tab === "overview" && (
           <select
             aria-label="统计时段"
             value={days}
@@ -125,7 +126,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
             <option value={90}>最近 90 天</option>
           </select>
         )}
-        {!settingsPage && !usagePage && (
+        {!settingsPage && !usagePage && tab !== "finance" && (
           <button
             className="p-button secondary"
             disabled={isFetching}
@@ -142,7 +143,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
       {tab === "overview" && data && (
         <AdminOverview data={data} onOrder={setDetail} />
       )}
-      {!usagePage && ["orders", "users", "accounts", "finance", "codes", "audit"].includes(
+      {!usagePage && ["orders", "users", "accounts", "codes", "audit"].includes(
         tab,
       ) && (
         <Filters
@@ -158,7 +159,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
               ? {
                   queued: "排队中",
                   running: "执行中",
-                  review: "待核实",
+                  review: "自动恢复中",
                   completed: "全部完成",
                   partial: "部分完成",
                   failed: "未完成",
@@ -188,7 +189,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
           }
         />
       )}
-      {tab === "finance" && data && <AdminFinance data={data} />}
+      {tab === "finance" && <AdminFinance />}
       {tab === "accounts" && (
         <AdminAccounts
           filters={filters}
@@ -568,7 +569,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
           />
         </section>
       )}
-      {!usagePage && ["users", "orders", "accounts", "finance", "codes", "audit"].includes(
+      {!usagePage && ["users", "orders", "accounts", "codes", "audit"].includes(
         tab,
       ) && (
         <Pagination

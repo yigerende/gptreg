@@ -67,7 +67,7 @@ function Records({
 const orderStatuses = {
   queued: "排队中",
   running: "执行中",
-  review: "待核实",
+  review: "自动恢复中",
   completed: "全部完成",
   partial: "部分交付",
   failed: "未完成",
@@ -131,7 +131,7 @@ export function OrderRecords({
               ["", "全部记录"],
               ["running", "执行中"],
               ["completed", "已完成"],
-              ["review", "需关注"],
+              ["review", "恢复中"],
               ["cancelled", "已取消"],
             ].map(([id, label]) => (
               <button

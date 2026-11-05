@@ -214,18 +214,7 @@ function registerReports(app, db) {
       execution_cost: await periodCosts(db, days),
     };
   });
-  app.get("/api/admin/v1/finance", async (r) => {
-    const days = integer(Number(r.query.days || 30), 1, 90, "统计天数");
-    const [stats, entries, daily] = await Promise.all([
-      db.one(
-        "SELECT coalesce(sum(-frozen_delta) FILTER(WHERE kind='charge'),0)::float8 AS charged,coalesce(sum(points_delta) FILTER(WHERE kind='redeem'),0)::float8 AS redeemed,coalesce(sum(points_delta) FILTER(WHERE kind='adjust'),0)::float8 AS adjusted,coalesce(sum(points_delta) FILTER(WHERE kind='release'),0)::float8 AS released FROM platform_ledger WHERE created_at>=((now() AT TIME ZONE 'Asia/Shanghai')::date-($1::int-1)) AT TIME ZONE 'Asia/Shanghai'",
-        [days],
-      ),
-      listLedger(db, null, { ...r.query, days }),
-      trend(db, null, days),
-    ]);
-    return { stats, ...entries, daily, days, execution_cost: await periodCosts(db, days) };
-  });
+  require("./finance").registerFinance(app, db);
   app.get("/api/admin/v1/accounts", (r) => listAccounts(db, null, r.query));
   app.get("/api/admin/v1/users/:id", async (r) => {
     const user = await db.one(
