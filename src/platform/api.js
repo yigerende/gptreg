@@ -10,6 +10,7 @@ const {
 const { audit } = require("./db");
 const { validateBrand } = require("./branding");
 const { ledger } = require("./orders");
+const { attachCosts, sumCosts } = require("./execution-costs");
 const { userView } = require("./auth");
 const { totpCode } = require("../chatgpt-session-runner");
 const {
@@ -532,7 +533,8 @@ function registerApi(app, db, orders, crypt) {
         [r.params.id],
       )
     ).rows;
-    return { ...detail, attempts };
+    return { ...detail, items: await attachCosts(db, detail.items, "item_id"), attempts,
+      execution_cost: sumCosts(attempts.map(a => a.cost_snapshot)) };
   });
   app.post("/api/admin/v1/orders/:id/cancel", async (r) => {
     const o = await db.one("SELECT user_id FROM platform_orders WHERE id=$1", [

@@ -3,11 +3,13 @@
 const { SmsbowerMailClient, DEFAULT_BASE_URL } = require('../smsbower-mail-client');
 const { secretFromEnv } = require('../config-v2');
 const { HttpError } = require('./utils');
+const { createSmsProvider } = require('../sms-provider');
 
 class SmsbowerMailService {
   constructor(configService, options = {}) {
     this.configService = configService;
     this.fetch = options.fetch;
+    this.statusCache = null;
   }
 
   savedKey() {
@@ -55,6 +57,28 @@ class SmsbowerMailService {
       secretPatch: value.enteredKey ? { mailApiKey: value.enteredKey } : {},
     });
     return this.read();
+  }
+
+  async status() {
+    const value = this.settings({});
+    const key = JSON.stringify([value.baseUrl, value.apiKey, value.service, value.maxPrice]);
+    if (this.statusCache?.key === key && this.statusCache.until > Date.now()) return this.statusCache.promise;
+    const promise = (async () => {
+      const result = { provider: 'smsbower', currency: 'USD', balance: null, stock: null, unitPrice: null, checkedAt: new Date().toISOString() };
+      if (!value.apiKey) return { ...result, message: '邮箱 API Key 未配置' };
+      const client = new SmsbowerMailClient({ ...value, domain: 'gmail.com', fetch: this.fetch, stockRetryAttempts: 1, requestTimeoutMs: 10000 });
+      // SMSBower mail and SMS share the account balance API. Use the MAIL key,
+      // including when SMS is configured with a different provider/account.
+      const balanceClient = createSmsProvider({ provider: 'smsbower', apiKey: value.apiKey,
+        baseUrl: new URL('/stubs/handler_api.php', value.baseUrl).href, fetch: this.fetch, requestTimeoutMs: 10000 });
+      const [stock, balance] = await Promise.allSettled([client.priceRests(), balanceClient.getBalance()]);
+      if (stock.status === 'fulfilled') { result.stock = stock.value.count; result.unitPrice = stock.value.price; }
+      if (balance.status === 'fulfilled') result.balance = balance.value;
+      return { ...result, stockError: stock.status === 'rejected', balanceError: balance.status === 'rejected',
+        message: stock.status === 'rejected' || balance.status === 'rejected' ? '部分数据读取失败，请检查邮箱接口配置后刷新' : 'SMSBower 邮箱账户 · USD' };
+    })();
+    this.statusCache = { key, promise, until: Date.now() + 65000 };
+    try { return await promise; } catch (error) { this.statusCache = null; throw error; }
   }
 
   async test(input) {

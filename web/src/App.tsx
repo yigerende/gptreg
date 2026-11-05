@@ -1861,6 +1861,11 @@ function DashboardPage() {
     queryFn: () => endpoints.services(smsDialogProvider),
     staleTime: 15_000,
   });
+  const resourceBoard = useQuery({
+    queryKey: ['resource-board', plan.mailProvider, smsDialogProvider],
+    queryFn: () => endpoints.resourceSummary(plan.mailProvider || 'xiaopingguo', smsDialogProvider),
+    staleTime: 65000, retry: false, refetchOnWindowFocus: false,
+  });
   const config = useQuery({ queryKey: ['config'], queryFn: endpoints.config });
   const smsMarket = useQuery({
     queryKey: ['sms-market', smsDialogProvider],
@@ -2038,7 +2043,7 @@ function DashboardPage() {
   const smsSnapshot = snapshot && String(snapshot.sms?.provider || '').toLowerCase() === smsDialogProvider
     ? snapshot
     : null;
-  const refreshing = resources.isFetching || serviceSummary.isFetching || smsMarket.isFetching || preflight.isPending;
+  const refreshing = resourceBoard.isFetching || resources.isFetching || serviceSummary.isFetching || smsMarket.isFetching || preflight.isPending;
   const marketOffers = smsSnapshot?.sms.lowestOffers?.length
     ? smsSnapshot.sms.lowestOffers
     : (smsMarket.data?.lowestOffers || []);
@@ -2436,13 +2441,13 @@ function DashboardPage() {
   const mailStockErrorMessage = String(snapshot?.mail.stockError?.message || '').trim();
   const mailStockValue = waitingForOAuthSource
     ? '待选择'
-    : (mailStockError ? '更新中' : (snapshot?.mail.eligible ?? '—'));
+    : (mailStockError ? '更新中' : (snapshot?.mail.eligible ?? (rentalMail ? resourceBoard.data?.mail?.stock : null) ?? '—'));
   const mailStockHint = mailStockError
     ? `库存查询失败，正在重试${mailStockErrorMessage ? `：${mailStockErrorMessage}` : ''}`
     : mailMetricHint;
   const mailPriceValue = waitingForOAuthSource
     ? '待选择'
-    : (mailStockError ? '更新中' : formatUsd(snapshot?.mail.unitPrice, 3));
+    : (mailStockError ? '更新中' : formatUsd(snapshot?.mail.unitPrice ?? resourceBoard.data?.mail?.unitPrice, 3));
   const mailPriceHint = mailStockError
     ? `邮箱库存/价格查询失败，正在重试${mailStockErrorMessage ? `：${mailStockErrorMessage}` : ''}`
     : (snapshot?.mail.unitPrice !== undefined
@@ -2542,16 +2547,13 @@ function DashboardPage() {
       <PageHeader title="启动工作台" description="本次任务配置、资源状态与运行结果" />
       <section className="launch-overview-board" aria-labelledby="launch-overview-title">
         {resources.error && <Notice tone="danger">资源摘要刷新失败：{errorMessage(resources.error)}</Notice>}
-        <div className="launch-overview-heading"><div><span className="eyebrow">LIVE RESOURCE BOARD</span><h2 id="launch-overview-title">运行概览</h2></div><IconButton label="刷新资源" onClick={() => { serviceSummary.refetch(); if (sourceReady && proxyAssignmentsReady) resources.refetch(); }} disabled={refreshing}>{refreshing ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}</IconButton></div>
+        <div className="launch-overview-heading"><div><span className="eyebrow">LIVE RESOURCE BOARD</span><h2 id="launch-overview-title">运行概览</h2></div><IconButton label="刷新资源" onClick={() => { resourceBoard.refetch(); serviceSummary.refetch(); if (sourceReady && proxyAssignmentsReady) resources.refetch(); }} disabled={refreshing}>{refreshing ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}</IconButton></div>
         <section className="metrics-grid launch-metrics">
           <Metric label={mailMetricLabel} value={mailStockValue} hint={mailStockHint} icon={<Archive size={21} />} />
           <Metric label="短信余额" value={formatCurrency(smsBalance, activeSmsCurrency)} hint={smsBalanceHint} icon={<Activity size={21} />} />
-          {/* On the rental channel the mailbox price is the number that decides
-              whether a task is worth starting; the SMS quote belongs to a step
-              that may never happen. */}
-          {rentalMail
-            ? <Metric label="邮箱单价" value={mailPriceValue} hint={mailPriceHint} icon={<Gauge size={21} />} />
-            : <Metric label={smsPreflightChecked ? `${marketCountry} ${marketService} 最低价` : '短信检查'} value={waitingForOAuthSource ? '待选择' : (snapshot && !smsPreflightChecked ? '运行时' : formatCurrency(snapshot?.sms.cheapestPrice, activeSmsCurrency, 3))} hint={waitingForOAuthSource ? '尚未发起号码市场请求' : (snapshot && !smsPreflightChecked ? '仅在出现手机验证时执行' : (snapshot ? `${snapshot.sms.offers} 个报价` : '正在读取市场'))} icon={<Gauge size={21} />} />}
+          <Metric label="邮箱余额" value={formatCurrency(resourceBoard.data?.mail?.balance, 'USD', 3)} hint={resourceBoard.data?.mail?.message || '正在读取邮箱账户'} icon={<Archive size={21} />} />
+          {rentalMail && <Metric label="邮箱单价" value={mailPriceValue} hint={mailPriceHint} icon={<Gauge size={21} />} />}
+          <Metric label="短信最低单价" value={formatCurrency(resourceBoard.data?.sms?.cheapestPrice, resourceBoard.data?.sms?.currency || activeSmsCurrency, 3)} hint={resourceBoard.data?.sms?.marketHint || '正在读取当前配置国家和服务的报价'} icon={<Gauge size={21} />} />
         </section>
          <TaskSlotBoard
            capacity={runs.data?.taskCapacity}

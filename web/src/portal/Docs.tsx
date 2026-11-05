@@ -506,6 +506,8 @@ export default function Docs({
             <span>实时注册</span>
             <span>Google Gmail 邮箱</span>
             <span>动态高权重家宽注册</span>
+            <span title="注册任务独立绑定代理出口">1号1IP</span>
+            <span title="每个账号独立维护设备标识与会话">1号1指纹</span>
           </div>
           <div className="d-base">
             <span>BASE URL</span>

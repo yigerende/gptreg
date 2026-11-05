@@ -1,8 +1,23 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Pagination } from "./Insights";
+import AdminCosts, { CostAmount } from "./AdminCosts";
+import "./accounts.css";
 import { Copy, Download } from "lucide-react";
 import { call, copy, date, download, type Row } from "./client";
 import { Feedback, Modal, Table, useAction } from "./Workspace";
 import { ExportProgress, selectFilteredAccounts } from "./AccountExport";
+
+function ExpandedAccounts({ orderId, filters, render }: { orderId: string; filters: Row; render: (rows: Row[]) => ReactNode }) {
+  const [offset, setOffset] = useState(0);
+  const { data, error, isFetching, refetch } = useQuery({
+    queryKey: ["admin-order-accounts", orderId, filters, offset],
+    queryFn: () => call(`/api/admin/v1/accounts?${new URLSearchParams({ ...filters, order_id: orderId, limit: "50", offset: String(offset) })}`),
+  });
+  return <div className="p-order-accounts" aria-busy={isFetching}>
+    {error ? <div className="p-alert">{error.message} <button onClick={()=>refetch()}>重试</button></div> : !data ? <ExportProgress text="正在加载订单账号…" /> : <>{render(data.items)}<Pagination offset={offset} total={data.total} count={data.items.length} onChange={setOffset}/></>}
+  </div>;
+}
 
 export default function AdminAccounts({
   rows,
@@ -13,6 +28,7 @@ export default function AdminAccounts({
   onOrder: (id: string) => void;
   filters?: Row;
 }) {
+  const [expanded, setExpanded] = useState<string[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [secret, setSecret] = useState<Row | null>(null);
   const a = useAction();
@@ -45,6 +61,74 @@ export default function AdminAccounts({
     if (value)
       setSecret((old) => (refresh && old?.delivery.id !== id ? old : value));
   }
+  async function selectOrder(orderId: string) {
+    if (a.busy || exporting) return;
+    try {
+      const result = await a.run(() => selectFilteredAccounts("/api/admin/v1/accounts", { ...filters, order_id: orderId }, setExporting), "已更新选择，每次最多 1000 个");
+      if (result) setSelected(old => result.ids.some((id: string) => old.includes(id)) ? old.filter(id=>!result.ids.includes(id)) : [...new Set([...old,...result.ids])].slice(0,1000));
+    } finally { setExporting(""); }
+  }
+  const renderAccounts = (accounts: Row[]) => (<Table
+          rows={accounts}
+          columns={[
+            {
+              title: "选择",
+              render: (r) => (
+                <input
+                  type="checkbox"
+                  aria-label={`选择 ${r.email}`}
+                  checked={ids.includes(r.id)}
+                  disabled={a.busy || Boolean(exporting) || (!ids.includes(r.id) && ids.length >= 1000)}
+                  onChange={(e) =>
+                    setSelected(
+                      e.target.checked
+                        ? [...ids, r.id]
+                        : ids.filter((id) => id !== r.id),
+                    )
+                  }
+                />
+              ),
+            },
+            { title: "交付账号", render: (r) => <b>{r.email}</b> },
+            { title: "所属客户", render: (r) => r.owner_email },
+            {
+              title: "注册服务",
+              render: (r) => (r.need_oauth ? "OAuth 授权账号" : "标准账号"),
+            },
+            {
+              title: "关联订单",
+              render: (r) => (
+                <button className="p-link" onClick={() => onOrder(r.order_id)}>
+                  {r.order_id.slice(0, 12)} ↗
+                </button>
+              ),
+            },
+            { title: "邮箱消耗", render: r => <CostAmount cost={r.execution_cost} kind="mail" /> },
+            { title: "短信消耗", render: r => <CostAmount cost={r.execution_cost} kind="sms" /> },
+            { title: "交付时间", render: (r) => date(r.created_at) },
+            {
+              title: "操作",
+              render: (r) => (
+                <div className="p-record-actions">
+                  <button
+                    className="p-link"
+                    disabled={a.busy}
+                    onClick={() => reveal(r.id)}
+                  >
+                    查看全部资料
+                  </button>
+                  <button
+                    className="p-link"
+                    disabled={a.busy}
+                    onClick={() => exported("json", [r.id])}
+                  >
+                    下载 JSON
+                  </button>
+                </div>
+              ),
+            },
+          ]}
+        />);
   function credential(label: string, value: unknown, multiline = false) {
     const text =
       value == null
@@ -79,23 +163,13 @@ export default function AdminAccounts({
       <section className="p-card p-record-card">
         <div className="p-records-heading">
           <div>
-            <h2>全部交付账号</h2>
-            <p>查看完整凭据与交付归属，支持单个下载和批量导出。</p>
+            <h2>按订单查看交付账号</h2>
+            <p>点击订单展开账号，支持整单选择、跨订单批量导出。运营后台保留完整交付记录。</p>
           </div>
           <span className="p-count-pill">已选 {ids.length} 个</span>
         </div>
         <div className="p-export-toolbar">
-          <button
-            className="p-button secondary"
-            disabled={!rows.length}
-            onClick={() =>
-              setSelected(
-                ids.length === rows.length ? [] : rows.map((r) => r.id),
-              )
-            }
-          >
-            选择 / 取消本页全部
-          </button>
+          <button className="p-button secondary" disabled={!ids.length || a.busy || Boolean(exporting)} onClick={() => setSelected([])}>清空选择</button>
           <button
             className="p-button secondary"
             disabled={a.busy || Boolean(exporting)}
@@ -157,66 +231,22 @@ export default function AdminAccounts({
         </div>
         <p className="p-records-note">
           JSON 包含完整交付资料与 OAuth；CSV 包含凭据、OAuth 和客户订单信息；TXT
-          为邮箱----密码----2FA。每次最多 100 个。
+          为邮箱----密码----2FA。每次最多 1000 个。订单费用包含失败与重试；账号明细显示该账号全部执行尝试的成本。
         </p>
-        <Table
-          rows={rows}
-          columns={[
-            {
-              title: "选择",
-              render: (r) => (
-                <input
-                  type="checkbox"
-                  aria-label={`选择 ${r.email}`}
-                  checked={ids.includes(r.id)}
-                  onChange={(e) =>
-                    setSelected(
-                      e.target.checked
-                        ? [...ids, r.id]
-                        : ids.filter((id) => id !== r.id),
-                    )
-                  }
-                />
-              ),
-            },
-            { title: "交付账号", render: (r) => <b>{r.email}</b> },
-            { title: "所属客户", render: (r) => r.owner_email },
-            {
-              title: "注册服务",
-              render: (r) => (r.need_oauth ? "OAuth 授权账号" : "标准账号"),
-            },
-            {
-              title: "关联订单",
-              render: (r) => (
-                <button className="p-link" onClick={() => onOrder(r.order_id)}>
-                  {r.order_id.slice(0, 12)} ↗
-                </button>
-              ),
-            },
-            { title: "交付时间", render: (r) => date(r.created_at) },
-            {
-              title: "操作",
-              render: (r) => (
-                <div className="p-record-actions">
-                  <button
-                    className="p-link"
-                    disabled={a.busy}
-                    onClick={() => reveal(r.id)}
-                  >
-                    查看全部资料
-                  </button>
-                  <button
-                    className="p-link"
-                    disabled={a.busy}
-                    onClick={() => exported("json", [r.id])}
-                  >
-                    下载 JSON
-                  </button>
-                </div>
-              ),
-            },
-          ]}
-        />
+        <div className="p-admin-delivery-groups">
+          {rows.map(r => <article className="p-admin-delivery-order" key={r.id}>
+            <div className="p-admin-delivery-heading">
+              <button className="p-order-expand" aria-expanded={expanded.includes(r.id)} onClick={() => setExpanded(v => v.includes(r.id) ? v.filter(id=>id!==r.id) : [...v,r.id])}>
+                <span>{expanded.includes(r.id) ? "▾" : "▸"}</span><div><b>订单 {r.id.slice(0,12)}</b><small className="p-block">{r.owner_email} · {r.need_oauth ? "含 OAuth" : "标准账号"} · {r.available_count} 个账号</small><small className="p-block">最近交付 {date(r.last_delivered_at)}</small></div>
+              </button>
+              <div className="p-delivery-order-cost"><small>订单邮箱消耗</small><CostAmount cost={r.execution_cost} kind="mail" /></div>
+              <div className="p-delivery-order-cost"><small>订单短信消耗</small><CostAmount cost={r.execution_cost} kind="sms" /></div>
+              <div className="p-record-actions"><button className="p-button secondary" disabled={a.busy || Boolean(exporting)} onClick={() => selectOrder(r.id)}>选择 / 取消本单</button><button className="p-button secondary" onClick={() => onOrder(r.id)}>订单详情</button></div>
+            </div>
+            {expanded.includes(r.id) && <ExpandedAccounts orderId={r.id} filters={filters} render={renderAccounts} />}
+          </article>)}
+          {!rows.length && <div className="p-empty">暂无交付订单</div>}
+        </div>
       </section>
       {secret && (
         <Modal title="交付账号完整资料" onClose={() => setSecret(null)}>
@@ -246,6 +276,7 @@ export default function AdminAccounts({
               <code>{secret.delivery.order_id}</code>
             </div>
           </div>
+          <AdminCosts cost={secret.delivery.execution_cost} title="此账号执行成本" />
           {credential("邮箱", secret.email)}
           {credential("密码", secret.password)}
           {credential("2FA 密钥", secret.totp_secret)}

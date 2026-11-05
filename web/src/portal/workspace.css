@@ -1782,3 +1782,41 @@
     padding: 16px;
   }
 }
+
+/* Administrator resource and delivery views. */
+.p-resource-metrics { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:16px; margin:22px 0; }
+.p-resource-metrics > div { min-width:0; border-left:1px solid #e7eef0; padding-left:16px; }
+.p-resource-metrics > div:first-child { border:0; padding-left:0; }
+.p-resource-metrics span { display:flex; align-items:center; gap:8px; color:#6c858b; }
+.p-resource-metrics strong { display:block; font-size:21px; margin-top:12px; color:#214e51; overflow-wrap:anywhere; }
+.p-resource-hint { display:block; margin-top:8px; color:#71858f; font-size:11px; line-height:1.6; }
+.p-resource-slots { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.p-resource-slots > div { display:grid; grid-template-columns:1fr auto; gap:6px; padding:14px 16px; border:1px solid #e4ecef; border-radius:9px; background:#f8fbfb; }
+.p-resource-slots small { grid-column:1/-1; color:#7c919b; }
+.p-cost-grid { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+.p-cost-grid > div > small, .p-delivery-order-cost > small { display:block; color:#71858f; font-size:11px; margin-bottom:5px; }
+.p-cost-amount { font-size:12px; white-space:nowrap; }
+.p-cost-amount small { display:block; color:#9e772e; font-size:10px; font-weight:400; }
+.p-cost-summary h3 { margin:0 0 16px; }
+.p-admin-delivery-order { border-top:1px solid #e3ecee; }
+.p-admin-delivery-heading { display:grid; grid-template-columns:minmax(240px,1.6fr) minmax(125px,1fr) minmax(125px,1fr) auto; align-items:center; gap:18px; padding:22px; }
+.p-admin-delivery-heading .p-order-expand { width:100%; min-width:0; }
+.p-admin-delivery-heading .p-order-expand div { min-width:0; overflow-wrap:anywhere; }
+.p-admin-delivery-heading small { margin-top:6px; color:#81959f; font-size:11px; }
+.p-admin-delivery-order .p-order-accounts { padding:0 18px 18px; background:#f9fbfc; }
+.p-service-features { grid-template-columns:repeat(auto-fit,minmax(175px,1fr)); }
+@media(max-width:1100px) {
+ .p-resource-metrics { grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px 12px; }
+ .p-admin-delivery-heading { grid-template-columns:1fr 1fr; }
+ .p-admin-delivery-heading .p-order-expand { grid-column:1/-1; }
+ .p-admin-delivery-heading .p-record-actions { grid-column:1/-1; }
+}
+@media(max-width:600px) {
+ .p-resource-metrics { grid-template-columns:1fr 1fr; }
+ .p-resource-metrics strong { font-size:18px; }
+ .p-resource-metrics > div { padding:0; border:0; }
+ .p-resource-slots { grid-template-columns:1fr; }
+ .p-admin-delivery-heading { padding:16px; gap:14px; }
+ .p-cost-grid { gap:12px; }
+ .p-service-features { grid-template-columns:1fr; }
+}

@@ -2,6 +2,7 @@
 const { fail, integer } = require("./security");
 const { publicOrder } = require("./orders");
 const { expiresAt, availableAccount } = require("./account-retention");
+const { attachCosts, periodCosts } = require("./execution-costs");
 
 const page = (query) => ({
   limit: integer(Number(query.limit || 50), 1, 100, "limit"),
@@ -46,11 +47,12 @@ async function listOrders(db, owner, query) {
     ),
     db.one(`SELECT count(*)::int AS total ${where}`, values),
   ]);
+  const items = rows.rows.map((o) => ({
+    ...publicOrder(o),
+    ...(owner ? {} : { user_id: o.user_id, email: o.email }),
+  }));
   return {
-    items: rows.rows.map((o) => ({
-      ...publicOrder(o),
-      ...(owner ? {} : { user_id: o.user_id, email: o.email }),
-    })),
+    items: owner ? items : await attachCosts(db, items),
     total: count.total,
     ...p,
   };
@@ -72,7 +74,7 @@ async function listAccounts(db, owner, query) {
     { values, where } = accountFilter(owner, query);
   const [rows, count] = await Promise.all([
     db.query(
-      `SELECT a.id,a.email,a.order_id,a.need_oauth,a.created_at,${expiresAt("a")} AS download_expires_at${owner ? "" : ",u.email AS owner_email"} ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT $5 OFFSET $6`,
+      `SELECT a.id,a.email,a.order_id,a.need_oauth,a.created_at,${expiresAt("a")} AS download_expires_at${owner ? "" : ",a.item_id,u.email AS owner_email"} ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT $5 OFFSET $6`,
       [...values, p.limit, p.offset],
     ),
     db.one(
@@ -80,7 +82,7 @@ async function listAccounts(db, owner, query) {
       values,
     ),
   ]);
-  return { items: rows.rows, ...count, ...p };
+  return { items: owner ? rows.rows : await attachCosts(db, rows.rows, "item_id", "item_id"), ...count, ...p };
 }
 async function accountOrders(db, owner, query) {
   const p = page(query),
@@ -152,6 +154,12 @@ async function trend(db, owner, days) {
   ).rows;
 }
 function registerReports(app, db) {
+  app.get("/api/admin/v1/account-orders", async (r) => {
+    const p = page(r.query), { values, where } = accountFilter(null, r.query);
+    const rows = (await db.query(`SELECT a.order_id AS id,a.order_id,a.need_oauth,u.email AS owner_email,count(*)::int AS available_count,min(a.created_at) AS first_delivered_at,max(a.created_at) AS last_delivered_at ${where} GROUP BY a.order_id,a.need_oauth,u.email ORDER BY max(a.created_at) DESC,a.order_id DESC LIMIT $5 OFFSET $6`, [...values,p.limit,p.offset])).rows;
+    const count = await db.one(`SELECT count(DISTINCT a.order_id)::int AS total,count(*)::int AS accounts_total ${where}`, values);
+    return { items: await attachCosts(db, rows), ...count, ...p };
+  });
   app.get("/api/user/v1/account-orders", (r) =>
     accountOrders(db, r.user.id, r.query),
   );
@@ -203,6 +211,7 @@ function registerReports(app, db) {
         max_quantity: settings.max_quantity,
       },
       days,
+      execution_cost: await periodCosts(db, days),
     };
   });
   app.get("/api/admin/v1/finance", async (r) => {
@@ -215,7 +224,7 @@ function registerReports(app, db) {
       listLedger(db, null, { ...r.query, days }),
       trend(db, null, days),
     ]);
-    return { stats, ...entries, daily, days };
+    return { stats, ...entries, daily, days, execution_cost: await periodCosts(db, days) };
   });
   app.get("/api/admin/v1/accounts", (r) => listAccounts(db, null, r.query));
   app.get("/api/admin/v1/users/:id", async (r) => {

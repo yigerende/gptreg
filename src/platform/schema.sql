@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS platform_mail_logs (id bigserial PRIMARY KEY,recipien
 ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS error_code text NOT NULL DEFAULT '';
 ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS error_category text NOT NULL DEFAULT '';
 ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS error_detail text NOT NULL DEFAULT '';
+ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS cost_snapshot jsonb;
+ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS cost_checked_at timestamptz;
+CREATE INDEX IF NOT EXISTS platform_attempt_item ON platform_attempts(item_id);
 ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS engine_sold_at timestamptz;
 ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS engine_sold_retry_at timestamptz NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS platform_account_sold_pending ON platform_accounts(engine_sold_retry_at,id) WHERE engine_sold_at IS NULL;

@@ -1,4 +1,6 @@
 import DataProtectionNotice from "./DataProtectionNotice";
+import AdminResourceBoard from "./AdminResourceBoard";
+import AdminCosts from "./AdminCosts";
 import {
   Activity,
   ArrowUpRight,
@@ -29,6 +31,8 @@ export default function AdminOverview({
   return (
     <>
       <DataProtectionNotice/>
+      <AdminResourceBoard />
+      <AdminCosts cost={data.execution_cost} title={`最近 ${data.days || 7} 天发起任务的执行成本`} />
       <div
         className={`p-ops-banner ${!online || !operations.orders_open ? "warn" : ""}`}
       >
@@ -238,6 +242,7 @@ export function AdminFinance({ data }: { data: Row }) {
   const stats = data.stats || {};
   return (
     <>
+      <AdminCosts cost={data.execution_cost} title={`最近 ${data.days || 30} 天发起任务的执行成本`} />
       <StatCards
         items={[
           {

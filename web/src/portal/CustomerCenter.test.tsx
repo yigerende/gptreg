@@ -201,7 +201,7 @@ it("reveals admin delivery details on demand and exports only selected records",
     .spyOn(globalThis, "fetch")
     .mockImplementation(async (_url, init) =>
       response(
-        init?.method === "POST"
+        String(_url).includes("/accounts?") ? { items: [row], total: 1 } : init?.method === "POST"
           ? {
               filename: "gptreg-deliveries.json",
               content: JSON.stringify([record]),
@@ -209,9 +209,10 @@ it("reveals admin delivery details on demand and exports only selected records",
           : record,
       ),
     );
-  mount(<AdminAccounts rows={[row]} onOrder={() => {}} />);
+  mount(<AdminAccounts rows={[{ id: row.order_id, available_count: 1, owner_email: row.owner_email }]} onOrder={() => {}} />);
   expect(fetcher).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "查看全部资料" }));
+  fireEvent.click(screen.getByRole("button", { name: new RegExp("订单 " + row.order_id.slice(0,12)) }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看全部资料" }));
   expect(await screen.findByDisplayValue(record.password)).toBeTruthy();
   expect(screen.getByDisplayValue("refresh-test")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));

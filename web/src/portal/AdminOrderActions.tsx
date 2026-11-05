@@ -1,10 +1,17 @@
 import { call, type Row } from "./client";
 import { useAction, Feedback, Table } from "./Workspace";
+import AdminCosts, { CostAmount } from "./AdminCosts";
 export default function AdminOrderActions({ data }: { data: Row }) {
   const a = useAction();
   return (
     <>
       <Feedback a={a} />
+      <AdminCosts cost={data.execution_cost} title="本订单执行成本" />
+      <Table rows={data.items} columns={[
+        { title: "账号序号", render: r => r.position },
+        { title: "邮箱消耗", render: r => <CostAmount cost={r.execution_cost} kind="mail" /> },
+        { title: "短信消耗", render: r => <CostAmount cost={r.execution_cost} kind="sms" /> },
+      ]} />
       {data.items
         .filter((r: Row) => r.status === "review")
         .map((r: Row) => (

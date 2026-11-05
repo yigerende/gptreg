@@ -81,6 +81,7 @@ export const endpoints = {
   testSmsSettings: (provider: string, body: unknown) => api<any>(`/sms/settings/${encodeURIComponent(provider)}/test`, { method: 'POST', body: JSON.stringify(body) }),
   saveSmsSettings: (provider: string, body: unknown) => api<ConfigSnapshot>(`/sms/settings/${encodeURIComponent(provider)}`, { method: 'PUT', body: JSON.stringify(body) }),
   health: () => api<{ ok: boolean; activeRunId: string; activeRunIds?: string[]; taskCapacity?: TaskCapacitySnapshot | null; now: string }>('/health'),
+  resourceSummary: (mailProvider: string, smsProvider: string) => api<any>(`/resources/summary?${new URLSearchParams({ mailProvider, smsProvider })}`),
   services: (smsProvider?: 'smsbower' | 'firefox' | 'hero-sms') => api<{ services: ServiceStatus[]; sms: ServiceStatus }>(`/services${smsProvider ? `?smsProvider=${encodeURIComponent(smsProvider)}` : ''}`),
   config: () => api<ConfigSnapshot>('/config'),
   smsFirefoxCountries: () => api<{ countries: Array<{ code: string; name?: string; englishName?: string; dialingCode?: string; price?: number }> }>('/sms/firefox/countries'),

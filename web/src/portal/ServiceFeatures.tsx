@@ -1,4 +1,4 @@
-import { Zap, Mail, HouseWifi } from "lucide-react";
+import { Zap, Mail, HouseWifi, Network, Fingerprint } from "lucide-react";
 export default function ServiceFeatures({
   compact = false,
 }: {
@@ -33,6 +33,8 @@ export default function ServiceFeatures({
           <p>动态住宅代理网络，家宽环境注册。</p>
         </div>
       </article>
+      <article><span><Network size={21} /></span><div><b>1号1IP</b><p>注册任务独立绑定代理出口。</p></div></article>
+      <article><span><Fingerprint size={21} /></span><div><b>1号1指纹</b><p>每个账号独立维护设备标识与会话。</p></div></article>
     </div>
   );
 }

@@ -20,6 +20,7 @@ import AdminAnnouncements from "./AdminAnnouncements";
 import AdminRedeemUsage from "./AdminRedeemUsage";
 import AdminCodes from "./AdminCodes";
 import AdminAccounts from "./AdminAccounts";
+import { CostAmount } from "./AdminCosts";
 export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
   const [offset, setOffset] = useState(0),
     [filters, setFilters] = useState<Row>(() => ({
@@ -43,7 +44,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
     ? "settings"
     : tab === "codes"
       ? "redeem-codes"
-      : tab;
+      : tab === "accounts" ? "account-orders" : tab;
   const params = new URLSearchParams({
     limit: "50",
     offset: String(offset),
@@ -191,7 +192,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
       {tab === "accounts" && (
         <AdminAccounts
           filters={filters}
-          key={JSON.stringify([offset, filters])}
+          key={JSON.stringify(filters)}
           rows={rows}
           onOrder={setDetail}
         />
@@ -204,11 +205,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
               { title: "用户", render: (r) => r.email },
               {
                 title: "订单",
-                render: (r) => (
-                  <button className="p-link" onClick={() => setDetail(r.id)}>
-                    {r.id.slice(0, 8)} ↗
-                  </button>
-                ),
+                render: (r) => <code title={r.id}>{r.id.slice(0, 12)}</code>,
               },
               {
                 title: "模式",
@@ -221,6 +218,9 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                 render: (r) => `${r.unit_price} / ${r.charged}`,
               },
               { title: "时间", render: (r) => date(r.created_at) },
+              { title: "邮箱消耗", render: r => <CostAmount cost={r.execution_cost} kind="mail" /> },
+              { title: "短信消耗", render: r => <CostAmount cost={r.execution_cost} kind="sms" /> },
+              { title: "操作", render: r => <button className="p-button secondary" onClick={() => setDetail(r.id)}>订单详情</button> },
             ]}
           />
         </section>

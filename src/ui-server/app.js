@@ -285,6 +285,42 @@ function buildApp(options = {}) {
     return configService.snapshot();
   });
 
+  // Read-only resource board; no rentals, proxy reservations or registrations.
+  const resourceCache = new Map();
+  app.get('/api/v1/resources/summary', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const raw = configService.readRaw();
+    const provider = String(request.query?.smsProvider || raw.sms?.provider || 'smsbower');
+    if (!['smsbower', 'firefox', 'hero-sms', 'mock'].includes(provider)) throw new HttpError(400, 'Unsupported SMS provider');
+    const mailProvider = String(request.query?.mailProvider || raw.mail?.provider || 'xiaopingguo');
+    const key = JSON.stringify([raw.mail, raw.sms, provider, mailProvider]);
+    let cached = resourceCache.get(key);
+    if (!cached || cached.until < Date.now()) {
+      const promise = (async () => {
+        const smsConfig = require('../sms-settings').effectiveSmsConfig(raw.sms || {}, provider);
+        const [mail, balance, market] = await Promise.allSettled([
+          mailProvider === 'smsbower' ? smsbowerMail.status() : Promise.resolve({ provider: mailProvider, currency: 'USD', balance: null, stock: null, unitPrice: null, message: '该邮箱渠道不提供余额与单价' }),
+          smsStatus({ ...raw, sms: smsConfig }),
+          smsMarketReader(smsMarketConfig(configService, provider)),
+        ]);
+        return {
+          checkedAt: new Date().toISOString(),
+          mail: mail.status === 'fulfilled' ? mail.value : { provider: mailProvider, balance: null, stock: null, unitPrice: null, message: '邮箱资源读取失败' },
+          sms: { provider, ...(balance.status === 'fulfilled' ? balance.value : { balance: null }),
+            message: balance.status === 'fulfilled' && balance.value.status === 'online' ? provider : '余额暂不可用，请检查短信配置',
+            cheapestPrice: market.status === 'fulfilled' ? market.value.cheapestPrice : null,
+            currency: market.status === 'fulfilled' ? market.value.currency : provider === 'firefox' ? 'CNY' : 'USD',
+            marketError: market.status === 'rejected',
+            marketHint: market.status === 'rejected' ? '报价读取失败，请稍后刷新' : '当前配置国家与服务的最低报价，实际消耗按账单统计' },
+        };
+      })();
+      cached = { promise, until: Date.now() + 65000 };
+      // Bound the cache across settings edits; never expose its credential keys.
+      resourceCache.clear(); resourceCache.set(key, cached);
+    }
+    return { ...await cached.promise, taskCapacity: runManager.taskCapacitySnapshot(), activeRuns: runManager.activeRunIds().length };
+  });
+
   app.get('/api/v1/sms/firefox/countries', async (_request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const raw = configService.readRaw();

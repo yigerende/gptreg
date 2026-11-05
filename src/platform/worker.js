@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const runtimeSecrets = require("./runtime-secrets");
 const { id } = require("./security");
 const { executionFailure } = require("./execution-failure");
+const { syncAttemptCosts, backfillCosts } = require("./execution-costs");
 const TERMINAL = new Set(["complete", "partial", "failed", "cancelled"]);
 class OrderWorker {
   constructor(db, orders, manager) {
@@ -99,6 +100,10 @@ class OrderWorker {
   }
   async cycle() {
     const s = await this.db.settings();
+    if (!this.costBackfillAt || Date.now() - this.costBackfillAt > 30000) {
+      this.costBackfillAt = Date.now();
+      await backfillCosts(this.db, this.manager).catch(() => {});
+    }
     this.manager.setCustomerConcurrency(
       s.registration_concurrency,
       s.user_registration_concurrency,
@@ -376,6 +381,12 @@ class OrderWorker {
       return;
     }
     const active = this.manager.activeRun(item.run_id);
+    if (!active || !this.costSyncAt?.has(item.run_id) || Date.now() - this.costSyncAt.get(item.run_id) > 10000) {
+      this.costSyncAt ||= new Map();
+      await syncAttemptCosts(this.db, this.manager, item.run_id, state).catch(() => {});
+      if (active) this.costSyncAt.set(item.run_id, Date.now());
+      else this.costSyncAt.delete(item.run_id);
+    }
     const expired =
       Date.now() - new Date(item.attempt_started_at).getTime() >
       item.timeout_minutes * 60000;

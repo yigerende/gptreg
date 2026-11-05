@@ -3,6 +3,7 @@ const { fail } = require("./security");
 const { audit } = require("./db");
 const { totpCode } = require("../chatgpt-session-runner");
 const { oauthExport } = require("./account-export");
+const { costsBy } = require("./execution-costs");
 
 function registerAdminAccounts(app, db, crypt) {
   const select =
@@ -28,6 +29,7 @@ function registerAdminAccounts(app, db, crypt) {
     const row = await db.one(`${select} WHERE a.id=$1`, [r.params.id]);
     fail(row, "交付账号不存在", 404);
     const value = reveal(row);
+    value.delivery.execution_cost = (await costsBy(db, "item_id", [row.item_id])).get(row.item_id);
     await audit(db, r.user.id, "admin.account.credentials", row.id);
     return {
       ...value,
@@ -61,6 +63,8 @@ function registerAdminAccounts(app, db, crypt) {
     );
     const byId = new Map(rows.map((row) => [row.id, row]));
     const values = unique.map((id) => reveal(byId.get(id)));
+    const costs = await costsBy(db, "item_id", rows.map(r => r.item_id));
+    for (const value of values) value.delivery.execution_cost = costs.get(value.delivery.item_id);
     // Record identifiers and format only, never passwords or token contents.
     await audit(
       db,
@@ -84,7 +88,7 @@ function registerAdminAccounts(app, db, crypt) {
             ? values
                 .map((c) => `${c.email}----${c.password}----${c.totp_secret}`)
                 .join("\n") + "\n"
-            : "\uFEFFemail,password,totp_secret,owner_email,owner_name,user_id,order_id,account_id,asset_id,need_oauth,delivered_at,sold_at,oauth_json\r\n" +
+            : "\uFEFFemail,password,totp_secret,owner_email,owner_name,user_id,order_id,account_id,asset_id,need_oauth,delivered_at,sold_at,oauth_json,execution_cost_json\r\n" +
               values
                 .map((c) =>
                   [
@@ -101,6 +105,7 @@ function registerAdminAccounts(app, db, crypt) {
                     c.delivery.created_at,
                     c.delivery.engine_sold_at,
                     c.oauth ? JSON.stringify(c.oauth) : "",
+                    JSON.stringify(c.delivery.execution_cost),
                   ]
                     .map(csv)
                     .join(","),
