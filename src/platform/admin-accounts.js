@@ -2,6 +2,7 @@
 const { fail } = require("./security");
 const { audit } = require("./db");
 const { totpCode } = require("../chatgpt-session-runner");
+const { oauthExport } = require("./account-export");
 
 function registerAdminAccounts(app, db, crypt) {
   const select =
@@ -39,15 +40,15 @@ function registerAdminAccounts(app, db, crypt) {
     fail(
       Array.isArray(ids) &&
         ids.length > 0 &&
-        ids.length <= 100 &&
+        ids.length <= 1000 &&
         ids.every(
           (v) => typeof v === "string" && v.length > 0 && v.length <= 80,
         ),
-      "一次选择 1～100 个账号",
+      "一次选择 1～1000 个账号",
     );
     fail(
-      ["json", "txt", "csv"].includes(format),
-      "导出格式须为 txt、csv 或 json",
+      ["json", "txt", "csv", "cpa", "sub"].includes(format),
+      "导出格式须为 txt、csv、json、cpa 或 sub",
     );
     const unique = [...new Set(ids)];
     const rows = (
@@ -73,6 +74,7 @@ function registerAdminAccounts(app, db, crypt) {
       if (/^[=+\-@\t\r\n]/.test(text)) text = "'" + text;
       return '"' + text.replace(/"/g, '""') + '"';
     };
+    if (["cpa", "sub"].includes(format)) return oauthExport(values, format);
     return {
       filename: `gptreg-deliveries.${format}`,
       content:

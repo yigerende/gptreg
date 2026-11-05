@@ -193,6 +193,19 @@ test(
           extra_metadata: "retained",
         },
       };
+      const jwt = (value) =>
+        Buffer.from('{"alg":"none"}').toString("base64url") +
+        "." +
+        Buffer.from(JSON.stringify(value)).toString("base64url") +
+        ".fixture";
+      credentials.oauth.access_token = jwt({
+        exp: 1900000000,
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "contract-account",
+          chatgpt_plan_type: "free",
+        },
+      });
+      credentials.oauth.id_token = jwt({ email: credentials.email });
       // Simulate a completed delivery in the isolated schema; never contact providers.
       await orders.finish(detail.items[0].id, credentials);
       const cancelled = await request(
@@ -240,6 +253,37 @@ test(
             exported.content,
             `${credentials.email}----${credentials.password}----${credentials.totp_secret}\n`,
           );
+      }
+      for (const format of ["cpa", "sub"]) {
+        const exported = await request(
+          "POST",
+          "/open/v1/accounts/export",
+          undefined,
+          { ids: [account.id], format },
+        );
+        const value = JSON.parse(exported.content);
+        if (format === "cpa") {
+          assert.equal(value.type, "codex");
+          assert.equal(value.access_token, credentials.oauth.access_token);
+          assert.ok(!value.password);
+          assert.ok(!Array.isArray(value));
+        } else {
+          assert.deepEqual(value.proxies, []);
+          assert.equal(value.accounts.length, 1);
+          assert.equal(
+            value.accounts[0].credentials.chatgpt_account_id,
+            "contract-account",
+          );
+          assert.equal(value.accounts[0].platform, "openai");
+        }
+        await request(
+          "POST",
+          "/open/v1/accounts/export",
+          undefined,
+          { ids: [account.id, "missing"], format },
+          {},
+          404,
+        );
       }
       await request(
         "POST",

@@ -742,8 +742,8 @@ export default function Docs({
                 </li>
                 <li>
                   使用账号 <code>id</code>{" "}
-                  <a href="#get_credentials">读取凭据</a>，或每批不超过 100 个
-                  ID <a href="#export_accounts">导出</a>。需要 OAuth 时选 JSON。
+                  <a href="#get_credentials">读取凭据</a>，或每批不超过 1000 个
+                  ID <a href="#export_accounts">导出</a>。完整资料选 JSON，导入 CPA 选 cpa，导入 sub2api 选 sub。
                 </li>
               </ol>
               <details className="d-details">

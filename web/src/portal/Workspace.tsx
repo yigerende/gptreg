@@ -14,6 +14,7 @@ import { Link } from "../router";
 import { Filters, Pagination } from "./Insights";
 import ServiceFeatures from "./ServiceFeatures";
 import { useOrderSubmission } from "./orderSubmission";
+import { ExportProgress, selectFilteredAccounts } from "./AccountExport";
 const AdminOrderActions = lazy(() => import("./AdminOrderActions"));
 export function Modal({
   title,
@@ -288,13 +289,25 @@ export default function Workspace({
   });
   const rows: Row[] = data?.items || [],
     price = oauth ? pub.price_oauth : pub.price_standard;
+  const [exporting, setExporting] = useState("");
   async function exported(format: string) {
-    const r = await a.run(
-      () =>
-        call("/api/user/v1/accounts/export", "POST", { ids: selected, format }),
-      "导出已准备",
+    if (exporting) return;
+    setExporting(
+      `正在准备 ${selected.length} 个账号的 ${format.toUpperCase()} 文件`,
     );
-    if (r) download(r.filename, r.content);
+    try {
+      const r = await a.run(
+        () =>
+          call("/api/user/v1/accounts/export", "POST", {
+            ids: selected,
+            format,
+          }),
+        "导出已准备",
+      );
+      if (r) download(r.filename, r.content, r.encoding);
+    } finally {
+      setExporting("");
+    }
   }
   return (
     <>
@@ -496,7 +509,7 @@ export default function Workspace({
                 onClick={() => exported("txt")}
               >
                 <Download size={16} />
-                导出 TXT
+                邮箱-密码-2fa
               </button>
               <button
                 className="p-button secondary"
@@ -508,12 +521,56 @@ export default function Workspace({
               <button
                 className="p-button"
                 disabled={!selected.length || a.busy}
-                onClick={() => exported("json")}
+                onClick={() => exported("cpa")}
               >
-                导出 JSON / OAuth
+                CPA
+              </button>
+              <button
+                className="p-button"
+                disabled={!selected.length || a.busy || Boolean(exporting)}
+                onClick={() => exported("sub")}
+              >
+                SUB
               </button>
             </div>
           </div>
+          <ExportProgress text={exporting} />
+          <div className="p-inline p-export-selection">
+            <span>已选择 {selected.length} 个账号</span>
+            <button
+              className="p-button secondary"
+              disabled={a.busy || Boolean(exporting)}
+              onClick={async () => {
+                try {
+                  const result = await a.run(
+                    () =>
+                      selectFilteredAccounts(
+                        "/api/user/v1/accounts",
+                        filters,
+                        setExporting,
+                      ),
+                    "已选择当前筛选结果，最多 1000 个",
+                  );
+                  if (result) setSelected(result.ids);
+                } finally {
+                  setExporting("");
+                }
+              }}
+            >
+              选择筛选结果（最多 1000）
+            </button>
+            <button
+              className="p-link"
+              disabled={a.busy || Boolean(exporting)}
+              onClick={() => setSelected([])}
+            >
+              清空选择
+            </button>
+          </div>
+          <p className="p-muted p-fine">
+            CPA：每个账号一个 JSON，批量下载 ZIP；SUB：多个账号合并一个
+            JSON。两者均需含 OAuth；普通账号请选择“邮箱-密码-2fa”。
+          </p>
           <Filters
             value={filters}
             onChange={(v) => {

@@ -644,7 +644,7 @@ test(
             }
           }
           assert.equal((await request("POST", "/api/admin/v1/accounts/export", { ids: [accountId, "missing"] }, adminCookie)).statusCode, 404);
-          for (const body of [{ ids: [] }, { ids: [accountId], format: "zip" }, { ids: Array(101).fill(accountId) }, { ids: [4] }])
+          for (const body of [{ ids: [] }, { ids: [accountId], format: "zip" }, { ids: Array(1001).fill(accountId) }, { ids: [4] }])
             assert.equal((await request("POST", "/api/admin/v1/accounts/export", body, adminCookie)).statusCode, 400);
           const audit = (await store.query("SELECT action,detail,target FROM platform_audit WHERE action LIKE 'admin.account%' ORDER BY id")).rows;
           assert.equal(audit.filter((r) => r.action === "admin.accounts.export").length, 3);

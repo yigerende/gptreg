@@ -2,25 +2,40 @@ import { useState } from "react";
 import { Copy, Download } from "lucide-react";
 import { call, copy, date, download, type Row } from "./client";
 import { Feedback, Modal, Table, useAction } from "./Workspace";
+import { ExportProgress, selectFilteredAccounts } from "./AccountExport";
 
 export default function AdminAccounts({
   rows,
   onOrder,
+  filters = {},
 }: {
   rows: Row[];
   onOrder: (id: string) => void;
+  filters?: Row;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [secret, setSecret] = useState<Row | null>(null);
   const a = useAction();
-  const ids = selected.filter((id) => rows.some((r) => r.id === id));
+  const ids = selected;
+  const [exporting, setExporting] = useState("");
   async function exported(format: string, chosen = ids) {
-    const value = await a.run(
-      () =>
-        call("/api/admin/v1/accounts/export", "POST", { ids: chosen, format }),
-      "导出已准备",
+    if (exporting) return;
+    setExporting(
+      `正在准备 ${chosen.length} 个账号的 ${format.toUpperCase()} 文件`,
     );
-    if (value) download(value.filename, value.content);
+    try {
+      const value = await a.run(
+        () =>
+          call("/api/admin/v1/accounts/export", "POST", {
+            ids: chosen,
+            format,
+          }),
+        "导出已准备",
+      );
+      if (value) download(value.filename, value.content, value.encoding);
+    } finally {
+      setExporting("");
+    }
   }
   async function reveal(id: string, refresh = false) {
     const value = await a.run(
@@ -60,6 +75,7 @@ export default function AdminAccounts({
   return (
     <>
       {!secret && <Feedback a={a} />}
+      {!secret && <ExportProgress text={exporting} />}
       <section className="p-card p-record-card">
         <div className="p-records-heading">
           <div>
@@ -81,6 +97,28 @@ export default function AdminAccounts({
             选择 / 取消本页全部
           </button>
           <button
+            className="p-button secondary"
+            disabled={a.busy || Boolean(exporting)}
+            onClick={async () => {
+              try {
+                const result = await a.run(
+                  () =>
+                    selectFilteredAccounts(
+                      "/api/admin/v1/accounts",
+                      filters,
+                      setExporting,
+                    ),
+                  "已选择当前筛选结果，最多 1000 个",
+                );
+                if (result) setSelected(result.ids);
+              } finally {
+                setExporting("");
+              }
+            }}
+          >
+            选择筛选结果（最多 1000）
+          </button>
+          <button
             className="p-button"
             disabled={!ids.length || a.busy}
             onClick={() => exported("json")}
@@ -100,7 +138,21 @@ export default function AdminAccounts({
             disabled={!ids.length || a.busy}
             onClick={() => exported("txt")}
           >
-            导出 TXT
+            邮箱-密码-2fa
+          </button>
+          <button
+            className="p-button secondary"
+            disabled={!ids.length || a.busy || Boolean(exporting)}
+            onClick={() => exported("cpa")}
+          >
+            CPA
+          </button>
+          <button
+            className="p-button secondary"
+            disabled={!ids.length || a.busy || Boolean(exporting)}
+            onClick={() => exported("sub")}
+          >
+            SUB
           </button>
         </div>
         <p className="p-records-note">
@@ -169,6 +221,7 @@ export default function AdminAccounts({
       {secret && (
         <Modal title="交付账号完整资料" onClose={() => setSecret(null)}>
           <Feedback a={a} />
+          <ExportProgress text={exporting} />
           <div className="p-delivery-meta">
             <div>
               <small>所属客户</small>

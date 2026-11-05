@@ -122,3 +122,12 @@ node scripts/platform-preview.js
 参照 xufu 提供发行弹窗、发行统计、批次与有效期、未使用/已使用/停用/过期筛选、单条与批量复制、TXT 导出及批量启停/删除。生成结果可直接点击每条兑换码复制，也可复制全部或下载。仅有效未使用的兑换码能导出，已兑换记录不可删除；过期码不可充值。
 
 新码用平台主密钥加密保存完整内容，列表和审计不返回原文，仅管理员复制/导出接口解密。历史码保留原有效性与兑换记录；原先只有哈希且未保存原文的码会标注「历史码 · 未保存原文」，无法恢复复制。兼容迁移新增 encrypted_code、batch、expires_at，不替换旧数据或主密钥。
+
+
+## CPA / SUB 导出及大批量下载
+
+用户「我的账号」和运营「账号交付」均支持 CPA、SUB，以及「邮箱-密码-2fa」。CPA 单个账号直接下载独立 Codex OAuth JSON；多个账号下载 ZIP，内部一号一份 JSON。SUB 复用原引擎转换器，将多个账号合并为 sub2api 的 exported_at / proxies / accounts 导入文件，账号 platform=openai、type=oauth，credentials 包含 token 及解析后的账号信息。已按本地 sub2api account_data.go 与 CLIProxyAPI auth_files_crud.go 导入结构核对，不启动或更改这两个项目。
+
+仅完整 OAuth 交付可导出 CPA/SUB，混入标准账号整批拒绝。原始完整 JSON 和 CSV 接口保留。网页支持选择当前筛选结果最多 1000 个，选择期间显示读取数量，生成下载期间持续转圈显示账号数并阻止重复提交。
+
+开放 API accounts/export 新增 cpa、sub 两个 format，单次上限从 100 扩为 1000。仍返回 filename / content；仅 CPA ZIP 额外返回 encoding=base64，调用方须解码为字节再写文件。其他格式 content 为 UTF-8 正文。OpenAPI 升至 1.2.0，Python/Node.js 示例包含 Base64 处理，原 txt/csv/json 调用保持兼容。

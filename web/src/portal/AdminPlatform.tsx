@@ -185,6 +185,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
       {tab === "finance" && data && <AdminFinance data={data} />}
       {tab === "accounts" && (
         <AdminAccounts
+          filters={filters}
           key={JSON.stringify([offset, filters])}
           rows={rows}
           onOrder={setDetail}

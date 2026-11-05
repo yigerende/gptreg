@@ -1,6 +1,11 @@
 export type Row = Record<string, any>;
 export class ApiError extends Error {
-  constructor(message: string, public status: number) { super(message); }
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+  }
 }
 export async function call(
   path: string,
@@ -27,17 +32,35 @@ export async function call(
   return data;
 }
 export async function currentUser() {
-  try { return await call("/api/user/v1/me"); }
-  catch (e) { if (e instanceof ApiError && e.status === 401) return null; throw e; }
+  try {
+    return await call("/api/user/v1/me");
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) return null;
+    throw e;
+  }
 }
 export const orderPending = (order?: Row) =>
-  Boolean(order && ["queued", "running", "oauth_pending", "review"].includes(order.status));
+  Boolean(
+    order &&
+      ["queued", "running", "oauth_pending", "review"].includes(order.status),
+  );
 export const uid = () =>
   globalThis.crypto?.randomUUID?.() ||
   `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-export function download(filename: string, content: string) {
+export function download(filename: string, content: string, encoding?: string) {
+  const data =
+    encoding === "base64"
+      ? Uint8Array.from(atob(content), (char) => char.charCodeAt(0))
+      : content;
   const u = URL.createObjectURL(
-    new Blob([content], { type: "text/plain;charset=utf-8" }),
+    new Blob([data], {
+      type:
+        encoding === "base64"
+          ? "application/zip"
+          : filename.endsWith(".json")
+            ? "application/json;charset=utf-8"
+            : "text/plain;charset=utf-8",
+    }),
   );
   const a = document.createElement("a");
   a.href = u;

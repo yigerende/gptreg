@@ -707,3 +707,28 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+.p-export-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  margin: 12px 0;
+  border: 1px solid #c8e6da;
+  border-radius: 10px;
+  background: #edf8f2;
+  color: #176f59;
+}
+.p-export-spinner {
+  flex: none;
+  animation: p-export-spin 1s linear infinite;
+}
+.p-export-selection {
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+@keyframes p-export-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

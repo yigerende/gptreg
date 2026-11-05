@@ -63,7 +63,7 @@ const errors = {
     "幂等键与请求内容冲突",
     "相同操作重试须复用相同键和内容；确认要创建新订单时使用新键。",
   ],
-  413: ["请求体过大", "总请求体不能超过 1 MiB；账号导出每次最多 100 个 ID。"],
+  413: ["请求体过大", "总请求体不能超过 1 MiB；账号导出每次最多 1000 个 ID。"],
   429: [
     "请求过频或未完成订单达到上限",
     "有 Retry-After 时按该秒数等待；否则至少等待 60 秒。订单上限需等待已有订单结算，review 需联系支持。",
@@ -235,12 +235,19 @@ const schemas = {
       }),
     ],
   },
-  ExportResult: obj({
-    filename: str("建议保存的文件名，按所选格式设置后缀"),
-    content: str(
-      "文件正文字符串。响应仍是 JSON，请先解析响应再把 content 写入文件；JSON 正文是 StoredCredentials 数组，不含实时验证码",
-    ),
-  }),
+  ExportResult: obj(
+    {
+      filename: str("建议保存的文件名，按所选格式设置后缀"),
+      content: str(
+        "文件正文字符串。json 是完整交付数组；cpa 单账号是 OAuth 对象、多账号是 ZIP 的 Base64；sub 是合并导入 JSON。encoding=base64 时先解码为二进制再保存，否则按 UTF-8 文本保存",
+      ),
+      encoding: str(
+        "仅 CPA 多账号 ZIP 返回 base64；省略时 content 为 UTF-8 文本",
+        { enum: ["base64"] },
+      ),
+    },
+    ["filename", "content"],
+  ),
   Error: obj({
     error: str("适合展示给用户的中文原因；不要按完整文案编写业务判断"),
     status: num("HTTP 状态码", { minimum: 400, maximum: 599 }),
@@ -597,7 +604,7 @@ operation(
   "批量导出交付资料",
   "账号交付",
   "credentials:read",
-  "一次传入 1～100 个账号 ID。任一 ID 不存在或不属于当前用户则整体返回 404；重复 ID 自动去重，不保证输出顺序与请求顺序相同。TXT/CSV 只含邮箱、密码和 2FA；JSON 保留所购 OAuth 数据。响应是 JSON 封装而非直接文件流。",
+  "一次传入 1～1000 个账号 ID。任一 ID 不存在或不属于当前用户则整体返回 404；重复 ID 自动去重，不保证输出顺序与请求顺序相同。TXT/CSV 为基础凭据；JSON 保留完整交付数据。CPA 每个账号一份 OAuth JSON，多账号打包 ZIP（encoding=base64）；SUB 多账号合并为一个 sub2api 导入 JSON。CPA/SUB 只支持完整 OAuth 账号，混入标准账号会整批拒绝。响应始终是 JSON 封装，先解析，ZIP 需 Base64 解码后保存。",
   {
     requestBody: requestBody(
       obj(
@@ -605,7 +612,7 @@ operation(
           ids: {
             type: "array",
             minItems: 1,
-            maxItems: 100,
+            maxItems: 1000,
             description:
               "交付账号 ID 数组，来自账号列表 items[].id；不能传订单 ID",
             items: { type: "string" },
@@ -613,9 +620,10 @@ operation(
           },
           format: {
             type: "string",
-            enum: ["txt", "csv", "json"],
+            enum: ["txt", "csv", "json", "cpa", "sub"],
             default: "txt",
-            description: "文件格式；获取 OAuth 数据时选 json",
+            description:
+              "txt：邮箱-密码-2fa；json：完整交付；cpa：CPA 导入；sub：sub2api 合并导入",
           },
         },
         ["ids"],
@@ -632,6 +640,14 @@ operation(
         csv: {
           summary: "CSV，三列基础凭据",
           value: { ids: ["ACCOUNT_ID"], format: "csv" },
+        },
+        cpa: {
+          summary: "CPA，每个账号独立 JSON，多账号 ZIP",
+          value: { ids: ["ACCOUNT_ID"], format: "cpa" },
+        },
+        sub: {
+          summary: "SUB，多个账号合并 JSON",
+          value: { ids: ["ACCOUNT_ID"], format: "sub" },
         },
       },
     ),
@@ -687,6 +703,48 @@ exportMedia.examples = {
     },
   },
 };
+exportMedia.examples.cpa = {
+  summary: "CPA 单账号独立 JSON（多账号为 ZIP）",
+  value: {
+    filename: "codex-demo.account@gmail.com.json",
+    content: JSON.stringify(
+      {
+        ...exampleCredentials.oauth,
+        email: exampleCredentials.email,
+        type: "codex",
+      },
+      null,
+      2,
+    ),
+  },
+};
+exportMedia.examples.sub = {
+  summary: "SUB 合并导入文件",
+  value: {
+    filename: "SUB-1.json",
+    content: JSON.stringify(
+      {
+        exported_at: "2026-11-05T00:00:00.000Z",
+        proxies: [],
+        accounts: [
+          {
+            name: exampleCredentials.email,
+            platform: "openai",
+            type: "oauth",
+            credentials: {
+              ...exampleCredentials.oauth,
+              email: exampleCredentials.email,
+            },
+            concurrency: 10,
+            priority: 1,
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  },
+};
 delete exportMedia.example;
 for (const path of ["/open/v1/registration-orders", "/open/v1/accounts"]) {
   const op = paths[path].get;
@@ -710,7 +768,7 @@ const openapi = {
   openapi: "3.1.0",
   info: {
     title: "GPT Register 开放 API",
-    version: "1.1.1",
+    version: "1.2.0",
     description:
       "通过服务端 API 创建标准或含 OAuth 的注册订单，查询进度并领取交付凭据。下单预留积分，按实际交付结算；失败/取消未交付部分释放。所有示例为虚构演示资料，实际价格与上限以接口返回为准。",
   },
