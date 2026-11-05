@@ -1,4 +1,5 @@
 'use strict';
+const runtimeSecrets = require('./platform/runtime-secrets');
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -2446,7 +2447,7 @@ function writeJsonAtomic(filePath, value) {
   const temporary = `${resolved}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   const fd = fs.openSync(temporary, 'wx', 0o600);
   try {
-    fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(fd, `${JSON.stringify(runtimeSecrets.protect(value), null, 2)}\n`, 'utf8');
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);

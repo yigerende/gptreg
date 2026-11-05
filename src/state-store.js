@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
+const runtimeSecrets = require('./platform/runtime-secrets');
 
 const STATE_SCHEMA_VERSION = 2;
 const STATE_SAVE_RETRY_CODES = new Set(['EBUSY', 'EACCES', 'EPERM', 'EEXIST', 'ENOTEMPTY']);
@@ -152,7 +153,7 @@ function validateV2State(state, options = {}) {
 function parseStateText(text, filePath) {
   let value;
   try {
-    value = JSON.parse(text);
+    value = runtimeSecrets.parse(text);
   } catch (cause) {
     const error = new SyntaxError(`Invalid JSON in state file ${filePath}: ${cause.message}`, { cause });
     error.code = 'ESTATEJSON';
@@ -280,7 +281,7 @@ function saveV2State(filePath, state) {
   // Compact, not pretty-printed. Nothing reads this by eye, and the indentation
   // was about a third of the bytes serialized, written, fsync'd and re-parsed
   // on every checkpoint of every Worker.
-  const content = `${JSON.stringify(hydratedState)}\n`;
+  const content = `${JSON.stringify(runtimeSecrets.protect(hydratedState))}\n`;
   writeSyncedFile(temporaryPath, content);
 
   const backupPath = `${resolved}.bak`;

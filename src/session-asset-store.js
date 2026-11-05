@@ -1,4 +1,5 @@
 'use strict';
+const runtimeSecrets = require('./platform/runtime-secrets');
 
 const { exportFileName } = require('./export-file-name');
 const crypto = require('node:crypto');
@@ -1026,7 +1027,7 @@ class SessionAssetStore {
 
   readFileUncached(filePath) {
     const read = (candidate) => {
-      const value = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      const value = runtimeSecrets.parse(fs.readFileSync(candidate, 'utf8'));
       if (value.schemaVersion !== SESSION_ASSET_SCHEMA_VERSION) {
         throw new Error(`Unsupported session asset schema: ${value.schemaVersion}`);
       }
@@ -1511,7 +1512,7 @@ class SessionAssetStore {
     const file = this.filePath(asset.id);
     fs.mkdirSync(this.assetRoot, { recursive: true });
     if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
-    atomicWriteText(file, `${JSON.stringify(asset, null, 2)}\n`);
+    atomicWriteText(file, `${JSON.stringify(runtimeSecrets.protect(asset), null, 2)}\n`);
     this.changeVersion += 1;
     this.readCache.delete(file);
     this.persistedCpa.delete(file);
@@ -1749,7 +1750,7 @@ class SessionAssetStore {
     }
     const filePath = path.join(this.cpaRoot, 'session-assets', cpaFileNameForEmail(asset.email));
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    atomicWriteText(filePath, `${JSON.stringify(account, null, 2)}\n`);
+    atomicWriteText(filePath, `${JSON.stringify(runtimeSecrets.protect(account), null, 2)}\n`);
     const cpa = {
       path: path.relative(this.cpaRoot, filePath),
       revision: Number(previous?.revision || 0) + 1,

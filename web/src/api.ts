@@ -19,6 +19,7 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
     ...init,
     headers: {
+      'X-Requested-With': 'gptreg',
       ...(init.body ? { 'Content-Type': 'application/json' } : {}),
       ...init.headers,
     },
@@ -39,6 +40,7 @@ async function apiDownload(path: string, init: RequestInit = {}): Promise<{ blob
   const response = await fetch(`/api/v1${path}`, {
     ...init,
     headers: {
+      'X-Requested-With': 'gptreg',
       ...(init.body ? { 'Content-Type': 'application/json' } : {}),
       ...init.headers,
     },

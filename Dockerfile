@@ -17,6 +17,7 @@ COPY docker/ ./docker/
 COPY test/ ./test/
 COPY index.js gpt-re.config.example.json dynamic-proxy-pools.example.json proxy-pool.example.txt ./
 RUN npm test
+RUN node --test test/platform-encryption.test.js test/session-assets.test.js test/state-store.test.js
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app

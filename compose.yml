@@ -11,6 +11,12 @@ services:
     init: true
     ports:
       - "8963:3210"
+    environment:
+      DATABASE_URL: postgresql://gptreg:${GPTREG_DB_PASSWORD:?Set GPTREG_DB_PASSWORD in .env}@postgres:5432/gptreg
+      WORKER_URL: http://worker:3211
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ./.runtime:/app/.runtime
     read_only: true
@@ -29,3 +35,57 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+  worker:
+    image: gptreg:${GPTREG_VERSION:-local}
+    container_name: gptreg-worker
+    command: ["node", "docker/worker.js"]
+    restart: unless-stopped
+    init: true
+    environment:
+      DATABASE_URL: postgresql://gptreg:${GPTREG_DB_PASSWORD:?Set GPTREG_DB_PASSWORD in .env}@postgres:5432/gptreg
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./.runtime:/app/.runtime
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 256
+    stop_grace_period: 120s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3211/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  postgres:
+    image: postgres:17-alpine
+    container_name: gptreg-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gptreg
+      POSTGRES_USER: gptreg
+      POSTGRES_PASSWORD: ${GPTREG_DB_PASSWORD:?Set GPTREG_DB_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gptreg -d gptreg"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+    cpus: 1
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+volumes:
+  postgres-data:

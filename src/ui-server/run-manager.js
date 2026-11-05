@@ -1,4 +1,5 @@
 'use strict';
+const runtimeSecrets = require('../platform/runtime-secrets');
 
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
@@ -2868,7 +2869,7 @@ class RunManager extends EventEmitter {
     }
   }
 
-  async start(planInput = {}) {
+  async start(planInput = {}, startOptions = {}) {
     const slot = taskSlotOf(planInput);
     const startingToken = this.reserveStartingSlot(slot);
     let stateFile = '';
@@ -2905,7 +2906,7 @@ class RunManager extends EventEmitter {
         plan.mailAliasDomains = [...prepared.effectiveMailAliasDomains];
         config = applyRunPlan(config, plan);
       }
-      const state = makeInitialBranchState(config, plan, { runId: generatedRunId() });
+      const state = makeInitialBranchState(config, plan, { runId: startOptions.runId ? safeRunId(startOptions.runId) : generatedRunId() });
       state.runPlan = plan;
       if (proxyResourceSnapshot) state.proxyResourceSnapshot = proxyResourceSnapshot;
       // Keep the preflight plan as the original checkpoint baseline. The live
@@ -4700,7 +4701,7 @@ class RunManager extends EventEmitter {
     for (const artifact of artifacts) {
       let value;
       try {
-        value = JSON.parse(fs.readFileSync(artifact.filePath, 'utf8'));
+        value = runtimeSecrets.parse(fs.readFileSync(artifact.filePath, 'utf8'));
       } catch (error) {
         throw new HttpError(422, `CPA artifact cannot be read: ${scrubString(error?.message || 'invalid Codex CPA')}`);
       }
@@ -5157,7 +5158,7 @@ class RunManager extends EventEmitter {
     try {
     let records;
     try {
-      records = artifacts.map((artifact) => JSON.parse(fs.readFileSync(artifact.filePath, 'utf8')));
+      records = artifacts.map((artifact) => runtimeSecrets.parse(fs.readFileSync(artifact.filePath, 'utf8')));
     } catch (error) {
       throw new HttpError(422, `CPA artifact cannot be read: ${scrubString(error?.message || 'invalid Codex CPA')}`);
     }
@@ -5283,7 +5284,7 @@ class RunManager extends EventEmitter {
     try {
       const entries = [];
       for (const artifact of artifacts) {
-        const value = JSON.parse(fs.readFileSync(artifact.filePath, 'utf8'));
+        const value = runtimeSecrets.parse(fs.readFileSync(artifact.filePath, 'utf8'));
         const records = Array.isArray(value)
           ? value
           : (Array.isArray(value?.accounts)

@@ -1,32 +1,36 @@
 import { createContext, useContext, useEffect, useMemo, useState, type AnchorHTMLAttributes, type ReactNode } from 'react';
 
 type RouterValue = {
+  base: string;
   path: string;
   navigate: (to: string, options?: { replace?: boolean }) => void;
 };
 
 const RouterContext = createContext<RouterValue | null>(null);
 
-function currentPath() {
-  return window.location.pathname || '/';
+function currentPath(base = '') {
+  const path = window.location.pathname || '/';
+  return base && (path === base || path.startsWith(`${base}/`)) ? path.slice(base.length) || '/' : path;
 }
 
-export function Router({ children }: { children: ReactNode }) {
-  const [path, setPath] = useState(currentPath);
+export function Router({ children, base = '' }: { children: ReactNode; base?: string }) {
+  const [path, setPath] = useState(() => currentPath(base));
   useEffect(() => {
-    const onPopState = () => setPath(currentPath());
+    const onPopState = () => setPath(currentPath(base));
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, []);
+  }, [base]);
   const value = useMemo<RouterValue>(() => ({
+    base,
     path,
     navigate(to, options = {}) {
-      if (options.replace) window.history.replaceState(null, '', to);
-      else window.history.pushState(null, '', to);
-      setPath(currentPath());
+      const target = `${base}${to}`;
+      if (options.replace) window.history.replaceState(null, '', target);
+      else window.history.pushState(null, '', target);
+      setPath(currentPath(base));
       window.scrollTo({ top: 0, behavior: 'instant' });
     },
-  }), [path]);
+  }), [path, base]);
   return <RouterContext.Provider value={value}>{children}</RouterContext.Provider>;
 }
 
@@ -47,8 +51,8 @@ export function useParams() {
 }
 
 export function Link({ to, onClick, children, ...props }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> & { to: string }) {
-  const { navigate } = useRouter();
-  return <a href={to} {...props} onClick={(event) => {
+  const { navigate, base } = useRouter();
+  return <a href={`${base}${to}`} {...props} onClick={(event) => {
     onClick?.(event);
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();

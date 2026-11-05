@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Tooltip } from 'radix-ui';
 
-import App from './App';
+import App from './Platform';
 import { Router } from './router';
 import './styles.css';
 

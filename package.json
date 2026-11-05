@@ -19,11 +19,17 @@
     "cpa:export": "node bin/gpt-re.js cpa-export",
     "test": "node scripts/run-tests.js quick",
     "test:quick": "node scripts/run-tests.js quick",
-    "ui:build": "npm --prefix web run build"
+    "ui:build": "npm --prefix web run build",
+    "test:platform": "node --test test/platform.test.js test/platform-encryption.test.js",
+    "start:platform": "node docker/server.js",
+    "start:worker": "node docker/worker.js"
   },
   "dependencies": {
+    "@fastify/http-proxy": "^11.6.6",
     "fastify": "^5.0.0",
+    "nodemailer": "^10.3.1",
     "parse5": "^7.3.0",
+    "pg": "^8.23.1",
     "playwright": "^1.62.1",
     "tough-cookie": "^5.1.2"
   },
