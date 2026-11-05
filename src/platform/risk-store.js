@@ -41,6 +41,7 @@ async function event(q, kind, m, dedupe) {
         m.source_ip,
         m.rule,
         m.operation,
+        m.target,
       ].join("|"),
     );
   await q.query(
@@ -191,7 +192,8 @@ async function record(db, m) {
     if (kind) await event(q, kind, m);
     // An observed threshold must not hide an authentication or redemption failure.
     if (m.observed && kind !== "rate_blocked")
-      await event(q, "rate_observed", { ...m, rule: m.observed });
+      for (const rule of m.observed)
+        await event(q, "rate_observed", { ...m, rule });
   });
 }
 async function saveSettings(db, actor, value) {

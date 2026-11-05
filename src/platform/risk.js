@@ -11,6 +11,24 @@ const {
 } = require("./risk-store");
 const { monitor } = require("./risk-reports");
 const { scan } = require("./risk-scan");
+const adminActions = {
+  "PATCH /api/admin/v1/settings": "调整站点与服务配置",
+  "POST /api/admin/v1/users": "创建客户",
+  "PATCH /api/admin/v1/users/:id": "修改客户状态",
+  "POST /api/admin/v1/users/:id/points": "调整客户积分",
+  "POST /api/admin/v1/orders/:id/cancel": "取消客户订单",
+  "POST /api/admin/v1/accounts/export": "导出交付账号",
+  "POST /api/admin/v1/redeem-codes": "生成积分兑换码",
+  "POST /api/admin/v1/redeem-codes/batch": "批量管理兑换码",
+  "PATCH /api/admin/v1/redeem-codes/:id": "修改兑换码状态",
+  "POST /api/admin/v1/mail/test": "测试邮件配置",
+  "PUT /api/admin/v1/risk/settings": "调整风控配置",
+  "PUT /api/admin/v1/risk/customers/:id": "调整客户风控规则",
+  "POST /api/admin/v1/risk/events/:id/resolve": "标记风险事件已处理",
+  "POST /api/admin/v1/risk/limits/:id/release": "解除访问限制",
+  "POST /api/admin/v1/risk/keys/:id/revoke": "撤销客户 API 密钥",
+  "POST /api/admin/v1/risk/scan": "执行异常检查",
+};
 function operation(path, method) {
   if (path.startsWith("/api/admin/v1/risk/")) return "risk";
   if (path.startsWith("/api/admin/")) return "admin";
@@ -85,7 +103,7 @@ function registerRisk(app, db) {
         reply.header("Retry-After", String(d.retry_seconds));
         fail(false, `访问过于频繁，请 ${d.retry_seconds} 秒后重试`, 429);
       }
-      m.observed = d.rule;
+      (m.observed ||= []).push(d.rule);
     }
   });
   app.addHook("onError", async (r, _reply, e) => {
@@ -100,6 +118,7 @@ function registerRisk(app, db) {
       m.account = r.user.email;
     }
     m.status = reply.statusCode;
+    m.target = adminActions[`${r.method} ${r.routeOptions.url}`] || "";
     m.duration_ms = Math.max(0, Math.round(performance.now() - m.started));
     try {
       await record(db, m);

@@ -4,6 +4,8 @@ const { settings } = require("./risk-config");
 const { event } = require("./risk-store");
 async function scan(db, force = false) {
   return db.tx(async (q) => {
+    await q.query("SET LOCAL statement_timeout='15s'");
+    await q.query("SET LOCAL lock_timeout='2s'");
     // One scanner across application replicas; no worker or supplier calls.
     if (
       !(await q.query("SELECT pg_try_advisory_xact_lock(8963017) AS locked"))

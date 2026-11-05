@@ -195,9 +195,11 @@
   padding: 0;
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
 }
 .risk-section {
+  min-width: 0;
   padding: 22px;
   margin: 0;
 }
