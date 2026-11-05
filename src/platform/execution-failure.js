@@ -2,6 +2,8 @@
 // Only fixed descriptions and known codes cross into platform diagnostics.
 // Never persist upstream messages, URLs, credentials, or entire preflight data.
 const reasons = {
+  EMAIL_NOT_DELIVERED_TO_TARGET: ["mail", "邮箱未收到目标验证码"],
+  CHATGPT_SIGNIN_FAILED: ["registration", "注册登录入口请求失败"],
   EMAIL_OTP_TIMEOUT: ["mail", "邮箱验证码等待超时"],
   SENTINEL_PROXY_IDENTITY_CHANGED: ["proxy", "代理切换后会话身份不一致"],
   SENTINEL_CLIENT_IDENTITY_CHANGED: ["execution", "会话设备身份不一致"],
@@ -31,6 +33,8 @@ const reasons = {
   MAIL_PROVIDER_UNAVAILABLE: ["mail", "邮箱供应商暂不可用"],
   MAIL_CLIENT_PROVIDER_MISMATCH: ["mail", "账号邮箱来源与任务渠道不一致"],
   SMS_INVENTORY_EMPTY: ["sms", "所选国家暂无符合条件的短信号码"],
+  SMS_CODE_TIMEOUT: ["sms", "短信验证码等待超时"],
+  OAUTH_PHONE_REPLACEMENT_BUDGET_EXHAUSTED: ["sms", "短信换号次数已达上限"],
   SMS_PRICE_ABOVE_MAX: ["sms", "短信报价超过已配置的价格上限"],
   SMS_BALANCE_INSUFFICIENT: ["sms", "短信余额不足以启动任务"],
   SMS_BALANCE_LOW: ["sms", "短信余额不足以启动任务"],

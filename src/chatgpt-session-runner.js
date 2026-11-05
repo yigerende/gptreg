@@ -3301,7 +3301,7 @@ class ChatGptSessionRunner {
         // TOTP depends on the same verified security context.  A proxy-bound
         // Sentinel identity failure is recoverable only after that context is
         // rebuilt, so do not start a second security mutation in the same run.
-        deferTotpForPasswordFailure = retryable || confirmationMfaRequired;
+        deferTotpForPasswordFailure = retryable || confirmationMfaRequired || require('./transport-errors').isEmailDeliveryFailure(error);
         state.security.passwordStatus = confirmationMfaRequired
           ? 'confirmation_mfa_required'
           : (retryable ? 'retry_pending' : 'failed');
@@ -3325,13 +3325,13 @@ class ChatGptSessionRunner {
       if (state.totpSecret) {
         state.security.totpStatus = 'configured';
       } else if (deferTotpForPasswordFailure) {
-        state.security.totpStatus = 'retry_pending';
+        state.security.totpStatus = state.security.passwordStatus === 'failed' ? 'failed' : 'retry_pending';
         failures.push({
           feature: 'totp',
           code: 'TOTP_SETUP_DEFERRED',
           message: state.security.passwordStatus === 'confirmation_mfa_required'
             ? 'TOTP setup was deferred until password confirmation MFA is resolved'
-            : 'TOTP setup was deferred after the password security transport failed',
+            : 'TOTP setup was deferred because password setup is incomplete',
         });
         await this.securityCheckpoint(state, session, 'totp_setup_deferred', {
           reason: state.security.passwordStatus === 'confirmation_mfa_required'

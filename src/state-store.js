@@ -414,6 +414,9 @@ const SECRET_QUERY_PATTERN = /^(?:password|passphrase|secret|api[_-]?key|access[
 // the config file but is never part of a registration/oauth run — including it
 // would make adding or editing chain settings invalidate every open checkpoint.
 const RUNTIME_TUNING_KEYS = new Set([
+  'retryPolicy',
+  'sendRetryLimit',
+  'oauthCodeTimeoutMs',
   'authRequestTimeoutMs',
   'securityRequestTimeoutMs',
   'chain',

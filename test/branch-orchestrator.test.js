@@ -4735,6 +4735,7 @@ test('OAuth phone preflight honors a provider retry-after instead of retrying ea
 test('OAuth keeps the same valid phone transaction when a timed-out activation is replaced', async (t) => {
   const config = branchConfig(1);
   config.sms.codeTimeoutMs = 1;
+  config.sms.oauthCodeTimeoutMs = 30_000;
   config.sms.replacementBudget = 2;
   const store = temporaryStore(t);
   const seed = makeInitialChatGptSessionState({ email: 'oauth-phone-replacement@example.test' });
@@ -4822,9 +4823,44 @@ test('OAuth keeps the same valid phone transaction when a timed-out activation i
   assert.equal(
     Date.parse(state.jobs[0].sms.attempts[0].codeDeadlineAt)
       - Date.parse(state.jobs[0].sms.attempts[0].providerMarkedAt),
-    60_000,
+    30_000,
   );
 });
+
+for (const resendLimit of [0, 2]) {
+  test(`registration replaces an empty SMS number after ${resendLimit} configured resends`, async t => {
+    const config = branchConfig(1);
+    Object.assign(config.sms, { sendRetryLimit: resendLimit, replacementBudget: 1, codeTimeoutMs: 2500, pollIntervalMs: 1200 });
+    const plan = normalizeRunPlan({ taskKind: 'register_session', mailCount: 1, workerConcurrency: 1, aliasStrategy: 'root' }, config);
+    const state = makeInitialBranchState(config, plan, { runId: `sms-resend-limit-${resendLimit}` });
+    let clock = Date.parse('2026-11-05T00:00:00Z'), acquired = 0, resends = 0;
+    const cancelled = [], pollTimes = [];
+    await runBranchOrchestrator({ log: { entries: [] } }, state, config, {
+      now: () => clock, sleep: async ms => { clock += ms; },
+      assetStore: temporaryStore(t),
+      mailClient: mailboxClient([{ id: 'phone-mail', email: 'phone@example.test', tokenValid: true, bound: false }]),
+      smsProvider: {
+        service: 'mock', country: '151',
+        async preflight() { return { provider: 'mock', ready: true }; },
+        async acquireNumber() { acquired++; return { id: `sms-${acquired}`, activationId: `sms-${acquired}`, number: `+5691234567${acquired}`, status: 'leased', cost: 0.02 }; },
+        async markSmsSent(lease) { return { ...lease, status: 'waiting' }; },
+        async pollCode(lease) { pollTimes.push(clock); return { code: lease.id === 'sms-2' ? '123456' : '', status: 'waiting' }; },
+        async requestAnotherCode(lease) { resends++; return lease; },
+        async cancel(lease) { cancelled.push(lease.id); return { ...lease, status: 'cancelled' }; },
+        async complete(lease) { return { ...lease, status: 'complete' }; },
+      },
+      sessionRunnerFactory: ({ job }) => ({
+        async run(s) { if (s.step === 'initial') s.step = 'phone_required'; else finishSession(s, job); },
+        async sendPhone(s) { s.step = 'phone_otp_sent'; },
+        async validatePhone(s) { s.step = 'email_otp_validated'; },
+      }),
+    });
+    assert.equal(state.status, 'complete');
+    assert.equal(acquired, 2); assert.equal(resends, resendLimit);
+    assert.deepEqual(cancelled, ['sms-1']);
+    assert.equal(pollTimes[1] - pollTimes[0], 1200, 'poll interval follows the saved configuration');
+  });
+}
 
 test('an OAuth phone lease cannot be reconciled from an unrelated verified session checkpoint', async (t) => {
   const config = branchConfig(1);
@@ -6810,6 +6846,40 @@ test('a security setup that failed on transport finishes in-run without a resume
   assert.equal(state.events.some((record) => record.type === 'security_setup_retry_scheduled'), true);
   assert.equal(state.jobs[0].status, 'complete');
   assert.equal(state.status, 'complete');
+});
+
+test('password mailbox timeout has its own finite retries without proxy rotation or platform-style network recovery', async t => {
+  const config=branchConfig(1);
+  config.retryPolicy={ waiting_security_email_retry:{ maxRetries:1,delaysMs:[100] }, waiting_security_retry:{maxRetries:0,delaysMs:[100]} };
+  const plan=normalizeRunPlan({taskKind:'register_session',mailCount:1,workerConcurrency:1,aliasStrategy:'root',security:{setPassword:true,enrollTotp:true}},config);
+  const state=makeInitialBranchState(config,plan,{runId:'email-security-budget'});
+  config.retryPolicy.waiting_security_email_retry.maxRetries=0;
+  let calls=0;
+  await runBranchOrchestrator({log:{entries:[]}},state,config,{
+    assetStore:temporaryStore(t), mailClient:mailboxClient([{id:'mail-security',email:'otp@example.test',tokenValid:true,bound:false}]),
+    sessionRunnerFactory:({job})=>({async run(s){calls++;if(calls===2){assert.equal(s.security.passwordTransaction.step,'retry_pending');assert.equal(s.security.passwordTransaction.emailBoundary,null);}finishSession(s,job);s.status='partial';s.security={passwordStatus:'failed',totpStatus:'failed',passwordTransaction:{step:'otp_sent',emailBoundary:{sentAt:'old'}},failures:[{feature:'password',code:'EMAIL_OTP_TIMEOUT',message:'empty mailbox'}]};}}),
+  });
+  assert.equal(calls,2); assert.equal(state.jobs[0].securityEmailRetries,1); assert.equal(state.jobs[0].securityEmailExhausted,true);
+  assert.equal(state.status,'partial');
+  assert.equal(state.events.filter(e=>e.type==='security_mail_retry_scheduled').length,1);
+  assert.equal(state.events.filter(e=>e.type==='security_setup_retry_scheduled'||e.type==='worker_proxy_rejected').length,0);
+});
+
+test('TOTP mailbox failure does not reset a successfully configured password', async t => {
+  const config = branchConfig(1);
+  const plan = normalizeRunPlan({ taskKind:'register_session',mailCount:1,workerConcurrency:1,aliasStrategy:'root',security:{setPassword:true,enrollTotp:true} }, config);
+  const state = makeInitialBranchState(config, plan, {runId:'totp-email-budget'});
+  let calls = 0;
+  await runBranchOrchestrator({log:{entries:[]}}, state, config, {
+    assetStore:temporaryStore(t),mailClient:mailboxClient([{id:'totp-mail',email:'totp@example.test',tokenValid:true,bound:false}]),
+    sessionRunnerFactory:({job})=>({async run(s){
+      calls++; finishSession(s,job); s.status='partial';
+      s.security={passwordStatus:'configured',totpStatus:'failed',failures:[{feature:'totp',code:'EMAIL_OTP_TIMEOUT'}]};
+    }}),
+  });
+  assert.equal(calls,1);
+  assert.equal(state.jobs[0].sessionState.security.passwordStatus,'configured');
+  assert.equal(state.events.some(e=>e.type==='security_mail_retry_scheduled'),false);
 });
 
 test('a mixed login-state OAuth task reads each mailbox through its own channel', async (t) => {

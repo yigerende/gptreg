@@ -25,7 +25,12 @@ function isTlsTransportError(error = {}) {
     || /(?:tls_get_more_records|packet length too long|wrong version number|secure tls connection|ssl routines)/.test(message);
 }
 
+function isEmailDeliveryFailure(error = {}) {
+  return ['EMAIL_OTP_TIMEOUT', 'EMAIL_NOT_DELIVERED_TO_TARGET'].includes(normalizedCode(error));
+}
+
 function isRetryableTransportError(error = {}) {
+  if (isEmailDeliveryFailure(error)) return false;
   if (isDefinitiveSecurityFailure(error)) return false;
   if (error?.retryable === true) return true;
   const code = normalizedCode(error);
@@ -50,6 +55,7 @@ function isRetryableSecurityFailure(error = {}) {
 }
 
 module.exports = {
+  isEmailDeliveryFailure,
   isRetryableSecurityFailure,
   isRetryableTransportError,
   isTlsTransportError,

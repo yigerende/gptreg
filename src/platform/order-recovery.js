@@ -15,7 +15,7 @@ function creationUncertain(job) {
 // A persisted cleanup queue fences late engine results after customer settlement.
 // External resource ownership remains with the engine until cleanup really ends.
 async function cleanupRuns(worker) {
-  const rows = (await worker.db.query(`SELECT c.*,i.status,i.asset_id FROM platform_run_cleanup c
+  const rows = (await worker.db.query(`SELECT c.*,i.status,i.asset_id,i.run_id AS current_run_id FROM platform_run_cleanup c
     JOIN platform_items i ON i.id=c.item_id
     WHERE c.finished_at IS NULL AND c.next_attempt_at<=now()
     ORDER BY c.next_attempt_at LIMIT 10`)).rows;
@@ -26,25 +26,26 @@ async function cleanupRuns(worker) {
       WHERE run_id=$1`, [row.run_id]);
     try {
       let state = worker.manager.load(row.run_id);
-      if (row.status !== "delivered") {
-        const ids = [...new Set([row.asset_id, ...(state.jobs || []).map(j => j.sessionAssetId || j.assetId)].filter(Boolean))];
+      const retired = row.current_run_id !== row.run_id;
+      if (retired || row.status !== "delivered") {
+        const ids = [...new Set([!retired && row.asset_id, ...(state.jobs || []).map(j => j.sessionAssetId || j.assetId)].filter(Boolean))];
         for (const assetId of ids) await worker.db.query(`INSERT INTO platform_quarantined_assets(asset_id,item_id,run_id,reason)
-          SELECT $1,$2,$3,'订单已退款，迟到结果禁止交付'
+          SELECT $1,$2,$3,'原执行已结束，迟到结果禁止交付'
           WHERE NOT EXISTS(SELECT 1 FROM platform_accounts WHERE asset_id=$1)
           ON CONFLICT DO NOTHING`, [assetId,row.item_id,row.run_id]);
       }
       if (worker.manager.activeRun(row.run_id) || !TERMINAL.has(state.status)
         || state.externalCleanup?.length) {
-        await worker.manager.cancel(row.run_id, "Customer item already settled; release remaining resources");
+        await worker.manager.cancel(row.run_id, "Customer execution retired or settled; release remaining resources");
         state = worker.manager.load(row.run_id);
       }
       if (!worker.manager.activeRun(row.run_id) && TERMINAL.has(state.status) && !state.externalCleanup?.length) {
         // Cancellation itself can persist a last asset. Observe it next pass before finishing.
-        if (row.status !== "delivered") {
+        if (retired || row.status !== "delivered") {
           for (const j of state.jobs || []) {
             const assetId = j.sessionAssetId || j.assetId;
             if (assetId) await worker.db.query(`INSERT INTO platform_quarantined_assets(asset_id,item_id,run_id,reason)
-              SELECT $1,$2,$3,'订单已退款，迟到结果禁止交付'
+              SELECT $1,$2,$3,'原执行已结束，迟到结果禁止交付'
               WHERE NOT EXISTS(SELECT 1 FROM platform_accounts WHERE asset_id=$1) ON CONFLICT DO NOTHING`,
             [assetId,row.item_id,row.run_id]);
           }

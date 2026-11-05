@@ -25,6 +25,7 @@ const defaults = {
   user_registration_concurrency: 15,
   max_open_orders: 3,
   attempt_limit: 2,
+  resource_retry_limit: 2,
   timeout_minutes: 20,
   template: {},
   smtp: { host: "", port: 465, secure: true, user: "", password: "", from: "" },
