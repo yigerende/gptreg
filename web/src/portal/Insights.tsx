@@ -11,27 +11,30 @@ export const ledgerNames: Row = {
 };
 export function StatCards({
   items,
+  className = "",
 }: {
+  className?: string;
   items: {
     name: string;
     value: unknown;
     unit: string;
     hint: ReactNode;
     icon: ReactNode;
+    valueContent?: ReactNode;
   }[];
 }) {
   return (
-    <div className="p-metric-grid">
+    <div className={`p-metric-grid ${className}`}>
       {items.map((item) => (
         <article className="p-metric" key={item.name}>
           <div>
             {item.name}
             <span>{item.icon}</span>
           </div>
-          <strong>
+          {item.valueContent ?? <strong>
             {number(item.value)}
             <small>{item.unit}</small>
-          </strong>
+          </strong>}
           <p>{item.hint}</p>
         </article>
       ))}

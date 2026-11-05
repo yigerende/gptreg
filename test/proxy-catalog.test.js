@@ -478,7 +478,7 @@ test('run snapshots bind fixed local endpoints and country pools to Worker slots
   }), /has 2 unreserved proxies for 3 Workers/);
 });
 
-test('legacy OAuth plans get a shared maintenance snapshot without a pool', (t) => {
+test('legacy OAuth plans without a pool require explicit proxy selection', (t) => {
   const { cwd, configService } = workspace(t);
   const manager = new RunManager({
     cwd,
@@ -493,16 +493,27 @@ test('legacy OAuth plans get a shared maintenance snapshot without a pool', (t) 
     oauthSource: { kind: 'session_assets', assetIds: ['one', 'two'] },
   };
 
-  const snapshot = manager.proxySnapshot(plan);
-  assert.deepEqual(snapshot.entries, [{
-    id: snapshot.entries[0].id,
-    url: 'http://127.0.0.1:7890',
-    protocol: 'http',
-    workerSlots: [1, 2],
-    resourceKind: 'maintenance',
-    countryCode: '',
-  }]);
-  assert.deepEqual(manager.proxyEntriesForState({ taskKind: 'oauth', runPlan: plan }, configService.normalized()), snapshot.entries);
+  assert.throws(() => manager.proxySnapshot(plan), error => error.code === 'OAUTH_PROXY_SELECTION_REQUIRED');
+});
+
+test('public regions read live shared catalogs without supplier requests or file writes', async (t) => {
+  const { Orders } = require('../src/platform/orders');
+  const { cwd, configService } = workspace(t);
+  const writer = new ProxyService(configService);
+  const reader = new ProxyService(new ConfigService({ cwd }), {
+    fetch: () => assert.fail('discovery must not fetch providers'),
+    executor: () => assert.fail('discovery must not open proxies'),
+  });
+  const orders = new Orders(null, null, { registrationPools: () => reader.countryPools() });
+  assert.deepEqual(await orders.regions(), []);
+  writer.import({ scope: 'dynamic', mode: 'append', content: 'jp.example:8080:user:PRIVATE', overrides: [{ line: 1, countryCode: 'JP', protocol: 'http' }] });
+  assert.deepEqual(await orders.regions(), [{ code: 'JP', name: '日本' }]);
+  writer.import({ scope: 'dynamic', mode: 'append', content: 'cl.example:8081:user:PRIVATE', overrides: [{ line: 1, countryCode: 'CL', protocol: 'http' }] });
+  const catalogPath = configService.proxyCatalogPath(), before = fs.readFileSync(catalogPath, 'utf8');
+  assert.deepEqual(await orders.regions(), [{ code: 'CL', name: '智利' }, { code: 'JP', name: '日本' }]);
+  assert.equal(fs.readFileSync(catalogPath, 'utf8'), before);
+  fs.writeFileSync(catalogPath, '{invalid PRIVATE');
+  await assert.rejects(orders.regions(), error => error.statusCode === 503 && !error.message.includes('PRIVATE'));
 });
 
 test('fixed local assignments reserve duplicate endpoints ahead of country pools', (t) => {

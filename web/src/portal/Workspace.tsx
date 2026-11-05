@@ -12,6 +12,7 @@ import {
 import { Link } from "../router";
 import ServiceFeatures from "./ServiceFeatures";
 import { useOrderSubmission } from "./orderSubmission";
+import { registrationRegionName } from "./registrationRegion";
 const AdminOrderActions = lazy(() => import("./AdminOrderActions"));
 export function Modal({
   title,
@@ -154,6 +155,7 @@ export function OrderDetail({
           <div className="p-detail-summary">
             <Status value={data.status} />
             <span>{data.need_oauth ? "需要 OAuth" : "不需要 OAuth"}</span>
+            <span>注册地区：{registrationRegionName(data.registration_region)}</span>
             <span>
               已交付 {data.delivered} / {data.quantity}
             </span>
@@ -263,7 +265,14 @@ export default function Workspace({
       void q.invalidateQueries({ queryKey: ["public"] });
     },
   );
-  const { quantity, setQuantity, oauth, setOauth } = submission;
+  const { quantity, setQuantity, oauth, setOauth, region, setRegion } = submission;
+  const regionsQuery = useQuery({
+    queryKey: ["registration-regions"],
+    queryFn: () => call("/api/user/v1/registration-regions"),
+    enabled: page === "register", staleTime: 30000, retry: false,
+  });
+  const regions: Row[] = regionsQuery.data?.regions || [];
+  const regionUnavailable = region !== "random" && (Boolean(regionsQuery.error) || !regions.some(r => r.code === region));
   const { data, error, refetch, isFetching } = useQuery({
     queryKey: ["workspace-list", page],
     queryFn: () => call("/api/user/v1/keys"),
@@ -303,7 +312,7 @@ export default function Workspace({
           )}
           {submission.pending && (
             <div className="p-notice">
-              有一笔提交尚未确认，已保留原数量与模式；刷新页面后也可继续确认。
+              有一笔提交尚未确认，已保留原数量、模式和地区；刷新页面后也可继续确认。
               <Link to="/orders">查看订单中心</Link>
             </div>
           )}
@@ -311,7 +320,7 @@ export default function Workspace({
             <div>
               <span className="p-eyebrow">ACCOUNT REGISTRATION</span>
               <h1>开始一笔新注册</h1>
-              <p>选择服务、填写数量，实时跟踪注册与交付。</p>
+              <p>选择服务、注册地区和数量，实时跟踪注册与交付。</p>
             </div>
             <Link to="/orders" className="p-button secondary">
               订单中心 ↗
@@ -322,7 +331,7 @@ export default function Workspace({
             <section className="p-card p-order-card">
               <div className="p-registration-steps">
                 <span className="active">01 选择服务</span>
-                <span>02 设置数量</span>
+                <span>02 地区与数量</span>
                 <span>03 提交注册</span>
               </div>
               <h2>你需要哪种交付？</h2>
@@ -353,6 +362,20 @@ export default function Workspace({
                   </button>
                 ))}
               </div>
+              <div className="p-registration-region">
+                <label>注册地区
+                  <select aria-describedby="registration-region-help" value={region} disabled={submission.busy || submission.pending} onChange={e => setRegion(e.target.value)}>
+                    <option value="random">随机地区（默认）</option>
+                    {regions.map(r => <option key={r.code} value={r.code}>{r.name} · {r.code}</option>)}
+                    {region !== "random" && !regions.some(r => r.code === region) && <option value={region}>{registrationRegionName(region)}（当前不可用）</option>}
+                  </select>
+                </label>
+                <button className="p-button secondary" disabled={regionsQuery.isFetching || submission.busy || submission.pending} onClick={()=>regionsQuery.refetch()}>{regionsQuery.isFetching ? "读取中…" : "刷新地区"}</button>
+                <p id="registration-region-help" className="p-muted p-fine">默认由系统为每个账号随机选择地区；指定地区后，本单全部账号按该地区注册。全球池由供应商分配出口地区。</p>
+                {regionsQuery.error && <p className="p-alert" role="alert">地区列表暂不可用，可刷新重试或使用随机地区。</p>}
+                {!regionsQuery.isFetching && !regionsQuery.error && !regions.length && <p className="p-muted p-fine">暂未配置可选地区，可使用随机地区由系统分配。</p>}
+                {regionUnavailable && !submission.pending && <p className="p-alert" role="alert">所选地区当前不可用，请刷新或重新选择。</p>}
+              </div>
               <div className="p-order-bottom">
                 <label>
                   注册数量
@@ -380,6 +403,7 @@ export default function Workspace({
                     submission.busy ||
                     (!submission.pending &&
                       (!pub.orders_open ||
+                        regionUnavailable ||
                         quantity < 1 ||
                         quantity > pub.max_quantity ||
                         !Number.isInteger(quantity) ||
@@ -407,6 +431,7 @@ export default function Workspace({
             <aside className="p-card p-quote-card">
               <span className="p-eyebrow">ORDER SUMMARY</span>
               <h2>本次服务清单</h2>
+              <div className="p-ledger-line"><span>注册地区</span><b>{registrationRegionName(region)}</b></div>
               <div className="p-ledger-line">
                 <span>服务模式</span>
                 <b>{oauth ? "包含 OAuth" : "标准账号"}</b>

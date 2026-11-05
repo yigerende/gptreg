@@ -17,6 +17,7 @@ describe("durable customer order submission", () => {
     const confirmed = vi.fn();
     let hook = renderHook(() => useOrderSubmission("alice", true, confirmed));
     act(() => hook.result.current.setQuantity(3));
+    act(() => hook.result.current.setRegion("JP"));
     await act(() => hook.result.current.submit());
     const first = fetcher.mock.calls[0][1]!;
     expect(hook.result.current.pending).toBe(true);
@@ -25,16 +26,26 @@ describe("durable customer order submission", () => {
     hook = renderHook(() => useOrderSubmission("alice", false, confirmed));
     expect(hook.result.current.oauth).toBe(true);
     expect(hook.result.current.quantity).toBe(3);
+    expect(hook.result.current.region).toBe("JP");
     // Even an attempted change cannot replace the persisted submission payload.
     act(() => {
       hook.result.current.setQuantity(9);
       hook.result.current.setOauth(false);
+      hook.result.current.setRegion("CL");
     });
     await act(() => hook.result.current.submit());
     expect(fetcher.mock.calls[1][1]?.headers).toEqual(first.headers);
     expect(fetcher.mock.calls[1][1]?.body).toEqual(first.body);
     expect(confirmed).toHaveBeenCalledWith("order-1");
     expect(hook.result.current.pending).toBe(false);
+  });
+  it("replays a pre-upgrade intent without adding a region field", async () => {
+    window.localStorage.setItem("gptreg:pending-order:legacy", JSON.stringify({ key: "legacy-request-key", quantity: 2, need_oauth: false }));
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response(200));
+    const h = renderHook(() => useOrderSubmission("legacy", true, vi.fn()));
+    await act(() => h.result.current.submit());
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({ quantity: 2, need_oauth: false });
+    expect((fetcher.mock.calls[0][1]?.headers as Record<string, string>)["Idempotency-Key"]).toBe("legacy-request-key");
   });
   it("does not send a second request on double click and only uses a new key after confirmation", async () => {
     let finish!: (r: Response) => void;

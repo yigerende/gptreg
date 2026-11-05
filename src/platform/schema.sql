@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS platform_items (
  attempt_started_at timestamptz,available_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE(order_id,position)
 );
+ALTER TABLE platform_orders ADD COLUMN IF NOT EXISTS registration_region text;
 CREATE TABLE IF NOT EXISTS platform_attempts (
  id text PRIMARY KEY,item_id text NOT NULL REFERENCES platform_items(id),run_id text UNIQUE NOT NULL,
  stage text NOT NULL,status text NOT NULL DEFAULT 'starting',created_at timestamptz NOT NULL DEFAULT now(),finished_at timestamptz

@@ -517,6 +517,29 @@ test(
     assert.deepEqual(f.marks, [a.id]);
   },
 );
+
+for (const oauth of [false, true]) test(
+  `explicit customer country survives ${oauth ? "combined and supplemental OAuth" : "standard registration"} execution`,
+  { skip: !connection }, async (t) => {
+    const f = await fixture(t);
+    const catalog = f.manager.proxyService.list();
+    catalog.dynamic.countryPools.push({ countryCode: "JP", total: 1, entries: [{ id: "japan", url: "http://127.0.0.1:19996" }] });
+    f.orders.registrationPools = () => catalog.dynamic.countryPools;
+    const o = (await f.orders.create(f.user, { quantity: 1, need_oauth: oauth, registration_region: "JP" }, id(), "web")).order;
+    await f.worker.cycle();
+    assert.equal(f.calls[0].plan.proxyAssignments[0].countryCode, "JP");
+    assert.equal(f.calls[0].plan.postRegistrationOAuth, oauth);
+    assert.equal(f.calls[0].snapshot.entries[0].id, "japan");
+    if (oauth) {
+      const i = await f.item(o), a = f.asset();
+      f.states.get(i.run_id).jobs = [{ sessionAssetId: a.id, error: { code: "NO_NUMBERS" } }];
+      await f.worker.cycle();
+      assert.equal(f.calls[1].plan.taskKind, "oauth");
+      assert.deepEqual(f.calls[1].plan.oauthSource.assetIds, [a.id]);
+      assert.equal(f.calls[1].plan.proxyAssignments[0].countryCode, "JP");
+    }
+  },
+);
 test(
   "sold marking survives a failure and restart without repeating charge or marking a cancelled item",
   { skip: !connection },

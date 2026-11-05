@@ -456,89 +456,11 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                     <option value="icloud">iCloud</option>
                   </select>
                 </label>
-                <label>
-                  代理来源
-                  <select
-                    value={settings.template.proxyAssignments?.[0]?.kind || ""}
-                    onChange={(e) => {
-                      const kind = e.target.value;
-                      field(
-                        "template",
-                        kind
-                          ? {
-                              ...settings.template,
-                              schemaVersion: 2,
-                              proxyAssignments: [
-                                {
-                                  workerSlot: 1,
-                                  kind,
-                                  ...(kind === "countryPool"
-                                    ? { countryCode: "US" }
-                                    : { localProxyId: "" }),
-                                },
-                              ],
-                            }
-                          : {
-                              ...(settings.template.mailProvider
-                                ? {
-                                    mailProvider:
-                                      settings.template.mailProvider,
-                                  }
-                                : {}),
-                            },
-                      );
-                    }}
-                  >
-                    <option value="">使用引擎本地代理池</option>
-                    <option value="countryPool">国家动态代理池</option>
-                    <option value="local">指定本地代理</option>
-                  </select>
-                </label>
-                {settings.template.proxyAssignments?.[0]?.kind ===
-                  "countryPool" && (
-                  <label>
-                    国家代码
-                    <input
-                      required
-                      pattern="GLOBAL|[A-Z]{2}"
-                      value={settings.template.proxyAssignments[0].countryCode}
-                      onChange={(e) =>
-                        field("template", {
-                          ...settings.template,
-                          proxyAssignments: [
-                            {
-                              workerSlot: 1,
-                              kind: "countryPool",
-                              countryCode: e.target.value.toUpperCase(),
-                            },
-                          ],
-                        })
-                      }
-                      placeholder="US、PH 或 GLOBAL"
-                    />
-                  </label>
-                )}
-                {settings.template.proxyAssignments?.[0]?.kind === "local" && (
-                  <label>
-                    本地代理 ID
-                    <input
-                      required
-                      value={settings.template.proxyAssignments[0].localProxyId}
-                      onChange={(e) =>
-                        field("template", {
-                          ...settings.template,
-                          proxyAssignments: [
-                            {
-                              workerSlot: 1,
-                              kind: "local",
-                              localProxyId: e.target.value,
-                            },
-                          ],
-                        })
-                      }
-                    />
-                  </label>
-                )}
+                <div className="p-muted">
+                  <b>注册地区由用户选择</b>
+                  <p>新订单默认在已配置的国家池中随机分配，用户可指定注册地区。新增或删除可选地区，请在原管理台维护国家代理池。</p>
+                  <p>已有订单继续使用下单时保存的模板；此处的邮箱设置只影响后续订单。</p>
+                </div>
               </div>
               <a href="/admin/engine/proxies" className="p-link">
                 管理代理资源 ↗

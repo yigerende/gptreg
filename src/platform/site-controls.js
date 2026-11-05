@@ -126,7 +126,7 @@ function requestFeature(path, method) {
   if (path === "/docs" || path === "/openapi.json") return "docs";
   const p = path.replace(/^\/(api\/user|open)\/v1/, "");
   if (p === "/overview") return "home";
-  if (p === "/products" || (p === "/registration-orders" && method === "POST"))
+  if (p === "/products" || p === "/registration-regions" || (p === "/registration-orders" && method === "POST"))
     return "register";
   if (p.startsWith("/registration-orders")) return "orders";
   if (p.startsWith("/accounts") || p === "/account-orders") return "accounts";

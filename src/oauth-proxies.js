@@ -1,8 +1,17 @@
 'use strict';
 
-function defaultOAuthAssignments(count, catalog = {}) {
+function defaultOAuthAssignments(count, catalog = {}, { random = Math.random, claims } = {}) {
   const pools = (catalog.dynamic?.countryPools || []).filter((p) => p.total > 0);
-  const pool = pools.find((p) => p.total >= count) || pools.reduce((best, p) => !best || p.total > best.total ? p : best, null);
+  const available = (p) => claims && Array.isArray(p.entries)
+    ? p.entries.filter((entry) => !claims.has(entry.id)).length : p.total;
+  // Each customer account starts a one-Worker task. Choose a country uniformly,
+  // not by catalog order or pool size; busy pools yield to pools with free exits.
+  const ready = pools.filter((p) => available(p) >= count);
+  const largest = pools.reduce((best, p) => Math.max(best, available(p)), 0);
+  const candidates = ready.length ? ready : pools.filter((p) => available(p) === largest);
+  const sample = candidates.length > 1 ? Number(random()) : 0;
+  const index = Math.floor(Math.max(0, Math.min(Number.isFinite(sample) ? sample : 0, 0.999999999999)) * candidates.length);
+  const pool = candidates[index];
   const local = catalog.local?.proxies || catalog.proxies || [];
   return Array.from({ length: count }, (_, i) => pool
     ? { workerSlot: i + 1, kind: 'countryPool', countryCode: pool.countryCode }

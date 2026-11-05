@@ -17,3 +17,24 @@ test('parallel registration/OAuth cannot claim or release the other task’s pro
   oauth.add('proxy-2'); oauth.clear(); assert.equal(register.has('proxy-1'), true); assert.equal(registry.size, 1);
   register.clear(); assert.equal(registry.size, 0);
 });
+
+test('random country selection is uniform across eligible countries, including GLOBAL', () => {
+  const pools = ['CL', 'JP', 'GLOBAL'].map((countryCode, n) => ({ countryCode, total: 10 ** n }));
+  pools.unshift({ countryCode: 'PH', total: 0 });
+  const catalog = { dynamic: { countryPools: pools } };
+  assert.deepEqual([0, .34, .99].map(random => defaultOAuthAssignments(1, catalog, { random: () => random })[0].countryCode), ['CL', 'JP', 'GLOBAL']);
+});
+
+test('default selection skips busy pools while preserving claims and non-direct fallback', () => {
+  const claims = new Map([['cl', 'other-run']]);
+  const catalog = { dynamic: { countryPools: [
+    { countryCode: 'CL', total: 1, entries: [{ id: 'cl' }] },
+    { countryCode: 'JP', total: 1, entries: [{ id: 'jp' }] },
+  ] }, local: { proxies: [{ id: 'fixed' }] } };
+  assert.equal(defaultOAuthAssignments(1, catalog, { claims, random: () => 0 })[0].countryCode, 'JP');
+  claims.set('jp', 'another-run');
+  assert.equal(defaultOAuthAssignments(1, catalog, { claims })[0].kind, 'countryPool');
+  assert.equal(claims.size, 2);
+  assert.deepEqual(defaultOAuthAssignments(1, { local: catalog.local }), [{ workerSlot: 1, kind: 'local', localProxyId: 'fixed' }]);
+  assert.equal(defaultOAuthAssignments(1, {})[0].countryCode, 'GLOBAL');
+});

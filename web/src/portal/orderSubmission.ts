@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, call, uid } from "./client";
 
-type Intent = { key: string; quantity: number; need_oauth: boolean };
+type Intent = { key: string; quantity: number; need_oauth: boolean; registration_region?: string };
 const storageKey = (userId: string) => `gptreg:pending-order:${userId}`;
 function readIntent(userId: string): Intent | null {
   const text = window.localStorage.getItem(storageKey(userId));
@@ -13,10 +13,12 @@ function readIntent(userId: string): Intent | null {
     !Number.isInteger(v.quantity) ||
     v.quantity < 1 ||
     v.quantity > 1000 ||
-    typeof v.need_oauth !== "boolean"
+    typeof v.need_oauth !== "boolean" ||
+    (v.registration_region !== undefined && (typeof v.registration_region !== "string" || !/^(random|GLOBAL|[A-Z]{2})$/.test(v.registration_region)))
   )
     throw new Error("上次提交记录无法读取，请先在订单中心核对结果并联系支持");
-  return { key: v.key, quantity: v.quantity, need_oauth: v.need_oauth };
+  return { key: v.key, quantity: v.quantity, need_oauth: v.need_oauth,
+    ...(v.registration_region === undefined ? {} : { registration_region: v.registration_region }) };
 }
 export function useOrderSubmission(
   userId: string,
@@ -41,12 +43,14 @@ export function useOrderSubmission(
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(initial.error),
     [notice, setNotice] = useState("");
+  const [region, setRegion] = useState(initial.intent?.registration_region ?? "random");
   const inFlight = useRef(false);
   function restore(intent: Intent | null) {
     setPending(intent);
     if (intent) {
       setQuantity(intent.quantity);
       setOauth(intent.need_oauth);
+      setRegion(intent.registration_region ?? "random");
     }
   }
   useEffect(() => {
@@ -87,7 +91,7 @@ export function useOrderSubmission(
         throw new Error("上次提交记录已变化，请先在订单中心核对结果");
       }
       if (!intent) {
-        intent = { key: uid(), quantity, need_oauth: oauth };
+        intent = { key: uid(), quantity, need_oauth: oauth, registration_region: region };
         // Persist before sending. A storage failure must not issue an untracked order.
         window.localStorage.setItem(storageKey(userId), JSON.stringify(intent));
       }
@@ -97,7 +101,8 @@ export function useOrderSubmission(
         result = await call(
           "/api/user/v1/registration-orders",
           "POST",
-          { quantity: intent.quantity, need_oauth: intent.need_oauth },
+          { quantity: intent.quantity, need_oauth: intent.need_oauth,
+            ...(intent.registration_region === undefined ? {} : { registration_region: intent.registration_region }) },
           intent.key,
         );
       } catch (e) {
@@ -113,7 +118,7 @@ export function useOrderSubmission(
           throw e;
         }
         throw new Error(
-          "提交结果尚未确认，已保留原数量和模式。请点击“确认上次提交”继续查询，系统会复用同一请求，避免重复下单。",
+          "提交结果尚未确认，已保留原数量、模式和地区。请点击“确认上次提交”继续查询，系统会复用同一请求，避免重复下单。",
         );
       }
       if (!result || typeof result.id !== "string" || !result.id)
@@ -143,6 +148,8 @@ export function useOrderSubmission(
     setQuantity,
     oauth,
     setOauth,
+    region,
+    setRegion,
     pending: Boolean(pending),
     busy,
     error,

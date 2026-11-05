@@ -5,9 +5,11 @@ const { Database } = require("../src/platform/db");
 const { loadSecrets, cipher } = require("../src/platform/security");
 const { Orders } = require("../src/platform/orders");
 const { buildPlatform } = require("../src/platform/app");
+const { ConfigService } = require("../src/ui-server/config-service");
+const { ProxyService } = require("../src/ui-server/proxy-service");
 async function main() {
   const cwd = process.cwd(),
-    { credentials } = initializeRuntime(cwd),
+    { credentials, configPath } = initializeRuntime(cwd),
     secrets = loadSecrets(cwd),
     crypt = cipher(secrets.master);
   if (!process.env.DATABASE_URL)
@@ -16,9 +18,11 @@ async function main() {
     );
   const db = new Database(process.env.DATABASE_URL);
   await db.initialize(credentials);
+  // Read the shared catalog only; no engine, proxy refresh or supplier call.
+  const proxies = new ProxyService(new ConfigService({ cwd, configPath }));
   const app = buildPlatform({
     db,
-    orders: new Orders(db, crypt),
+    orders: new Orders(db, crypt, { registrationPools: () => proxies.countryPools() }),
     crypt,
     secrets,
     cwd,

@@ -1549,13 +1549,13 @@ class RunManager extends EventEmitter {
     if (['register_session', 'register_oauth'].includes(planInput.taskKind) && Number(planInput.schemaVersion) >= 2 && !planInput.proxyAssignments?.length) {
       const workers = Number(planInput.workerConcurrency ?? base.workers.maxConcurrency);
       if (!Number.isInteger(workers) || workers < 1 || workers > MAX_WORKER_CONCURRENCY) throw new HttpError(400, '注册 Worker 数量无效');
-      planInput = { ...planInput, proxyAssignments: defaultOAuthAssignments(workers, this.proxyService.list()) };
+      planInput = { ...planInput, proxyAssignments: defaultOAuthAssignments(workers, this.proxyService.list(), { claims: this.proxyClaims }) };
     }
     if (planInput.taskKind === 'oauth') {
       const count = planInput.oauthSource?.accounts?.length || planInput.oauthSource?.assetIds?.length || 1;
       const workers = Number(planInput.workerConcurrency ?? Math.min(base.workers.maxConcurrency, count));
       if (!Number.isInteger(workers) || workers < 1 || workers > MAX_WORKER_CONCURRENCY || workers > count) throw new HttpError(400, 'OAuth Worker 数量无效或超过账号数');
-      if (!planInput.proxyAssignments?.length) planInput = { ...planInput, proxyAssignments: defaultOAuthAssignments(workers, this.proxyService.list()) };
+      if (!planInput.proxyAssignments?.length) planInput = { ...planInput, proxyAssignments: defaultOAuthAssignments(workers, this.proxyService.list(), { claims: this.proxyClaims }) };
       assertOAuthProxySelection(planInput);
     }
     const plan = this.bindSessionAssetMailProvider(normalizeRunPlan(planInput, base));

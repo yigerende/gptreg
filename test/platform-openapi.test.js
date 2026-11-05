@@ -21,7 +21,7 @@ function conforms(schema, body) {
   const validate = ajv.compile({ ...schema, components: openapi.components });
   assert.ok(validate(body), JSON.stringify(validate.errors));
 }
-test("OpenAPI examples conform to schemas and cover only the nine public operations", () => {
+test("OpenAPI examples conform to schemas and cover only the ten public operations", () => {
   let count = 0;
   for (const [path, methods] of Object.entries(openapi.paths)) {
     assert.ok(path.startsWith("/open/v1/"));
@@ -42,7 +42,7 @@ test("OpenAPI examples conform to schemas and cover only the nine public operati
       }
     }
   }
-  assert.equal(count, 9);
+  assert.equal(count, 10);
 });
 const connection =
   process.env.GPTREG_TEST_DATABASE_URL ||
@@ -60,7 +60,7 @@ test(
     url.searchParams.set("options", `-c search_path=${schema}`);
     const db = new Database(url.href),
       crypt = cipher(crypto.randomBytes(32).toString("base64")),
-      orders = new Orders(db, crypt);
+      orders = new Orders(db, crypt, { registrationPools: () => [{ countryCode: "JP", total: 2 }] });
     const app = buildPlatform({
       db,
       crypt,
@@ -129,6 +129,9 @@ test(
       assert.equal(me.points, 5000);
       const products = await request("GET", "/open/v1/products");
       assert.equal(products.products[1].unit_price, 100);
+      const regions = await request("GET", "/open/v1/registration-regions");
+      assert.equal(regions.default_region, "random");
+      assert.deepEqual(regions.regions, [{ code: "JP", name: "日本" }]);
       const body = { quantity: 2, need_oauth: true },
         headers = { "idempotency-key": "documentation-contract-001" };
       const created = await request(
@@ -307,7 +310,7 @@ test(
         headers: { cookie },
       });
       assert.equal(unauthorized.statusCode, 401);
-      assert.equal(seen.size, 9);
+      assert.equal(seen.size, 10);
     } finally {
       await app.close();
       await db.close();

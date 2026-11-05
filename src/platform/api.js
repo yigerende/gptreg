@@ -46,6 +46,10 @@ function registerApi(app, db, orders, crypt) {
       fail(r.user.scopes.includes(s), `API Key 缺少 ${s} 权限`, 403);
   };
   for (const prefix of ["/api/user/v1", "/open/v1"]) {
+    app.get(`${prefix}/registration-regions`, async () => ({
+      default_region: "random",
+      regions: await orders.regions(),
+    }));
     app.get(`${prefix}/products`, async () => {
       const s = await db.settings();
       return {

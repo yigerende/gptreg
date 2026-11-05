@@ -622,7 +622,7 @@ export default function Docs({
                 </table>
               </div>
               <p className="d-muted">
-                账户与价格查询不要求额外权限。所有密钥只能访问所属用户的数据；多个密钥共享用户级调用限额。
+                账户、价格与注册地区查询不要求额外权限。所有密钥只能访问所属用户的数据；多个密钥共享用户级调用限额。
               </p>
             </Section>
             <Section id="billing" title="交付模式与积分">
@@ -736,6 +736,12 @@ export default function Docs({
                   <a href="#get_me">查询可用积分</a>与
                   <a href="#get_products">服务价格</a>
                   ，确认接单开放、数量符合上限。
+                </li>
+                <li>
+                  默认随机地区，旧接入无需修改。如需指定地区，先
+                  <a href="#get_registration_regions">查询可用国家代码</a>，
+                  再在下单请求中传入可选的 <code>registration_region</code>。
+                  每次重试须保持原地区参数；<code>GLOBAL</code> 是全球混合池。
                 </li>
                 <li>
                   生成并保存唯一幂等键，<a href="#create_order">创建订单</a>
@@ -881,7 +887,7 @@ export default function Docs({
               <ul>
                 <li>
                   超时或断线不等于创建失败。使用
-                  <strong>原键、原 quantity 和 need_oauth</strong>
+                  <strong>原键、原 quantity、need_oauth 和 registration_region（如有）</strong>
                   重试；已有订单返回 200，新订单返回 202。
                 </li>
                 <li>
@@ -914,7 +920,7 @@ export default function Docs({
             <div className="d-api-divider">
               <span>02 / API REFERENCE</span>
               <h2>接口参考</h2>
-              <p>9 个开放接口 · Bearer 鉴权 · JSON 请求与响应</p>
+              <p>10 个开放接口 · Bearer 鉴权 · JSON 请求与响应</p>
             </div>
             {operations.map((x) => (
               <Endpoint

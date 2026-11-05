@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { registrationRegionName } from "./registrationRegion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpRight,
@@ -196,6 +197,7 @@ export function OrderRecords({
                 <>
                   <b>{r.need_oauth ? "注册并 OAuth" : "仅注册"}</b>
                   <small>Google Gmail · {r.quantity} 个账号</small>
+                  <small>注册地区：{registrationRegionName(r.registration_region)}</small>
                 </>
               ),
             },

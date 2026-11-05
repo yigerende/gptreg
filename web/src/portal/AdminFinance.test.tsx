@@ -1,5 +1,6 @@
+import "@testing-library/jest-dom/vitest";
 import {afterEach,it,expect,vi} from "vitest";
-import {render,screen,fireEvent,waitFor,cleanup} from "@testing-library/react";
+import {render,screen,fireEvent,waitFor,cleanup,within} from "@testing-library/react";
 import {QueryClient,QueryClientProvider} from "@tanstack/react-query";
 import AdminFinance from "./AdminFinance";
 import * as client from "./client";
@@ -7,7 +8,7 @@ let q:QueryClient;
 afterEach(()=>{cleanup();q?.clear();vi.restoreAllMocks();});
 it("finance defaults to members, keeps raw points, applies time/account filters and exports with feedback",async()=>{
   const paths:string[]=[];
-  const cost={attempts:1,missing:0,mail:{USD:{confirmed:.017}},sms:{CNY:{confirmed:.2}}};
+  const cost={attempts:1,missing:0,mail:{USD:{confirmed:.017}},sms:{CNY:{confirmed:.2,pending:.05},USD:{confirmed:.03}}};
   vi.spyOn(globalThis,"fetch").mockImplementation(async input=>{
     const url=String(input);paths.push(url);
     if(url.includes('/export'))return new Response('账户,余额\nclient@example.test,975');
@@ -19,6 +20,14 @@ it("finance defaults to members, keeps raw points, applies time/account filters 
   await screen.findByText('每位客户的资金明细');
   expect(paths[0]).toContain('include_admin=false');expect(screen.getAllByText('975').length).toBeGreaterThan(0);
   expect(screen.getAllByText('0.017 USD').length).toBeGreaterThan(0);
+  const metrics = document.querySelector('.p-finance-metrics')!;
+  expect(metrics.querySelectorAll('article')).toHaveLength(6);
+  expect(within(metrics as HTMLElement).getByText('邮箱消耗')).toBeVisible();
+  expect(within(metrics as HTMLElement).getByText('短信消耗')).toBeVisible();
+  expect(within(metrics as HTMLElement).getByText('0.017 USD')).toBeVisible();
+  expect(within(metrics as HTMLElement).getByText('0.2 CNY')).toBeVisible();
+  expect(within(metrics as HTMLElement).getByText('0.03 USD')).toBeVisible();
+  expect(within(metrics as HTMLElement).getByText('待核对 0.05 CNY')).toBeVisible();
   fireEvent.click(screen.getByRole('button',{name:'每月'}));await waitFor(()=>expect(paths.at(-1)).toContain('period=month'));
   fireEvent.click(screen.getByLabelText('包含管理员'));await waitFor(()=>expect(paths.at(-1)).toContain('include_admin=true'));
   fireEvent.change(screen.getByLabelText('搜索账户'),{target:{value:'client@example.test'}});

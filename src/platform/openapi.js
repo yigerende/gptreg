@@ -85,6 +85,7 @@ const exampleOrder = {
   id: orderId,
   quantity: 1,
   need_oauth: true,
+  registration_region: "random",
   unit_price: 100,
   status: "queued",
   delivered: 0,
@@ -129,6 +130,14 @@ const account = {
   download_expires_at: "2026-11-08T04:00:00.000Z",
 };
 const schemas = {
+  RegistrationRegions: obj({
+    default_region: str("省略下单地区参数时使用随机地区", { const: "random" }),
+    regions: { type: "array", description: "当前已配置且非空的国家池；只返回代码和名称，不包含代理资料", items: ref("RegistrationRegion") },
+  }),
+  RegistrationRegion: obj({
+    code: str("注册地区代码；GLOBAL 表示供应商分配出口地区的全球池", { pattern: "^(GLOBAL|[A-Z]{2})$" }),
+    name: str("地区显示名称"),
+  }),
   User: obj({
     id: str("当前平台用户 ID"),
     email: str("平台登录账号；与交付账号邮箱不同"),
@@ -161,6 +170,7 @@ const schemas = {
     id: str("订单 ID；用于查进度、取消和筛选交付账号"),
     quantity: num("期望交付数量", { minimum: 1 }),
     need_oauth: bool("本单是否包含 OAuth 数据"),
+    registration_region: { type: ["string", "null"], description: "下单选择的注册地区；random 为每个账号随机选择，历史订单为 null。不是实际出口 IP 的地理检测结果。" },
     unit_price: num("下单时锁定的单个账号价格，单位积分"),
     status: str("订单整体状态；不是 HTTP 请求结果", {
       enum: Object.keys(orderStates),
@@ -404,7 +414,7 @@ operation(
   "查询注册服务与价格",
   "账户与服务",
   "",
-  "返回两种模式的当前完整单价和每单上限。下单只传 quantity 和 need_oauth，无需 product_id。此处的示例价格不是实时价格。",
+  "返回两种模式的当前完整单价和每单上限。原 quantity 和 need_oauth 调用保持兼容，默认随机地区；无需 product_id。此处的示例价格不是实时价格。",
   {
     result: ref("Products"),
     example: {
@@ -417,6 +427,16 @@ operation(
       ],
     },
   },
+);
+operation(
+  "/open/v1/registration-regions",
+  "get",
+  "get_registration_regions",
+  "查询可选注册地区",
+  "账户与服务",
+  "",
+  "使用现有 Bearer API Key，无需新增 scope。返回后台已配置且非空的国家代理池代码和名称，不返回地址、密钥或库存。random 始终是下单默认值，GLOBAL 仅在配置了全球池时返回；全球池的出口地区由供应商决定。无国家池时 regions=[]，默认随机仍沿用系统固定代理回退。读取配置失败返回503。",
+  { result: ref("RegistrationRegions"), example: { default_region: "random", regions: [{ code: "CL", name: "智利" }, { code: "JP", name: "日本" }, { code: "PH", name: "菲律宾" }] } },
 );
 operation(
   "/open/v1/registration-orders",
@@ -454,6 +474,7 @@ operation(
             ...bool("true 包含完整 OAuth 数据；false 交付邮箱、密码和 2FA"),
             default: false,
           },
+          registration_region: str("可选：省略或 random 都默认随机，每个账号独立从有空闲容量的国家池等概率选择。也可传地区查询接口返回的 code（如 JP），本单注册及补 OAuth 均使用该国家池，不自动切换至其他地区。未知或空池地区返回400且不扣积分；下单后池不可用按原任务重试/退款规则处理。重试必须保留相同地区。", { default: "random", pattern: "^(random|GLOBAL|[A-Z]{2})$" }),
         },
         ["quantity"],
         { additionalProperties: false },
@@ -466,6 +487,10 @@ operation(
         oauth: {
           summary: "包含 OAuth 授权",
           value: { quantity: 1, need_oauth: true },
+        },
+        region: {
+          summary: "指定日本地区（需先查询可选代码）",
+          value: { quantity: 2, need_oauth: true, registration_region: "JP" },
         },
       },
     ),
@@ -787,7 +812,7 @@ const openapi = {
   openapi: "3.1.0",
   info: {
     title: "GPT Register 开放 API",
-    version: "1.4.0",
+    version: "1.5.0",
     description:
       "通过服务端 API 创建标准或含 OAuth 的注册订单，查询进度并领取交付凭据。下单预留积分，按实际交付结算；失败/取消未交付部分释放。所有示例为虚构演示资料，实际价格与上限以接口返回为准。",
   },
@@ -812,6 +837,12 @@ const openapi = {
     action,
   })),
   "x-input-sources": [
+    {
+      field: "registration_region",
+      source: "注册地区查询返回的 regions[].code；省略或 random 为默认随机",
+      usage: "可选 JSON 字符串，如 JP；原接入无需修改",
+      operation: "get_registration_regions",
+    },
     {
       field: "Authorization",
       source: "工作台 → 开发接入 → 创建 API Key",

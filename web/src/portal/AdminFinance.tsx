@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Download, RefreshCw, Wallet, CheckCircle2, LockKeyhole, Coins } from "lucide-react";
+import { Download, RefreshCw, Wallet, CheckCircle2, LockKeyhole, Coins, Mail, MessageSquare } from "lucide-react";
 import { call, date, download, type Row } from "./client";
 import { Table, Feedback, useAction } from "./Workspace";
 import { StatCards, Pagination, number, ledgerNames } from "./Insights";
@@ -40,11 +40,13 @@ export default function AdminFinance() {
     {error&&<div className="p-alert">{error.message}</div>}
     {!data&&isFetching&&<p role="status" className="p-muted">正在加载财务报表…</p>}
     {data&&<>
-      <StatCards items={[
+      <StatCards className="p-finance-metrics" items={[
         {name:"区间充值入账",value:data.totals.credited,unit:"积分",hint:"已成功兑换入账",icon:<Wallet size={18}/>},
         {name:"区间服务消费",value:data.totals.spent,unit:"积分",hint:"成功交付的实际扣费",icon:<CheckCircle2 size={18}/>},
         {name:"当前可用余额",value:data.current.balance,unit:"积分",hint:"所选账户实时余额",icon:<Coins size={18}/>},
         {name:"当前冻结积分",value:data.current.frozen,unit:"积分",hint:"尚未结算的订单预留",icon:<LockKeyhole size={18}/>},
+        {name:"邮箱消耗",value:0,unit:"",hint:"区间发起任务 · 含失败与重试",icon:<Mail size={18}/>,valueContent:<div className="p-cost-metric-value"><CostAmount cost={data.execution_cost} kind="mail"/></div>},
+        {name:"短信消耗",value:0,unit:"",hint:"区间发起任务 · 含失败与重试",icon:<MessageSquare size={18}/>,valueContent:<div className="p-cost-metric-value"><CostAmount cost={data.execution_cost} kind="sms"/></div>},
       ]}/>
       <section className="p-card p-finance-trend">
         <div className="p-section-heading"><div><span className="p-eyebrow">FUNDS MOVEMENT</span><h2>资金变动趋势</h2></div><div className="p-finance-legend"><span>● 充值</span><span>● 消费</span></div></div>

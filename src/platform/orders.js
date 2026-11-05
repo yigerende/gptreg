@@ -3,12 +3,14 @@ const { id, digest, fail, integer } = require("./security");
 const { audit } = require("./db");
 const { checkNewOrder } = require("./risk-store");
 const { expiresAt, availableAccount } = require("./account-retention");
+const { normalizeRegion, registrationRegions, regionTemplate } = require("./registration-regions");
 const publicOrder = (row) =>
   Object.fromEntries(
     [
       "id",
       "quantity",
       "need_oauth",
+      "registration_region",
       "unit_price",
       "status",
       "delivered",
@@ -37,9 +39,14 @@ async function ledger(q, userId, reference, kind, points, frozen, note) {
   return true;
 }
 class Orders {
-  constructor(db, crypt) {
+  constructor(db, crypt, { registrationPools = () => [] } = {}) {
     this.db = db;
     this.crypt = crypt;
+    this.registrationPools = registrationPools;
+  }
+  async regions() {
+    try { return registrationRegions(await this.registrationPools()); }
+    catch { fail(false, "注册地区暂不可用，请稍后重试", 503); }
   }
   async create(user, body, key, source) {
     fail(
@@ -47,8 +54,8 @@ class Orders {
       "请求格式错误",
     );
     fail(
-      Object.keys(body).every((k) => ["quantity", "need_oauth"].includes(k)),
-      "仅支持 quantity 和 need_oauth 参数",
+      Object.keys(body).every((k) => ["quantity", "need_oauth", "registration_region"].includes(k)),
+      "仅支持 quantity、need_oauth 和 registration_region 参数",
     );
     const quantity = integer(body.quantity, 1, 1000, "数量");
     fail(
@@ -56,11 +63,15 @@ class Orders {
       "need_oauth 必须为布尔值",
     );
     const oauth = body.need_oauth === true;
+    const region = normalizeRegion(body.registration_region);
     fail(
       typeof key === "string" && /^[\x21-\x7e]{8,128}$/.test(key),
       "请提供 8～128 位 Idempotency-Key",
     );
-    const hash = digest(JSON.stringify({ quantity, need_oauth: oauth }));
+    // Preserve the historical hash for omitted/default region. Retries from
+    // clients deployed before this field existed must still find their order.
+    const hash = digest(JSON.stringify({ quantity, need_oauth: oauth,
+      ...(region === "random" ? {} : { registration_region: region }) }));
     return this.db.tx(async (q) => {
       const u = (
         await q.query("SELECT * FROM platform_users WHERE id=$1 FOR UPDATE", [
@@ -78,6 +89,8 @@ class Orders {
         fail(previous.request_hash === hash, "相同幂等键不能用于不同请求", 409);
         return { order: publicOrder(previous), replayed: true };
       }
+      if (region !== "random") fail((await this.regions()).some(r => r.code === region),
+        "所选注册地区当前不可用，请刷新地区列表后重新选择");
       await checkNewOrder(q, user.id);
       const s = (
         await q.query(
@@ -100,7 +113,7 @@ class Orders {
       const orderId = id();
       const order = (
         await q.query(
-          "INSERT INTO platform_orders(id,user_id,quantity,need_oauth,unit_price,source,request_key,request_hash,template,attempt_limit,timeout_minutes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",
+          "INSERT INTO platform_orders(id,user_id,quantity,need_oauth,unit_price,source,request_key,request_hash,template,attempt_limit,timeout_minutes,registration_region) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *",
           [
             orderId,
             user.id,
@@ -110,9 +123,10 @@ class Orders {
             source,
             key,
             hash,
-            s.template,
+            regionTemplate(s.template, region),
             s.attempt_limit,
             s.timeout_minutes,
+            region,
           ],
         )
       ).rows[0];
