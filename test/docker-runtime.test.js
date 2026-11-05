@@ -31,6 +31,23 @@ test('container initializes empty persistent data and preserves configuration on
   assert.deepEqual(second.credentials, first.credentials);
 });
 
+test('container restart accepts the same password lengths as platform account settings', (t) => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gptreg-password-'));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  fs.copyFileSync(path.join(__dirname, '../gpt-re.config.example.json'), path.join(cwd, 'gpt-re.config.example.json'));
+  initializeRuntime(cwd);
+  const authFile = path.join(cwd, '.runtime/console-auth.json');
+  for (const length of [10, 12, 16, 72]) {
+    const credentials = { username: 'admin@example.test', password: 'a'.repeat(length) };
+    fs.writeFileSync(authFile, JSON.stringify(credentials));
+    assert.deepEqual(initializeRuntime(cwd).credentials, credentials);
+  }
+  for (const length of [9, 73]) {
+    fs.writeFileSync(authFile, JSON.stringify({ username: 'admin', password: 'a'.repeat(length) }));
+    assert.throws(() => initializeRuntime(cwd), /10 to 72/);
+  }
+});
+
 test('container authentication covers pages, API and event streams; rejects foreign origins', async (t) => {
   const app = Fastify();
   t.after(() => app.close());

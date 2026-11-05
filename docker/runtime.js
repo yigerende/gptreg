@@ -34,8 +34,8 @@ function initializeRuntime(cwd) {
   const authPath = path.join(directory, 'console-auth.json');
   writeNew(authPath, `${JSON.stringify({ username: 'admin', password: crypto.randomBytes(24).toString('base64url') }, null, 2)}\n`);
   const credentials = JSON.parse(fs.readFileSync(authPath, 'utf8'));
-  if (!credentials.username || typeof credentials.password !== 'string' || credentials.password.length < 16) {
-    throw new Error('Set a console password of at least 16 characters in .runtime/console-auth.json');
+  if (!credentials.username || typeof credentials.password !== 'string' || credentials.password.length < 10 || credentials.password.length > 72) {
+    throw new Error('Set a console password of 10 to 72 characters in .runtime/console-auth.json');
   }
   return { configPath, credentials };
 }
