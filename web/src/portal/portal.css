@@ -224,13 +224,23 @@
   align-items: center;
   justify-content: center;
   width: 34px;
-  height: 36px;
+  height: 34px;
+  flex-shrink: 0;
+  object-fit: contain;
   border-radius: 11px;
   background: #176d55;
   color: #fff;
   font-size: 22px;
   font-weight: 750;
 }
+.p-refresh-row { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+.p-brand-icon-editor { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin: 22px 0; }
+.p-brand-icon-editor img { object-fit: contain; flex-shrink: 0; }
+.p-brand-icon-editor .p-link { display: block; margin-top: 10px; }
+.p-service-info { margin-top: 22px; font-size: 13px; color: var(--p-muted); }
+.p-service-info details { margin-top: 12px; }
+.p-service-info summary { cursor: pointer; }
+.p-service-info p { white-space: pre-wrap; line-height: 1.8; }
 .p-auth {
   min-height: 100vh;
   display: grid;

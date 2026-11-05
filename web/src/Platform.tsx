@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
@@ -18,7 +18,7 @@ import { Link, Router, useRouter } from "./router";
 import Auth from "./portal/Auth";
 import Workspace from "./portal/Workspace";
 import Docs from "./portal/Docs";
-import { call } from "./portal/client";
+import { call, currentUser } from "./portal/client";
 import "./portal/portal.css";
 const AdminConsole = lazy(() => import("./AdminConsole"));
 const AdminPlatform = lazy(() => import("./portal/AdminPlatform"));
@@ -29,14 +29,23 @@ export default function Platform() {
   const pub = useQuery({
     queryKey: ["public"],
     queryFn: () => call("/api/public"),
-    refetchInterval: 30000,
+    refetchOnWindowFocus: false,
   });
   const me = useQuery({
     queryKey: ["me"],
-    queryFn: () => call("/api/user/v1/me"),
+    queryFn: currentUser,
     retry: false,
-    refetchInterval: 15000,
+    refetchOnWindowFocus: false,
   });
+  useEffect(() => {
+    if (q.getQueryData(["me"])) void q.invalidateQueries({ queryKey: ["me"] });
+  }, [path, q]);
+  useEffect(() => {
+    if (!pub.data) return;
+    document.title = `${pub.data.site_name} · 用户工作台`;
+    const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (icon) icon.href = pub.data.brand.icon_url;
+  }, [pub.data]);
   async function logout() {
     try {
       await call("/api/auth/logout", "POST", {});
@@ -48,7 +57,7 @@ export default function Platform() {
   }
   if (pub.isLoading || me.isLoading)
     return <div className="portal p-loading">正在打开工作台…</div>;
-  if (pub.error)
+  if (pub.error || (me.error && me.data === undefined))
     return (
       <div className="portal p-loading">
         服务暂时不可用。
@@ -60,7 +69,7 @@ export default function Platform() {
       <div className="portal">
         <header className="p-public-header">
           <Link className="p-brand" to="/">
-            <span className="p-logo">G</span>
+            <img className="p-logo" src={pub.data.brand.icon_url} alt="" />
             {pub.data.site_name}
           </Link>
           <Link className="p-button" to="/">
@@ -123,7 +132,7 @@ export default function Platform() {
     <div className="portal p-shell">
       <aside className={`p-sidebar ${mobile ? "open" : ""}`}>
         <Link className="p-brand" to="/">
-          <span className="p-logo">G</span>
+          <img className="p-logo" src={pub.data.brand.icon_url} alt="" />
           {pub.data.site_name}
         </Link>
         <span className="p-sidebar-label">工作空间</span>
@@ -201,7 +210,8 @@ export default function Platform() {
         </main>
         <footer className="p-footer">
           {pub.data.site_name}
-          <span>按需注册 · 清晰交付</span>
+          <span>{pub.data.brand.tagline}</span>
+          {pub.data.brand.support_url && <a href={pub.data.brand.support_url} target="_blank" rel="noopener noreferrer">联系客服 ↗</a>}
         </footer>
       </div>
     </div>

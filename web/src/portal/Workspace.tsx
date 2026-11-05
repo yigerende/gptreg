@@ -18,6 +18,7 @@ import {
   download,
   statusNames,
   uid,
+  orderPending,
   type Row,
 } from "./client";
 import { Link } from "../router";
@@ -139,14 +140,19 @@ export function OrderDetail({
   const prefix = admin
     ? "/api/admin/v1/orders"
     : "/api/user/v1/registration-orders";
-  const { data, error } = useQuery({
+  const q = useQueryClient();
+  const { data, error, refetch } = useQuery({
     queryKey: ["order-detail", id, admin],
     queryFn: () => call(`${prefix}/${id}`),
-    refetchInterval: 5000,
+    refetchInterval: (query) => orderPending(query.state.data) ? 5000 : false,
   });
+  useEffect(() => {
+    if (data && !admin) void q.invalidateQueries({ queryKey: ["me"] });
+  }, [data?.charged, data?.released, data?.delivered, admin, q]);
   const a = useAction();
   return (
     <Modal title="订单详情" onClose={onClose}>
+      <button className="p-button secondary" onClick={() => refetch()}>刷新订单</button>
       <Feedback a={a} />
       {error && <div className="p-alert">{error.message}</div>}
       {data ? (
@@ -323,12 +329,18 @@ export default function Workspace({
         : page === "keys"
           ? "/keys"
           : "/registration-orders";
-  const { data, error, isFetching } = useQuery({
+  const q = useQueryClient();
+  const { data, error, refetch, isFetching } = useQuery({
     queryKey: ["workspace-list", page, offset],
     queryFn: () => call(`/api/user/v1${listPath}?limit=50&offset=${offset}`),
     enabled: page !== "profile",
-    refetchInterval: page === "home" || page === "orders" ? 5000 : 30000,
+    refetchInterval: (query) => (page === "home" || page === "orders") && query.state.data?.items?.some(orderPending) ? 5000 : false,
   });
+  const settlement = (page === "home" || page === "orders") && data
+    ? JSON.stringify(data.items.map((r: Row) => [r.id, r.charged, r.released, r.delivered])) : "";
+  useEffect(() => {
+    if (settlement) void q.invalidateQueries({ queryKey: ["me"] });
+  }, [settlement, q]);
   const rows: Row[] = data?.items || [],
     price = oauth ? pub.price_oauth : pub.price_standard;
   async function order() {
@@ -384,6 +396,7 @@ export default function Workspace({
   return (
     <>
       <Feedback a={a} />
+      {page !== "profile" && <div className="p-refresh-row"><button className="p-button secondary" disabled={isFetching} onClick={() => { void refetch(); void q.invalidateQueries({ queryKey: ["me"] }); }}>刷新数据</button></div>}
       {error && <div className="p-alert">{error.message}</div>}
       {(page === "home" || page === "orders") && (
         <>
@@ -620,6 +633,7 @@ export default function Workspace({
               <h1>积分钱包</h1>
               <p>下单预留、成功扣费，每一笔积分都有记录。</p>
             </div>
+            {pub.brand.support_url && <a className="p-button secondary" href={pub.brand.support_url} target="_blank" rel="noopener noreferrer">联系充值客服 ↗</a>}
           </div>
           <div className="p-stats">
             <div>

@@ -10,6 +10,7 @@ const {
   passwordMatches,
 } = require("./security");
 const { audit } = require("./db");
+const { publicBrand } = require("./branding");
 const userView = (u) => ({
   id: u.id,
   email: u.email,
@@ -76,6 +77,7 @@ function registerAuth(app, db, crypt) {
     const s = await db.settings();
     return {
       site_name: s.site_name,
+      brand: publicBrand(s.brand),
       announcement: s.announcement,
       registration_open: s.registration_open,
       email_verify_enabled: s.email_verify_enabled,

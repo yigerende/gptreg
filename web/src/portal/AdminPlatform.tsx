@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { call, copy, date, type Row, uid } from "./client";
+import { call, copy, date, type Row, uid, orderPending } from "./client";
 import {
   Feedback,
   Modal,
@@ -10,6 +10,7 @@ import {
   useAction,
 } from "./Workspace";
 import { Link } from "../router";
+import BrandSettings from "./BrandSettings";
 export default function AdminPlatform() {
   const [tab, setTab] = useState("overview"),
     [offset, setOffset] = useState(0),
@@ -23,13 +24,14 @@ export default function AdminPlatform() {
     [points, setPoints] = useState(100),
     [codes, setCodes] = useState<string[]>([]);
   const a = useAction();
-  const { data, error } = useQuery({
+  const { data, error, refetch, isFetching } = useQuery({
     queryKey: ["admin", tab, offset],
     queryFn: () =>
       call(
         `/api/admin/v1/${tab === "codes" ? "redeem-codes" : tab}?limit=50&offset=${offset}`,
       ),
-    refetchInterval: tab === "overview" || tab === "orders" ? 5000 : false,
+    refetchInterval: (query) => tab === "orders" && query.state.data?.items?.some(orderPending) ? 5000 : false,
+    refetchOnReconnect: tab !== "settings",
   });
   useEffect(() => {
     if (tab === "settings" && data) setSettings(structuredClone(data));
@@ -73,6 +75,7 @@ export default function AdminPlatform() {
         ))}
       </div>
       <Feedback a={a} />
+      {tab !== "settings" && <div className="p-refresh-row"><button className="p-button secondary" disabled={isFetching} onClick={() => refetch()}>刷新数据</button></div>}
       {error && <div className="p-alert">{error.message}</div>}
       {tab === "overview" && data && (
         <>
@@ -293,18 +296,10 @@ export default function AdminPlatform() {
             );
           }}
         >
+          <BrandSettings settings={settings} field={field} />
           <section className="p-card">
-            <h2>站点与开放策略</h2>
+            <h2>开放策略</h2>
             <div className="p-form-grid">
-              <label>
-                站点名称
-                <input
-                  required
-                  maxLength={80}
-                  value={settings.site_name}
-                  onChange={(e) => field("site_name", e.target.value)}
-                />
-              </label>
               <label>
                 允许注册的邮箱域名
                 <input

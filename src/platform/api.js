@@ -1,6 +1,7 @@
 "use strict";
 const { id, token, digest, fail, integer } = require("./security");
 const { audit } = require("./db");
+const { validateBrand } = require("./branding");
 const { ledger, publicOrder } = require("./orders");
 const { userView } = require("./auth");
 const { totpCode } = require("../chatgpt-session-runner");
@@ -240,6 +241,7 @@ function registerApi(app, db, orders, crypt) {
     const v = r.body || {},
       allowed = [
         "site_name",
+        "brand",
         "announcement",
         "registration_open",
         "email_verify_enabled",
@@ -267,6 +269,7 @@ function registerApi(app, db, orders, crypt) {
           )
         ).rows[0].value,
         s = { ...old, ...v };
+      s.brand = validateBrand({ ...old.brand, ...v.brand });
       for (const k of [
         "registration_open",
         "email_verify_enabled",

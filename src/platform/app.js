@@ -6,6 +6,7 @@ const { authenticate, registerAuth } = require("./auth");
 const { registerApi } = require("./api");
 const { openapi } = require("./openapi");
 const { fail } = require("./security");
+const { siteIcon } = require("./branding");
 function buildPlatform({
   db,
   orders,
@@ -80,6 +81,13 @@ function buildPlatform({
   });
   registerAuth(app, db, crypt);
   registerApi(app, db, orders, crypt);
+  for (const route of ["/site-icon", "/favicon.ico", "/site-icon/default"]) {
+    app.get(route, async (r, reply) => {
+      const icon = siteIcon(route.endsWith("/default") ? {} : (await db.settings()).brand);
+      return reply.type(icon.mime).header("Content-Security-Policy", "default-src 'none'; sandbox")
+        .header("Cache-Control", "no-cache").header("ETag", `"${icon.hash}"`).send(icon.bytes);
+    });
+  }
   app.get("/healthz", async () => ({ ok: true }));
   app.get("/health/ready", async (r, reply) => {
     await db.query("SELECT 1");

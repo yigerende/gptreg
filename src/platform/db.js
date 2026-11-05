@@ -3,8 +3,10 @@ const { Pool } = require("pg");
 const fs = require("node:fs");
 const path = require("node:path");
 const { id, passwordHash } = require("./security");
+const { brandDefaults } = require("./branding");
 const defaults = {
   site_name: "GPT Register",
+  brand: brandDefaults,
   announcement: "",
   registration_open: true,
   email_verify_enabled: false,
@@ -80,10 +82,11 @@ class Database {
     });
   }
   async settings() {
+    const value = (await this.one("SELECT value FROM platform_settings WHERE id=1")).value;
     return {
       ...defaults,
-      ...(await this.one("SELECT value FROM platform_settings WHERE id=1"))
-        .value,
+      ...value,
+      brand: { ...brandDefaults, ...value.brand },
     };
   }
   async limit(key, max, seconds = 60) {

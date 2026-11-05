@@ -146,6 +146,38 @@ test(
           );
         },
       );
+      await t.test("brand settings are backward compatible, public and reject active content", async () => {
+        const before = await store.settings();
+        await store.query("UPDATE platform_settings SET value=value-'brand' WHERE id=1");
+        const initial = (await request("GET", "/api/public")).json();
+        assert.equal(initial.brand.english_name, "GPTREG");
+        assert.equal(initial.brand.icon, undefined);
+        const icon = await request("GET", initial.brand.icon_url);
+        assert.equal(icon.statusCode, 200);
+        assert.match(icon.headers["content-type"], /image\/svg\+xml/);
+        const svg = fs.readFileSync("src/platform/assets/gptreg-icon.svg");
+        const data = `data:image/svg+xml;base64,${svg.toString("base64")}`;
+        const saved = await request("PATCH", "/api/admin/v1/settings", { brand: { tagline: "品牌测试", support_url: "https://example.test/help", icon: data } }, adminCookie);
+        assert.equal(saved.statusCode, 200, saved.body);
+        const published = (await request("GET", "/api/public")).json();
+        assert.equal(published.brand.tagline, "品牌测试");
+        assert.equal(published.brand.icon, undefined);
+        assert.equal((await request("GET", published.brand.icon_url)).statusCode, 200);
+        const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGMQzw39TwlmGDVg1IBRA4aLAQCsI9gQg7zMRQAAAABJRU5ErkJggg==";
+        assert.equal((await request("PATCH", "/api/admin/v1/settings", { brand: { icon: png } }, adminCookie)).statusCode, 200);
+        assert.match((await request("GET", "/favicon.ico")).headers["content-type"], /image\/png/);
+        assert.equal((await request("PATCH", "/api/admin/v1/settings", { brand: { icon: "" } }, adminCookie)).statusCode, 200);
+        assert.equal((await request("GET", "/api/public")).json().brand.icon_url, initial.brand.icon_url);
+        for (const svg of ['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>', '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>', '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://example.test/a"/></svg>', '<svg xmlns="http://www.w3.org/2000/svg"><path fill="url(https://example.test/a)"/></svg>']) {
+          assert.equal((await request("PATCH", "/api/admin/v1/settings", { brand: { icon: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}` } }, adminCookie)).statusCode, 400);
+        }
+        assert.equal((await request("PATCH", "/api/admin/v1/settings", { brand: { support_url: "javascript:alert(1)" } }, adminCookie)).statusCode, 400);
+        assert.equal((await request("PATCH", "/api/admin/v1/settings", { brand: { icon: "data:image/png;base64,aW52YWxpZA==" } }, adminCookie)).statusCode, 400);
+        const after = await store.settings();
+        assert.deepEqual(after.template, before.template);
+        assert.equal(after.price_standard, before.price_standard);
+        await store.query("UPDATE platform_settings SET value=$1 WHERE id=1", [before]);
+      });
       await t.test(
         "administrator-configurable prices default to 50 and 100; adjustments are idempotent",
         async () => {

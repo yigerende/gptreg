@@ -79,7 +79,7 @@ export default function Auth({
     <div className="p-auth">
       <section className="p-auth-story">
         <a className="p-brand" href="/">
-          <span className="p-logo">G</span>
+          <img className="p-logo" src={pub.brand.icon_url} alt="" />
           {pub.site_name}
         </a>
         <div>
@@ -100,11 +100,11 @@ export default function Auth({
             <span>03 领取账号凭据</span>
           </div>
         </div>
-        <small>一个账户，连接网页操作与开放 API。</small>
+        <small>{pub.brand.tagline}</small>
       </section>
       <section className="p-auth-panel">
         <form onSubmit={submit}>
-          <span className="p-eyebrow">WELCOME TO GPT REGISTER</span>
+          <span className="p-eyebrow">WELCOME TO {pub.brand.english_name || pub.site_name}</span>
           <h2>
             {mode === "login"
               ? "欢迎回来"
@@ -280,6 +280,10 @@ export default function Auth({
           <a className="p-doc-link" href="/docs">
             查看开放 API 文档 ↗
           </a>
+          <div className="p-service-info">
+            {pub.brand.support_url && <a href={pub.brand.support_url} target="_blank" rel="noopener noreferrer">联系客服 ↗</a>}
+            {pub.brand.terms && <details><summary>服务约定</summary><p>{pub.brand.terms}</p></details>}
+          </div>
         </form>
       </section>
     </div>

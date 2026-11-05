@@ -1,4 +1,7 @@
 export type Row = Record<string, any>;
+export class ApiError extends Error {
+  constructor(message: string, public status: number) { super(message); }
+}
 export async function call(
   path: string,
   method = "GET",
@@ -17,11 +20,18 @@ export async function call(
   });
   const data = await response.json();
   if (!response.ok)
-    throw new Error(
+    throw new ApiError(
       data.error || data.message || `请求失败 (${response.status})`,
+      response.status,
     );
   return data;
 }
+export async function currentUser() {
+  try { return await call("/api/user/v1/me"); }
+  catch (e) { if (e instanceof ApiError && e.status === 401) return null; throw e; }
+}
+export const orderPending = (order?: Row) =>
+  Boolean(order && ["queued", "running", "oauth_pending", "review"].includes(order.status));
 export const uid = () =>
   globalThis.crypto?.randomUUID?.() ||
   `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
