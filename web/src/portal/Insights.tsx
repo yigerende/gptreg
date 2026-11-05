@@ -203,11 +203,13 @@ export function Pagination({
   offset,
   total,
   count,
+  size = 50,
   onChange,
 }: {
   offset: number;
   total?: number;
   count: number;
+  size?: number;
   onChange: (n: number) => void;
 }) {
   return (
@@ -215,14 +217,14 @@ export function Pagination({
       <span>
         {total === undefined
           ? `本页 ${count} 条记录`
-          : `共 ${number(total)} 条 · 第 ${Math.floor(offset / 50) + 1} 页`}
+          : `共 ${number(total)} 条 · 第 ${Math.floor(offset / size) + 1} 页`}
       </span>
       <div>
         <button
           type="button"
           className="p-button secondary"
           disabled={offset === 0}
-          onClick={() => onChange(Math.max(0, offset - 50))}
+          onClick={() => onChange(Math.max(0, offset - size))}
         >
           <ChevronLeft size={15} />
           上一页
@@ -230,8 +232,8 @@ export function Pagination({
         <button
           type="button"
           className="p-button secondary"
-          disabled={total === undefined ? count < 50 : offset + 50 >= total}
-          onClick={() => onChange(offset + 50)}
+          disabled={total === undefined ? count < size : offset + size >= total}
+          onClick={() => onChange(offset + size)}
         >
           下一页
           <ChevronRight size={15} />

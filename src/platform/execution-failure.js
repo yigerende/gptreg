@@ -14,6 +14,8 @@ const reasons = {
   PROXY_POOL_BUSY: ["waiting", "代理正在被其他任务占用", true],
   TASK_SLOT_BUSY: ["waiting", "执行槽正在被其他任务占用", true],
   MAIN_TASK_CAPACITY: ["waiting", "注册执行槽正在被其他任务占用", true],
+  CUSTOMER_TASK_CAPACITY: ["waiting", "客户注册并发已满", true],
+  CUSTOMER_USER_CAPACITY: ["waiting", "该用户注册并发已满", true],
   AUXILIARY_TASK_CAPACITY: ["waiting", "OAuth 执行槽正在被其他任务占用", true],
   SESSION_ASSET_IN_USE: ["waiting", "账号正在被其他任务使用", true],
   OAUTH_ASSET_COOLDOWN: ["waiting", "账号处于 OAuth 冷却期", true],

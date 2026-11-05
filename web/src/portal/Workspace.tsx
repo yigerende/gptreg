@@ -11,7 +11,7 @@ import {
   type Row,
 } from "./client";
 import { Link } from "../router";
-import { Filters, Pagination, ledgerNames } from "./Insights";
+import { Filters, Pagination } from "./Insights";
 import ServiceFeatures from "./ServiceFeatures";
 import { useOrderSubmission } from "./orderSubmission";
 const AdminOrderActions = lazy(() => import("./AdminOrderActions"));
@@ -54,7 +54,7 @@ export function Table({
   rows,
   empty = "暂无记录",
 }: {
-  columns: { title: string; render: (r: Row) => ReactNode }[];
+  columns: { title: ReactNode; render: (r: Row) => ReactNode }[];
   rows: Row[];
   empty?: string;
 }) {
@@ -159,6 +159,21 @@ export function OrderDetail({
             <span>
               已交付 {data.delivered} / {data.quantity}
             </span>
+            <span>
+              执行中{" "}
+              {
+                data.items.filter((item: any) => item.status === "running")
+                  .length
+              }
+            </span>
+            <span>
+              排队中{" "}
+              {
+                data.items.filter((item: any) =>
+                  ["queued", "oauth_pending"].includes(item.status),
+                ).length
+              }
+            </span>
           </div>
           <div className="p-delivery-progress">
             <span>
@@ -222,22 +237,16 @@ export default function Workspace({
   page,
   user,
   pub,
-  onLogout,
 }: {
   page: string;
   user: Row;
   pub: Row;
-  onLogout: () => void;
 }) {
   const a = useAction(),
     [detail, setDetail] = useState(""),
     [selected, setSelected] = useState<string[]>([]),
     [secret, setSecret] = useState<Row | null>(null),
     [keyText, setKeyText] = useState(""),
-    [redeem, setRedeem] = useState(""),
-    [name, setName] = useState(user.name),
-    [pw, setPw] = useState(""),
-    [oldPw, setOldPw] = useState(""),
     [keyName, setKeyName] = useState(""),
     [scopes, setScopes] = useState([
       "orders:read",
@@ -246,19 +255,17 @@ export default function Workspace({
       "credentials:read",
     ]),
     [offset, setOffset] = useState(0),
-    [filters, setFilters] = useState<Row>({});
+    [filters, setFilters] = useState<Row>(() => ({
+      ...(page === "accounts" &&
+      new URLSearchParams(location.search).get("order_id")
+        ? { order_id: new URLSearchParams(location.search).get("order_id") }
+        : {}),
+    }));
   useEffect(() => {
     setOffset(0);
     setSelected([]);
   }, [page]);
-  const listPath =
-    page === "accounts"
-      ? "/accounts"
-      : page === "wallet"
-        ? "/ledger"
-        : page === "keys"
-          ? "/keys"
-          : "/registration-orders";
+  const listPath = page === "accounts" ? "/accounts" : "/keys";
   const q = useQueryClient();
   const submission = useOrderSubmission(
     user.id,
@@ -277,26 +284,8 @@ export default function Workspace({
       call(
         `/api/user/v1${listPath}?${new URLSearchParams({ limit: "50", offset: String(offset), ...filters })}`,
       ),
-    enabled: !["profile", "register"].includes(page),
-    refetchInterval: (query) =>
-      page === "orders" && query.state.data?.items?.some(orderPending)
-        ? 5000
-        : false,
+    enabled: page !== "register",
   });
-  const settlement =
-    page === "orders" && data
-      ? JSON.stringify(
-          data.items.map((r: Row) => [
-            r.id,
-            r.charged,
-            r.released,
-            r.delivered,
-          ]),
-        )
-      : "";
-  useEffect(() => {
-    if (settlement) void q.invalidateQueries({ queryKey: ["me"] });
-  }, [settlement, q]);
   const rows: Row[] = data?.items || [],
     price = oauth ? pub.price_oauth : pub.price_standard;
   async function exported(format: string) {
@@ -307,50 +296,10 @@ export default function Workspace({
     );
     if (r) download(r.filename, r.content);
   }
-  const orderTable = (
-    <Table
-      rows={rows}
-      columns={[
-        {
-          title: "订单",
-          render: (r) => (
-            <button className="p-link" onClick={() => setDetail(r.id)}>
-              {r.id.slice(0, 8)} <ArrowUpRight size={13} />
-            </button>
-          ),
-        },
-        {
-          title: "模式",
-          render: (r) => (r.need_oauth ? "含 OAuth" : "标准账号"),
-        },
-        {
-          title: "进度",
-          render: (r) => (
-            <span className="p-progress-line">
-              <i>
-                <span
-                  style={{
-                    width: `${r.quantity ? (r.delivered / r.quantity) * 100 : 0}%`,
-                  }}
-                />
-              </i>
-              {r.delivered} / {r.quantity}
-            </span>
-          ),
-        },
-        { title: "状态", render: (r) => <Status value={r.status} /> },
-        {
-          title: "扣除 / 退回",
-          render: (r) => `${r.charged} / ${r.released} 积分`,
-        },
-        { title: "提交时间", render: (r) => date(r.created_at) },
-      ]}
-    />
-  );
   return (
     <>
       <Feedback a={a} />
-      {!["profile", "register"].includes(page) && (
+      {page !== "register" && (
         <div className="p-refresh-row">
           <button
             className="p-button secondary"
@@ -380,7 +329,7 @@ export default function Workspace({
           {submission.pending && (
             <div className="p-notice">
               有一笔提交尚未确认，已保留原数量与模式；刷新页面后也可继续确认。
-              <Link to="/orders">查看我的订单</Link>
+              <Link to="/orders">查看订单中心</Link>
             </div>
           )}
           <div className="p-page-heading">
@@ -390,7 +339,7 @@ export default function Workspace({
               <p>选择服务、填写数量，实时跟踪注册与交付。</p>
             </div>
             <Link to="/orders" className="p-button secondary">
-              我的订单 ↗
+              订单中心 ↗
             </Link>
           </div>
           <ServiceFeatures compact />
@@ -533,38 +482,6 @@ export default function Workspace({
           </div>
         </>
       )}
-      {page === "orders" && (
-        <>
-          <div className="p-page-heading">
-            <div>
-              <h1>我的订单</h1>
-              <p>跟踪每笔注册，查看交付进度与积分结算。</p>
-            </div>
-            <Link to="/register" className="p-button">
-              新建注册 ↗
-            </Link>
-          </div>
-          <Filters
-            value={filters}
-            onChange={(v) => {
-              setFilters(v);
-              setOffset(0);
-            }}
-            mode
-            status={{
-              queued: "排队中",
-              running: "执行中",
-              review: "待核实",
-              completed: "全部完成",
-              partial: "部分完成",
-              failed: "未完成",
-              cancelled: "已取消",
-            }}
-            placeholder="搜索订单编号"
-          />
-          <section className="p-card p-record-card">{orderTable}</section>
-        </>
-      )}
       {page === "accounts" && (
         <>
           <div className="p-page-heading">
@@ -667,96 +584,6 @@ export default function Workspace({
           </section>
         </>
       )}
-      {page === "wallet" && (
-        <>
-          <div className="p-page-heading">
-            <div>
-              <h1>积分钱包</h1>
-              <p>下单预留、成功扣费，每一笔积分都有记录。</p>
-            </div>
-            {pub.brand.support_url && (
-              <a
-                className="p-button secondary"
-                href={pub.brand.support_url}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                联系充值客服 ↗
-              </a>
-            )}
-          </div>
-          <div className="p-stats">
-            <div>
-              <small>可用积分</small>
-              <strong>{user.points}</strong>
-            </div>
-            <div>
-              <small>预留积分</small>
-              <strong>{user.frozen}</strong>
-            </div>
-          </div>
-          <form
-            className="p-card"
-            onSubmit={(e) => {
-              e.preventDefault();
-              a.run(
-                () => call("/api/user/v1/redeem", "POST", { code: redeem }),
-                "积分已到账",
-              ).then((r) => r && setRedeem(""));
-            }}
-          >
-            <h2>兑换积分</h2>
-            <div className="p-inline">
-              <input
-                required
-                value={redeem}
-                onChange={(e) => setRedeem(e.target.value)}
-                placeholder="输入积分兑换码"
-                autoComplete="off"
-              />
-              <button className="p-button" disabled={a.busy}>
-                立即兑换
-              </button>
-            </div>
-            <p className="p-muted p-fine">
-              需要充值请联系站点管理员获取兑换码。
-            </p>
-          </form>
-          <section className="p-card">
-            <h2>积分流水</h2>
-            <Filters
-              value={filters}
-              onChange={(v) => {
-                setFilters(v);
-                setOffset(0);
-              }}
-              kind
-              placeholder="搜索流水说明"
-            />
-            <Table
-              rows={rows}
-              columns={[
-                {
-                  title: "类型",
-                  render: (r) => ledgerNames[r.kind] || r.kind,
-                },
-                {
-                  title: "可用变动",
-                  render: (r) =>
-                    `${r.points_delta > 0 ? "+" : ""}${r.points_delta}`,
-                },
-                {
-                  title: "预留变动",
-                  render: (r) =>
-                    `${r.frozen_delta > 0 ? "+" : ""}${r.frozen_delta}`,
-                },
-                { title: "说明", render: (r) => r.note },
-                { title: "时间", render: (r) => date(r.created_at) },
-              ]}
-            />
-          </section>
-        </>
-      )}
       {page === "keys" && (
         <>
           <div className="p-page-heading">
@@ -856,105 +683,7 @@ export default function Workspace({
           </section>
         </>
       )}
-      {page === "profile" && (
-        <>
-          <div className="p-page-heading">
-            <div>
-              <h1>个人设置</h1>
-              <p>管理你的账户资料与登录密码。</p>
-            </div>
-          </div>
-          <div className="p-profile-layout">
-            <section className="p-card p-profile-summary">
-              <span className="p-profile-avatar">{user.name.slice(0, 1)}</span>
-              <h2>{user.name}</h2>
-              <p className="p-muted">{user.email}</p>
-              <span className="p-status active">
-                {user.role === "admin" ? "管理员账户" : "普通用户账户"}
-              </span>
-              <div className="p-ledger-line">
-                <span>可用积分</span>
-                <b>{user.points.toLocaleString()}</b>
-              </div>
-              <div className="p-ledger-line">
-                <span>预留积分</span>
-                <b>{user.frozen.toLocaleString()}</b>
-              </div>
-              <div className="p-ledger-line">
-                <span>注册时间</span>
-                <small>{date(user.created_at)}</small>
-              </div>
-              <button className="p-button secondary" onClick={onLogout}>
-                退出当前账户
-              </button>
-            </section>
-            <form
-              className="p-card"
-              onSubmit={(e) => {
-                e.preventDefault();
-                a.run(
-                  () =>
-                    call("/api/user/v1/me", "PATCH", {
-                      name,
-                      password: pw,
-                      old_password: oldPw,
-                    }),
-                  "资料已保存",
-                ).then((r) => {
-                  if (r?.relogin) onLogout();
-                });
-              }}
-            >
-              <h2>账户资料</h2>
-              <p className="p-muted">管理显示名称及登录信息。</p>
-              <label>
-                登录账号
-                <input value={user.email} disabled />
-              </label>
-              <label>
-                用户名
-                <input
-                  required
-                  maxLength={80}
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </label>
-              <div className="p-profile-security">
-                <h2>密码与安全</h2>
-                <p className="p-muted">
-                  修改密码需要验证原密码。保存后原登录会话和 API 密钥会失效。
-                </p>
-              </div>
-              <label>
-                原密码
-                <input
-                  type="password"
-                  autoComplete="current-password"
-                  value={oldPw}
-                  onChange={(e) => setOldPw(e.target.value)}
-                />
-              </label>
-              <label>
-                新密码
-                <input
-                  type="password"
-                  minLength={10}
-                  maxLength={72}
-                  autoComplete="new-password"
-                  value={pw}
-                  onChange={(e) => setPw(e.target.value)}
-                  placeholder="留空表示保持原密码"
-                />
-              </label>
-              <button className="p-button" disabled={a.busy}>
-                保存设置
-              </button>
-            </form>
-          </div>
-        </>
-      )}
-      {["orders", "accounts", "wallet"].includes(page) && (
+      {page === "accounts" && (
         <Pagination
           offset={offset}
           total={data?.total}

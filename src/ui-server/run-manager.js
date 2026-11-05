@@ -251,9 +251,10 @@ function nvtokensSkipReasons(skipped = []) {
   });
 }
 
-function cpaArtifactDeletable(runId, state, activeRunIds) {
+function cpaArtifactDeletable(runId, state, activeRunIds, customerPendingRunIds = null) {
   const id = String(runId || '');
   if (activeRunIds.has(id)) return false;
+  if ((state?.customerExecution || id.startsWith('customer-')) && (customerPendingRunIds === null || customerPendingRunIds.has(id))) return false;
   if (!state) return true;
   const status = String(state.status || '').toLowerCase();
   if (!TERMINAL_RUN_STATUSES.has(status)) return false;
@@ -266,6 +267,8 @@ function taskKindOf(value = {}) {
 }
 
 function taskSlotOf(value = {}) {
+  // Only trusted start options can set this checkpoint field, never a run plan.
+  if (value.customerExecution === true) return 'customer';
   return AUXILIARY_TASK_KINDS.has(taskKindOf(value)) ? 'auxiliary' : 'main';
 }
 
@@ -729,12 +732,21 @@ class RunManager extends EventEmitter {
     this.active = null;
     this.auxiliaryActive = new Map();
     this.auxiliaryStarting = 0;
+    this.customerActive = new Map();
+    this.customerStarting = 0;
+    this.customerCapacity = 15;
+    this.customerUserCapacity = 15;
+    this.customerStartingUsers = new Map();
+    // Unknown until the durable queue has loaded. Protect all customer results
+    // during boot, including completed runs not yet delivered to their owner.
+    this.customerPendingRunIds = null;
     this.starting = false;
     // A session-assets run spends time in async preflight before its state file
     // exists. Reserve those assets in memory so maintenance mutations cannot
     // slip through during that startup window.
     this.startingAssetIds = new Set();
     this.auxiliaryStartingAssetIds = new Set();
+    this.customerStartingAssetIds = new Set();
     this.preflightCache = null;
     this.preflightFlights = new Map();
     this.compactSummaryCache = new Map();
@@ -1055,6 +1067,7 @@ class RunManager extends EventEmitter {
     const runs = [];
     if (this.active) runs.push(this.active);
     runs.push(...this.auxiliaryActive.values());
+    runs.push(...this.customerActive.values());
     return runs;
   }
 
@@ -1160,7 +1173,21 @@ class RunManager extends EventEmitter {
   }
 
   startingAssetsFor(slot) {
+    if (slot === 'customer') return this.customerStartingAssetIds;
     return slot === 'auxiliary' ? this.auxiliaryStartingAssetIds : this.startingAssetIds;
+  }
+
+  setCustomerConcurrency(value, perUser = 15) {
+    if (!Number.isInteger(value) || value < 1 || value > 100) throw new RangeError('Customer concurrency must be 1–100');
+    if (!Number.isInteger(perUser) || perUser < 1 || perUser > 100) throw new RangeError('Customer per-user concurrency must be 1–100');
+    // Lowering the limit drains existing work without interrupting it.
+    this.customerCapacity = value;
+    this.customerUserCapacity = perUser;
+  }
+
+  setCustomerPendingRuns(runIds) {
+    this.customerPendingRunIds = new Set(runIds.filter(Boolean));
+    this.cpaArtifactListCache.clear();
   }
 
   /**
@@ -1195,16 +1222,23 @@ class RunManager extends EventEmitter {
     return {
       main: entry('main'),
       auxiliary: entry('auxiliary'),
+      customer: entry('customer'),
     };
   }
 
   slotCapacity(slot, excludeRunId = '') {
-    const normalized = slot === 'auxiliary' ? 'auxiliary' : 'main';
+    const normalized = ['auxiliary', 'customer'].includes(slot) ? slot : 'main';
+    // Resuming admitted customer work must still progress after lowering the
+    // limit below the number of paused checkpoints. Cap live execution, while
+    // new starts continue to count every unresolved checkpoint.
+    const resumingCustomer = normalized === 'customer' && excludeRunId;
     return {
       slot: normalized,
-      capacity: normalized === 'auxiliary' ? DEFAULT_AUXILIARY_TASK_CAPACITY : 1,
-      occupied: this.occupiedSlotCount(normalized, excludeRunId),
-      starting: normalized === 'auxiliary' ? this.auxiliaryStarting : (this.starting ? 1 : 0),
+      capacity: normalized === 'customer' ? this.customerCapacity : normalized === 'auxiliary' ? DEFAULT_AUXILIARY_TASK_CAPACITY : 1,
+      occupied: resumingCustomer
+        ? this.activeRuns().filter((run) => taskSlotOf(run.state) === 'customer' && run.state.runId !== excludeRunId).length
+        : this.occupiedSlotCount(normalized, excludeRunId),
+      starting: normalized === 'customer' ? this.customerStarting : normalized === 'auxiliary' ? this.auxiliaryStarting : (this.starting ? 1 : 0),
     };
   }
 
@@ -1236,11 +1270,11 @@ class RunManager extends EventEmitter {
     if (occupied + starting < capacity) return;
     const error = new HttpError(
       409,
-      normalized === 'auxiliary'
+      normalized === 'customer' ? 'All customer registration capacity is in use' : normalized === 'auxiliary'
         ? 'All auxiliary task capacity is in use'
         : 'A registration task is already active or starting',
       {
-        code: normalized === 'auxiliary' ? 'AUXILIARY_TASK_CAPACITY' : 'MAIN_TASK_CAPACITY',
+        code: normalized === 'customer' ? 'CUSTOMER_TASK_CAPACITY' : normalized === 'auxiliary' ? 'AUXILIARY_TASK_CAPACITY' : 'MAIN_TASK_CAPACITY',
         slot: normalized,
         capacity,
         running: occupied,
@@ -1250,10 +1284,25 @@ class RunManager extends EventEmitter {
     throw error;
   }
 
-  reserveStartingSlot(slot, excludeRunId = '') {
+  assertCustomerUserAvailable(userId, excludeRunId = '', startingToken = null) {
+    if (!userId) return;
+    const runs = excludeRunId ? this.activeRuns().map((run) => run.state) : this.unresolved('customer').map((run) => this.load(run.runId));
+    const occupied = new Set(runs.filter((state) => state.customerUserId === userId && state.runId !== excludeRunId).map((state) => state.runId)).size;
+    // Starts are serialized by the queue, but reserve separately for manual
+    // resumes that may arrive while a start is awaiting network preflight.
+    const starting = [...this.customerStartingUsers].filter(([token, owner]) => token !== startingToken && owner === userId).length;
+    if (occupied + starting >= this.customerUserCapacity) throw new HttpError(409, 'Customer per-user capacity is in use', { code: 'CUSTOMER_USER_CAPACITY' });
+  }
+
+  reserveStartingSlot(slot, excludeRunId = '', customerUserId = '') {
     this.assertTaskSlotAvailable(slot, excludeRunId);
     const token = { slot, assetIds: new Set() };
-    if (slot === 'auxiliary') this.auxiliaryStarting += 1;
+    if (slot === 'customer') {
+      this.assertCustomerUserAvailable(customerUserId, excludeRunId);
+      this.customerStartingUsers.set(token, customerUserId);
+    }
+    if (slot === 'customer') this.customerStarting += 1;
+    else if (slot === 'auxiliary') this.auxiliaryStarting += 1;
     else {
       this.starting = true;
       this.startingAssetIds.clear();
@@ -1281,9 +1330,11 @@ class RunManager extends EventEmitter {
 
   releaseStartingSlot(token) {
     if (!token) return;
+    this.customerStartingUsers.delete(token);
     const starting = this.startingAssetsFor(token.slot);
     for (const id of token.assetIds || []) starting.delete(id);
-    if (token.slot === 'auxiliary') this.auxiliaryStarting = Math.max(0, this.auxiliaryStarting - 1);
+    if (token.slot === 'customer') this.customerStarting = Math.max(0, this.customerStarting - 1);
+    else if (token.slot === 'auxiliary') this.auxiliaryStarting = Math.max(0, this.auxiliaryStarting - 1);
     else {
       this.starting = false;
       this.startingAssetIds.clear();
@@ -2092,6 +2143,7 @@ class RunManager extends EventEmitter {
 
     const ids = new Set(this.startingAssetIds);
     for (const id of this.auxiliaryStartingAssetIds) ids.add(id);
+    for (const id of this.customerStartingAssetIds) ids.add(id);
     for (const state of states.values()) {
       // A terminal branch run may still expose a recovery action (for example
       // a created-account or security checkpoint). It still owns its assets
@@ -2168,6 +2220,7 @@ class RunManager extends EventEmitter {
 
     const ids = new Set(this.startingAssetIds);
     for (const id of this.auxiliaryStartingAssetIds) ids.add(id);
+    for (const id of this.customerStartingAssetIds) ids.add(id);
     for (const state of states.values()) {
       const runIsActive = !TERMINAL_RUN_STATUSES.has(String(state.status || '').toLowerCase());
       const jobsByAsset = new Map();
@@ -2456,7 +2509,7 @@ class RunManager extends EventEmitter {
   }
 
   unresolved(slot = '') {
-    const normalizedSlot = slot ? (slot === 'auxiliary' ? 'auxiliary' : 'main') : '';
+    const normalizedSlot = slot ? (['auxiliary', 'customer'].includes(slot) ? slot : 'main') : '';
     // Slot checks run on every health/list poll. They need no billing,
     // mailbox details or canonical CPA reads for hundreds of completed jobs.
     const runs = [];
@@ -2889,8 +2942,9 @@ class RunManager extends EventEmitter {
   }
 
   async start(planInput = {}, startOptions = {}) {
-    const slot = taskSlotOf(planInput);
-    const startingToken = this.reserveStartingSlot(slot);
+    const customerExecution = startOptions.customerExecution === true;
+    const slot = customerExecution ? 'customer' : taskSlotOf({ taskKind: taskKindOf(planInput) });
+    const startingToken = this.reserveStartingSlot(slot, '', customerExecution ? String(startOptions.customerUserId || '') : '');
     let stateFile = '';
     let launched = false;
     try {
@@ -2905,7 +2959,7 @@ class RunManager extends EventEmitter {
       // effective config after resizing the source and Worker count so the
       // filtered accounts do not inherit the old task capacity.
       config = applyRunPlan(this.config(), plan);
-      if (taskSlotOf(plan) !== slot) {
+      if (!customerExecution && taskSlotOf(plan) !== slot) {
         throw new HttpError(409, 'The selected task kind changed its execution slot', { code: 'TASK_SLOT_CHANGED' });
       }
       this.reserveStartingAssets(startingToken, plan.oauthSource?.assetIds || []);
@@ -2926,6 +2980,9 @@ class RunManager extends EventEmitter {
         config = applyRunPlan(config, plan);
       }
       const state = makeInitialBranchState(config, plan, { runId: startOptions.runId ? safeRunId(startOptions.runId) : generatedRunId() });
+      if (customerExecution) state.customerExecution = true;
+      if (customerExecution) state.customerUserId = String(startOptions.customerUserId || '');
+      if (customerExecution) this.customerPendingRunIds?.add(state.runId);
       state.smsConfig = structuredClone(config.sms);
       state.runPlan = plan;
       if (proxyResourceSnapshot) state.proxyResourceSnapshot = proxyResourceSnapshot;
@@ -2954,10 +3011,12 @@ class RunManager extends EventEmitter {
   launch(state, stateFile, config, preparedResources = null, options = {}) {
     const slot = taskSlotOf(state);
     this.assertTaskSlotAvailable(slot, state.runId, { ignoreStarting: options.startingToken?.slot === slot });
+    if (slot === 'customer') this.assertCustomerUserAvailable(state.customerUserId, state.runId, options.startingToken);
     const lock = acquireStateLock(stateFile, { command: 'ui-run', runId: state.runId });
     const gate = new ControlGate();
     const active = { state, stateFile, config, lock, gate, preparedResources, slot, proxyEntries: null, promise: null };
-    if (slot === 'auxiliary') this.auxiliaryActive.set(state.runId, active);
+    if (slot === 'customer') this.customerActive.set(state.runId, active);
+    else if (slot === 'auxiliary') this.auxiliaryActive.set(state.runId, active);
     else this.active = active;
     this.logStore.append(state.runId, { source: 'run-manager', type: 'run_started', message: '任务已启动' });
     active.promise = this.execute(active);
@@ -3118,7 +3177,9 @@ class RunManager extends EventEmitter {
       try { active.lock.release(); } catch { /* Surface lock issues on the next operation. */ }
       new ProxyClaims(this.proxyClaims, state.runId).clear();
       const finalStatus = state.status;
-      if (active.slot === 'auxiliary') {
+      if (active.slot === 'customer') {
+        if (this.customerActive.get(state.runId) === active) this.customerActive.delete(state.runId);
+      } else if (active.slot === 'auxiliary') {
         if (this.auxiliaryActive.get(state.runId) === active) this.auxiliaryActive.delete(state.runId);
       } else if (this.active === active) {
         this.active = null;
@@ -3505,7 +3566,7 @@ class RunManager extends EventEmitter {
         status: state.status,
       });
     }
-    const startingToken = this.reserveStartingSlot(slot, runId);
+    const startingToken = this.reserveStartingSlot(slot, runId, state.customerUserId);
     try {
       if (state.taskKind === 'oauth') {
         if (options.proxyAssignments) {
@@ -3848,7 +3909,7 @@ class RunManager extends EventEmitter {
     // Retention scans thousands of files. A boot timer or a finished auxiliary
     // task must not block another task's live network requests with this pass.
     // The last executing task retries retention in its finally block.
-    if (this.historyPruneInProgress || this.starting || this.auxiliaryStarting || this.activeRuns().length) {
+    if (this.historyPruneInProgress || this.starting || this.auxiliaryStarting || this.customerStarting || this.activeRuns().length) {
       return { runsRemoved: 0, artifactsRemoved: 0 };
     }
     this.historyPruneInProgress = true;
@@ -3865,6 +3926,7 @@ class RunManager extends EventEmitter {
       const terminal = entries.filter((entry) => {
         const status = String(entry.state.status || '').toLowerCase();
         if (!TERMINAL_RUN_STATUSES.has(status)) return false;
+        if (!cpaArtifactDeletable(entry.state.runId, entry.state, activeRunIds, this.customerPendingRunIds)) return false;
         if (activeRunIds.has(String(entry.state.runId || ''))) return false;
         if (BRANCH_TASK_KINDS.has(entry.state.taskKind) && canResumeBranchState(entry.state)) return false;
         const ownedIds = [
@@ -4056,7 +4118,7 @@ class RunManager extends EventEmitter {
           size: stat.size,
           modifiedAt: stat.mtime.toISOString(),
           runStatus: artifactStatus(asset, job, state.status),
-          deletable: cpaArtifactDeletable(state.runId, state, activeRunIds),
+          deletable: cpaArtifactDeletable(state.runId, state, activeRunIds, this.customerPendingRunIds),
           assetId: asset?.id || '',
           superseded: false,
           isPlus: asset?.isPlus === true,
@@ -4094,7 +4156,7 @@ class RunManager extends EventEmitter {
         size: stat.size,
         modifiedAt: stat.mtime.toISOString(),
         runStatus: artifactStatus(asset, runJob, runState?.status),
-        deletable: cpaArtifactDeletable(asset.cpa.runId, runState, activeRunIds),
+        deletable: cpaArtifactDeletable(asset.cpa.runId, runState, activeRunIds, this.customerPendingRunIds),
         assetId: asset.id,
         superseded: false,
         isPlus: asset?.isPlus === true,
@@ -4174,7 +4236,7 @@ class RunManager extends EventEmitter {
           size: stat.size,
           modifiedAt: stat.mtime.toISOString(),
           runStatus: artifactStatus(null, runJob, state?.status || 'archived'),
-          deletable: cpaArtifactDeletable(runDirectory.name, state, activeRunIds),
+          deletable: cpaArtifactDeletable(runDirectory.name, state, activeRunIds, this.customerPendingRunIds),
           assetId: '',
           superseded: false,
           isPlus: false,

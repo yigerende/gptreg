@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { call, copy, date, type Row, uid, orderPending } from "./client";
+import { call, date, type Row, uid, orderPending } from "./client";
 import {
   Feedback,
   Modal,
@@ -9,7 +9,6 @@ import {
   Table,
   useAction,
 } from "./Workspace";
-import { Link } from "../router";
 import { RefreshCw } from "lucide-react";
 import { Filters, Pagination, number } from "./Insights";
 import AdminOverview, { AdminFinance } from "./AdminOverview";
@@ -18,6 +17,8 @@ import AdminUserDetail from "./AdminUserDetail";
 import BrandSettings from "./BrandSettings";
 import AdminSiteControls from "./AdminSiteControls";
 import AdminAnnouncements from "./AdminAnnouncements";
+import AdminCodes from "./AdminCodes";
+import AdminAccounts from "./AdminAccounts";
 export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
   const [offset, setOffset] = useState(0),
     [filters, setFilters] = useState<Row>(() => ({
@@ -27,16 +28,12 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
     [settingTab, setSettingTab] = useState("features"),
     [userDetail, setUserDetail] = useState(""),
     [createUser, setCreateUser] = useState(false),
-    [selectedCodes, setSelectedCodes] = useState<string[]>([]),
     [settings, setSettings] = useState<Row | null>(null),
     [detail, setDetail] = useState(""),
     [adjust, setAdjust] = useState<Row | null>(null),
     [amount, setAmount] = useState(0),
     [note, setNote] = useState(""),
-    [adjustKey, setAdjustKey] = useState(uid),
-    [count, setCount] = useState(1),
-    [points, setPoints] = useState(100),
-    [codes, setCodes] = useState<string[]>([]);
+    [adjustKey, setAdjustKey] = useState(uid);
   const a = useAction();
   const settingsPage = ["settings", "products", "announcements"].includes(tab);
   const endpoint = settingsPage
@@ -74,7 +71,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
     products: "服务与定价",
     announcements: "站点公告",
     users: "账户管理",
-    codes: "积分兑换码",
+    codes: "兑换码管理",
     settings: "站点设置",
     audit: "操作审计",
   };
@@ -147,7 +144,6 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
           onChange={(v) => {
             setFilters(v);
             setOffset(0);
-            setSelectedCodes([]);
           }}
           mode={["orders", "accounts"].includes(tab)}
           kind={tab === "finance"}
@@ -165,12 +161,17 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
               : tab === "users"
                 ? { active: "正常", disabled: "停用" }
                 : tab === "codes"
-                  ? { available: "未使用", used: "已使用", disabled: "已停用" }
+                  ? {
+                      available: "未使用",
+                      used: "已使用",
+                      disabled: "已停用",
+                      expired: "已过期",
+                    }
                   : undefined
           }
           placeholder={
             tab === "codes"
-              ? "搜索兑换码前缀或兑换人邮箱"
+              ? "搜索兑换码标识、发行批次或兑换人邮箱"
               : tab === "audit"
                 ? "搜索操作、说明或操作者邮箱"
                 : tab === "users"
@@ -183,31 +184,11 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
       )}
       {tab === "finance" && data && <AdminFinance data={data} />}
       {tab === "accounts" && (
-        <section className="p-card p-record-card">
-          <Table
-            rows={rows}
-            columns={[
-              { title: "交付账号", render: (r) => <b>{r.email}</b> },
-              { title: "所属客户", render: (r) => r.owner_email },
-              {
-                title: "注册服务",
-                render: (r) => (r.need_oauth ? "OAuth 授权账号" : "标准账号"),
-              },
-              {
-                title: "关联订单",
-                render: (r) => (
-                  <button
-                    className="p-link"
-                    onClick={() => setDetail(r.order_id)}
-                  >
-                    {r.order_id.slice(0, 12)} ↗
-                  </button>
-                ),
-              },
-              { title: "交付时间", render: (r) => date(r.created_at) },
-            ]}
-          />
-        </section>
+        <AdminAccounts
+          key={JSON.stringify([offset, filters])}
+          rows={rows}
+          onOrder={setDetail}
+        />
       )}
       {tab === "orders" && (
         <section className="p-card p-record-card">
@@ -309,153 +290,11 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
         </section>
       )}
       {tab === "codes" && (
-        <>
-          <form
-            className="p-card"
-            onSubmit={(e) => {
-              e.preventDefault();
-              a.run(
-                () =>
-                  call("/api/admin/v1/redeem-codes", "POST", { points, count }),
-                "兑换码已生成，请立即保存",
-              ).then((r) => r && setCodes(r.codes));
-            }}
-          >
-            <h2>生成积分兑换码</h2>
-            <div className="p-form-grid">
-              <label>
-                每个兑换码积分
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  max={1000000}
-                  value={points}
-                  onChange={(e) => setPoints(Number(e.target.value))}
-                />
-              </label>
-              <label>
-                生成数量
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  max={100}
-                  value={count}
-                  onChange={(e) => setCount(Number(e.target.value))}
-                />
-              </label>
-            </div>
-            <button className="p-button" disabled={a.busy}>
-              生成兑换码
-            </button>
-          </form>
-          <section className="p-card">
-            <div className="p-section-heading">
-              <button
-                className="p-link"
-                onClick={() =>
-                  setSelectedCodes(
-                    selectedCodes.length
-                      ? []
-                      : rows
-                          .filter((r: Row) => !r.redeemed_by)
-                          .map((r: Row) => r.id),
-                  )
-                }
-              >
-                选择 / 取消本页未使用兑换码
-              </button>
-              <span className="p-muted p-fine">
-                已选 {selectedCodes.length} 条
-              </span>
-            </div>
-            <div className="p-inline">
-              {[
-                ["enable", "批量启用"],
-                ["disable", "批量停用"],
-                ["delete", "删除未使用"],
-              ].map(([action, label]) => (
-                <button
-                  className="p-button secondary"
-                  key={action}
-                  disabled={!selectedCodes.length || a.busy}
-                  onClick={() => {
-                    if (
-                      action !== "delete" ||
-                      window.confirm("删除所选未使用兑换码？已兑换记录将保留。")
-                    )
-                      void a
-                        .run(
-                          () =>
-                            call("/api/admin/v1/redeem-codes/batch", "POST", {
-                              ids: selectedCodes,
-                              action,
-                            }),
-                          "批量操作完成",
-                        )
-                        .then((r) => r && setSelectedCodes([]));
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <Table
-              rows={rows}
-              columns={[
-                {
-                  title: "选择",
-                  render: (r) => (
-                    <input
-                      type="checkbox"
-                      aria-label={`选择兑换码 ${r.prefix}`}
-                      disabled={Boolean(r.redeemed_by)}
-                      checked={selectedCodes.includes(r.id)}
-                      onChange={(e) =>
-                        setSelectedCodes(
-                          e.target.checked
-                            ? [...selectedCodes, r.id]
-                            : selectedCodes.filter((x) => x !== r.id),
-                        )
-                      }
-                    />
-                  ),
-                },
-                { title: "兑换人", render: (r) => r.redeemed_email || "—" },
-                { title: "前缀", render: (r) => <code>{r.prefix}…</code> },
-                { title: "积分", render: (r) => r.points },
-                {
-                  title: "状态",
-                  render: (r) =>
-                    r.redeemed_by ? "已使用" : r.disabled ? "已停用" : "未使用",
-                },
-                { title: "创建时间", render: (r) => date(r.created_at) },
-                {
-                  title: "操作",
-                  render: (r) =>
-                    !r.redeemed_by && (
-                      <button
-                        className="p-link"
-                        disabled={a.busy}
-                        onClick={() =>
-                          a.run(() =>
-                            call(
-                              `/api/admin/v1/redeem-codes/${r.id}`,
-                              "PATCH",
-                              { disabled: !r.disabled },
-                            ),
-                          )
-                        }
-                      >
-                        {r.disabled ? "启用" : "停用"}
-                      </button>
-                    ),
-                },
-              ]}
-            />
-          </section>
-        </>
+        <AdminCodes
+          key={JSON.stringify([offset, filters])}
+          rows={rows}
+          stats={data?.stats}
+        />
       )}
       {settingsPage && settings && (
         <form
@@ -467,6 +306,8 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                     "price_standard",
                     "price_oauth",
                     "max_quantity",
+                    "registration_concurrency",
+                    "user_registration_concurrency",
                     "max_open_orders",
                     "attempt_limit",
                     "timeout_minutes",
@@ -544,6 +385,13 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                   ["price_standard", "不带 OAuth / 个", 0, 1000000],
                   ["price_oauth", "含 OAuth / 个", 0, 1000000],
                   ["max_quantity", "每单最大数量", 1, 1000],
+                  ["registration_concurrency", "注册并发数（全平台）", 1, 100],
+                  [
+                    "user_registration_concurrency",
+                    "注册并发数（单用户）",
+                    1,
+                    100,
+                  ],
                   ["max_open_orders", "每用户未完成订单上限", 1, 20],
                   ["attempt_limit", "每阶段最大尝试次数", 1, 5],
                   ["timeout_minutes", "每次执行时限（分钟）", 2, 120],
@@ -565,6 +413,11 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
               </div>
               <p className="p-muted">
                 下单锁定单价。改价只影响后续新订单；失败与取消的未交付部分退回预留积分。
+              </p>
+              <p className="p-muted">
+                全平台与单用户上限同时生效，默认均为
+                15。单用户的全部订单、仅注册与注册并 OAuth 合并计数。提交 100
+                个时其余排队，每结束一个自动补位。调低并发不打断在途任务，后续按新上限调度。
               </p>
             </section>
           )}
@@ -717,7 +570,6 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
           count={rows.length}
           onChange={(n) => {
             setOffset(n);
-            setSelectedCodes([]);
           }}
         />
       )}
@@ -781,23 +633,11 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
           </form>
         </Modal>
       )}
-      {codes.length > 0 && (
-        <Modal title="积分兑换码" onClose={() => setCodes([])}>
-          <p>完整兑换码仅显示本次，请立即保存。</p>
-          <pre>{codes.join("\n")}</pre>
-          <button
-            className="p-button"
-            onClick={() =>
-              a.run(() => copy(codes.join("\n")), "已复制全部兑换码")
-            }
-          >
-            复制全部
-          </button>
-        </Modal>
-      )}
       <p className="p-footer-note">
         原有配置和历史账号由注册管理台维护，客户账号按订单归属独立交付。
-        <Link to="/">返回用户前台</Link>
+        <a href="/" target="_blank" rel="noopener noreferrer">
+          返回用户前台 ↗
+        </a>
       </p>
     </>
   );

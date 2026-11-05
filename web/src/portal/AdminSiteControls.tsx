@@ -19,7 +19,7 @@ export const featureLabels: Row = {
   register: ["注册服务", "选择模式与数量，创建注册订单"],
   orders: ["订单中心", "查询订单进度、详情和取消未执行部分"],
   accounts: ["账号交付", "查看、领取和导出已交付的账号凭据"],
-  wallet: ["积分钱包", "查询积分、账本及兑换充值"],
+  wallet: ["资金账户", "查询积分、账本及兑换充值"],
   keys: ["开发接入", "创建 API Key 并通过 API 调用服务"],
   docs: ["接口文档", "查看 API 文档与 OpenAPI 定义"],
 };
@@ -181,7 +181,7 @@ export default function AdminSiteControls({
           </label>
           <div className="p-inline-help">
             登录密码为 10～72
-            位。已登录用户可在账户设置中修改密码；配置邮件服务后支持找回密码。
+            位。已登录用户可在个人设置中修改密码；配置邮件服务后支持找回密码。
           </div>
         </>
       )}

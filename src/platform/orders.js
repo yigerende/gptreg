@@ -24,9 +24,13 @@ async function ledger(q, userId, reference, kind, points, frozen, note) {
     [id(), userId, reference, kind, points, frozen, note],
   );
   if (!inserted.rowCount) return false;
-  await q.query(
-    "UPDATE platform_users SET points=points+$2,frozen=frozen+$3 WHERE id=$1",
+  const balance = await q.query(
+    "UPDATE platform_users SET points=points+$2,frozen=frozen+$3 WHERE id=$1 RETURNING points,frozen",
     [userId, points, frozen],
+  );
+  await q.query(
+    "UPDATE platform_ledger SET points_after=$2,frozen_after=$3 WHERE id=$1",
+    [inserted.rows[0].id, balance.rows[0].points, balance.rows[0].frozen],
   );
   return true;
 }

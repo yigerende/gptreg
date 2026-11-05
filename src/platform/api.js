@@ -26,8 +26,14 @@ const paging = (r) => ({
 });
 const { validateControls, visibleMenus } = require("./site-controls");
 const { registerMail } = require("./mail");
+const { registerAdminAccounts } = require("./admin-accounts");
+const { registerRedeemCodes } = require("./redeem-codes");
+const { registerCustomerCenter } = require("./customer-center");
 function registerApi(app, db, orders, crypt) {
   registerMail(app, db, crypt);
+  registerAdminAccounts(app, db, crypt);
+  registerCustomerCenter(app, db);
+  registerRedeemCodes(app, db, crypt);
   app.get("/api/user/v1/navigation", async (r) => ({
     items: visibleMenus(await db.settings(), r.user.role),
   }));
@@ -152,7 +158,13 @@ function registerApi(app, db, orders, crypt) {
           [digest(code)],
         )
       ).rows[0];
-      fail(c && !c.disabled && !c.redeemed_by, "兑换码无效、停用或已使用");
+      fail(
+        c &&
+          !c.disabled &&
+          !c.redeemed_by &&
+          (!c.expires_at || new Date(c.expires_at).getTime() > Date.now()),
+        "兑换码无效、停用、已过期或已使用",
+      );
       await ledger(
         q,
         r.user.id,
@@ -258,6 +270,8 @@ function registerApi(app, db, orders, crypt) {
         "price_standard",
         "price_oauth",
         "max_quantity",
+        "registration_concurrency",
+        "user_registration_concurrency",
         "max_open_orders",
         "attempt_limit",
         "timeout_minutes",
@@ -276,6 +290,10 @@ function registerApi(app, db, orders, crypt) {
         ).rows[0].value,
         s = { ...old, ...v };
       s.custom_menus ??= [];
+      if (s.registration_concurrency === undefined)
+        s.registration_concurrency = 15;
+      if (s.user_registration_concurrency === undefined)
+        s.user_registration_concurrency = 15;
       s.announcements ??= [];
       validateControls(s);
       s.brand = validateBrand({ ...old.brand, ...v.brand });
@@ -290,6 +308,8 @@ function registerApi(app, db, orders, crypt) {
       for (const k of ["price_standard", "price_oauth"])
         integer(s[k], 0, 1000000, "单价");
       integer(s.max_quantity, 1, 1000, "每单上限");
+      integer(s.registration_concurrency, 1, 100, "注册并发数");
+      integer(s.user_registration_concurrency, 1, 100, "单用户注册并发数");
       integer(s.max_open_orders, 1, 20, "订单上限");
       integer(s.attempt_limit, 1, 5, "尝试次数");
       integer(s.timeout_minutes, 2, 120, "执行超时");
@@ -409,41 +429,6 @@ function registerApi(app, db, orders, crypt) {
     });
     return { ok: true, id: uid };
   });
-  app.post("/api/admin/v1/redeem-codes/batch", async (r) => {
-    const { ids, action } = r.body || {};
-    fail(
-      Array.isArray(ids) &&
-        ids.length > 0 &&
-        ids.length <= 100 &&
-        ids.every((x) => typeof x === "string" && x.length <= 80),
-      "请选择 1～100 条记录",
-    );
-    fail(["enable", "disable", "delete"].includes(action), "批量操作无效");
-    return db.tx(async (q) => {
-      const result =
-        action === "delete"
-          ? await q.query(
-              "DELETE FROM platform_redeem_codes WHERE id=ANY($1::text[]) AND redeemed_by IS NULL RETURNING id",
-              [ids],
-            )
-          : await q.query(
-              "UPDATE platform_redeem_codes SET disabled=$2 WHERE id=ANY($1::text[]) AND redeemed_by IS NULL RETURNING id",
-              [ids, action === "disable"],
-            );
-      await audit(
-        q,
-        r.user.id,
-        `redeem.${action}`,
-        "",
-        `${result.rowCount} 条记录`,
-      );
-      return {
-        ok: true,
-        changed: result.rowCount,
-        skipped: ids.length - result.rowCount,
-      };
-    });
-  });
   app.get("/api/admin/v1/users", async (r) => {
     const p = paging(r);
     const values = [
@@ -550,48 +535,6 @@ function registerApi(app, db, orders, crypt) {
     fail(o, "订单不存在", 404);
     await audit(db, r.user.id, "admin.order.cancel", r.params.id);
     return orders.cancel(o.user_id, r.params.id);
-  });
-  app.get("/api/admin/v1/redeem-codes", async (r) => {
-    const p = paging(r);
-    const values = [
-      search(r.query.q),
-      option(r.query.status, ["used", "available", "disabled"]),
-    ];
-    const from =
-      "FROM platform_redeem_codes c LEFT JOIN platform_users u ON u.id=c.redeemed_by WHERE (c.prefix ILIKE $1 OR u.email ILIKE $1) AND ($2='' OR ($2='used' AND c.redeemed_by IS NOT NULL) OR ($2='available' AND c.redeemed_by IS NULL AND NOT c.disabled) OR ($2='disabled' AND c.redeemed_by IS NULL AND c.disabled))";
-    const [items, count] = await Promise.all([
-      db.query(
-        `SELECT c.id,c.prefix,c.points,c.redeemed_by,c.disabled,c.created_at,c.redeemed_at,u.email AS redeemed_email ${from} ORDER BY c.created_at DESC,c.id DESC LIMIT $3 OFFSET $4`,
-        [...values, p.limit, p.offset],
-      ),
-      db.one(`SELECT count(*)::int AS total ${from}`, values),
-    ]);
-    return { items: items.rows, total: count.total, ...p };
-  });
-  app.post("/api/admin/v1/redeem-codes", async (r) => {
-    const points = integer(r.body?.points, 1, 1000000, "积分"),
-      count = integer(r.body?.count, 1, 100, "数量"),
-      codes = [];
-    await db.tx(async (q) => {
-      for (let i = 0; i < count; i++) {
-        const code = `GR-${token()}`;
-        await q.query(
-          "INSERT INTO platform_redeem_codes(id,hash,prefix,points) VALUES($1,$2,$3,$4)",
-          [id(), digest(code), code.slice(0, 10), points],
-        );
-        codes.push(code);
-      }
-      await audit(q, r.user.id, "redeem.create", "", `${count}×${points}`);
-    });
-    return { codes };
-  });
-  app.patch("/api/admin/v1/redeem-codes/:id", async (r) => {
-    fail(typeof r.body?.disabled === "boolean", "状态格式错误");
-    await db.query(
-      "UPDATE platform_redeem_codes SET disabled=$2 WHERE id=$1 AND redeemed_by IS NULL",
-      [r.params.id, r.body.disabled],
-    );
-    return { ok: true };
   });
   app.get("/api/admin/v1/audit", async (r) => {
     const p = paging(r);

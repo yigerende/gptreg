@@ -314,7 +314,7 @@ function buildApp(options = {}) {
   });
   app.put('/api/v1/sms/settings/:provider', async (request, reply) => {
     // Legacy live runs do not have a private SMS config snapshot yet.
-    if (runManager.starting || runManager.auxiliaryStarting || runManager.activeRuns().some((r) => !r.state.smsConfig)) throw new HttpError(409, '请等待正在启动或旧版任务结束后保存短信配置');
+    if (runManager.starting || runManager.auxiliaryStarting || runManager.customerStarting || runManager.activeRuns().some((r) => !r.state.smsConfig)) throw new HttpError(409, '请等待正在启动或旧版任务结束后保存短信配置');
     const result = smsSettings.save(request.params.provider, request.body || {});
     smsStatusCache = null;
     reply.header('Cache-Control', 'no-store');

@@ -130,7 +130,7 @@ function requestFeature(path, method) {
     return "register";
   if (p.startsWith("/registration-orders")) return "orders";
   if (p.startsWith("/accounts")) return "accounts";
-  if (["/ledger", "/redeem"].includes(p)) return "wallet";
+  if (["/ledger", "/redeem", "/wallet"].includes(p)) return "wallet";
   if (p.startsWith("/keys")) return "keys";
   return null;
 }

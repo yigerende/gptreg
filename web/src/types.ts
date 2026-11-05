@@ -202,6 +202,7 @@ export type TaskSlotCapacity = {
 export type TaskCapacitySnapshot = {
   main: TaskSlotCapacity;
   auxiliary: TaskSlotCapacity;
+  customer?: TaskSlotCapacity;
 };
 
 export type PreflightSnapshot = {

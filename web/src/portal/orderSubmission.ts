@@ -15,7 +15,7 @@ function readIntent(userId: string): Intent | null {
     v.quantity > 1000 ||
     typeof v.need_oauth !== "boolean"
   )
-    throw new Error("上次提交记录无法读取，请先在我的订单核对结果并联系支持");
+    throw new Error("上次提交记录无法读取，请先在订单中心核对结果并联系支持");
   return { key: v.key, quantity: v.quantity, need_oauth: v.need_oauth };
 }
 export function useOrderSubmission(
@@ -55,7 +55,7 @@ export function useOrderSubmission(
       try {
         restore(readIntent(userId));
       } catch {
-        setError("提交记录无法读取，请先核对我的订单");
+        setError("提交记录无法读取，请先核对订单中心");
       }
     };
     window.addEventListener("storage", update);
@@ -84,7 +84,7 @@ export function useOrderSubmission(
           setNotice("上次提交已确认");
           return;
         }
-        throw new Error("上次提交记录已变化，请先在我的订单核对结果");
+        throw new Error("上次提交记录已变化，请先在订单中心核对结果");
       }
       if (!intent) {
         intent = { key: uid(), quantity, need_oauth: oauth };

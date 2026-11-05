@@ -18,7 +18,7 @@ import type { RunPlan, RunSummary } from './types';
  *    one line so a list of runs can be read rather than decoded.
  */
 
-export type TaskSlot = 'main' | 'auxiliary';
+export type TaskSlot = 'main' | 'auxiliary' | 'customer';
 
 const TASK_KIND_LABELS: Record<string, string> = {
   register_oauth: '旧版注册并 OAuth',
@@ -261,7 +261,7 @@ export function isTerminalRunStatus(status?: string | null) {
  * before that field existed.
  */
 export function runTaskSlot(run: Pick<RunSummary, 'taskSlot' | 'taskKind' | 'plan'>): TaskSlot {
-  if (run.taskSlot === 'auxiliary' || run.taskSlot === 'main') return run.taskSlot;
+  if (run.taskSlot === 'auxiliary' || run.taskSlot === 'main' || run.taskSlot === 'customer') return run.taskSlot;
   const kind = run.taskKind || run.plan?.taskKind;
   return kind === 'oauth' || kind === 'session_refresh' ? 'auxiliary' : 'main';
 }
@@ -271,11 +271,13 @@ export function isAuxiliaryRun(run: Pick<RunSummary, 'taskSlot' | 'taskKind' | '
 }
 
 export const TASK_SLOT_LABELS: Record<TaskSlot, string> = {
+  customer: '客户订单',
   main: '主任务',
   auxiliary: '附属任务',
 };
 
 export const TASK_SLOT_PURPOSE: Record<TaskSlot, string> = {
+  customer: '客户订单自动排队，注册与 OAuth 共用运营控制台配置的并发额度。',
   main: '注册类任务。消耗邮箱、手机号和住宅代理，同一时间只允许一个。',
   auxiliary: '已有账号的 OAuth、登录态刷新等任务，可并行多个。独立 OAuth 使用所选国家池或固定代理，每个出口独占绑定。',
 };

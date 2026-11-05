@@ -1530,13 +1530,18 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 /* The platform scrollbar is a light slab that fights a dark surface, so every
    scroller gets the same thin, themed one. `background-clip: padding-box` with
    a transparent border is what gives the thumb its inset gutter. */
-* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
-::-webkit-scrollbar { width: 11px; height: 11px; }
+/* Hide vertical tracks without disabling wheel, keyboard or touch scrolling. */
+* { scrollbar-width: auto; scrollbar-color: auto; scrollbar-gutter: auto !important; }
+::-webkit-scrollbar { width: 0; height: 9px; }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: none; }
+  /* Horizontal table scrollers remain discoverable in Firefox. */
+  .p-table-wrap, .p-center-records { scrollbar-width: thin; }
+}
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
 ::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px; background-clip: padding-box; background-color: var(--scrollbar-thumb); }
 ::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
 /* The log console is a dark surface even under the light theme. */
-.log-view, .log-view * { scrollbar-color: #3f4245 transparent; }
 .log-view ::-webkit-scrollbar-thumb, .log-view::-webkit-scrollbar-thumb { background-color: #3f4245; }
 .log-view ::-webkit-scrollbar-thumb:hover, .log-view::-webkit-scrollbar-thumb:hover { background-color: #565a5e; }
 

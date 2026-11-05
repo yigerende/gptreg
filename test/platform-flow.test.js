@@ -103,6 +103,10 @@ async function fixture(t) {
   const manager = {
     ...engine(),
     activeRuns: () => [],
+    setCustomerPendingRuns() {},
+    setCustomerConcurrency(value) {
+      this.customerCapacity = value;
+    },
     isTaskSlotBusy: () => false,
     activeRun: () => null,
     sessionAssets: () => store,
@@ -165,6 +169,146 @@ async function fixture(t) {
     asset,
   };
 }
+function holdExecutions(f) {
+  const live = new Map(),
+    original = f.manager.start.bind(f.manager);
+  f.manager.activeRun = (runId) => live.get(runId) || null;
+  f.manager.activeRuns = () => [...live.values()];
+  f.manager.start = async (plan, options) => {
+    assert.equal(options.customerExecution, true);
+    assert.ok(options.customerUserId);
+    await original(plan, options);
+    const state = f.states.get(options.runId);
+    state.status = "running";
+    live.set(options.runId, { state, owner: options.customerUserId });
+  };
+  function finish(runId, oauth = false) {
+    const state = f.states.get(runId),
+      asset = f.asset(oauth);
+    state.jobs = [{ sessionAssetId: asset.id }];
+    state.status = "complete";
+    live.delete(runId);
+  }
+  return { live, finish };
+}
+test(
+  "100 customer accounts execute 15 at a time, refill one slot and settle once across restart",
+  { skip: !connection },
+  async (t) => {
+    const f = await fixture(t),
+      { live, finish } = holdExecutions(f);
+    const order = (
+      await f.orders.create(f.user, { quantity: 100 }, id(), "web")
+    ).order;
+    await f.worker.cycle();
+    assert.equal(live.size, 15);
+    assert.equal(
+      (
+        await f.db.one(
+          "SELECT count(*)::int AS n FROM platform_items WHERE status='queued'",
+        )
+      ).n,
+      85,
+    );
+    await f.worker.cycle();
+    assert.equal(f.calls.length, 15);
+    finish([...live.keys()][0]);
+    await f.worker.cycle();
+    assert.equal(live.size, 15);
+    assert.equal(f.calls.length, 16);
+    assert.equal((await f.orders.detail(f.user.id, order.id)).delivered, 1);
+    const restarted = new OrderWorker(f.db, f.orders, f.manager);
+    while (live.size) {
+      for (const runId of [...live.keys()]) finish(runId);
+      await restarted.cycle();
+      assert.ok(live.size <= 15);
+    }
+    await restarted.cycle();
+    const done = await f.orders.detail(f.user.id, order.id);
+    assert.equal(done.delivered, 100);
+    assert.equal(done.charged, 5000);
+    assert.equal(f.calls.length, 100);
+    assert.equal(new Set(f.calls.map((call) => call.runId)).size, 100);
+    assert.equal(
+      (
+        await f.db.one(
+          "SELECT count(*)::int AS n FROM platform_ledger WHERE kind='charge'",
+        )
+      ).n,
+      100,
+    );
+  },
+);
+test(
+  "global and per-user limits span orders and OAuth, drain on reduction and honor pause/cancel",
+  { skip: !connection },
+  async (t) => {
+    const f = await fixture(t),
+      { live, finish } = holdExecutions(f);
+    const set = (value) =>
+      f.db.query("UPDATE platform_settings SET value=value||$1::jsonb", [
+        JSON.stringify(value),
+      ]);
+    await set({
+      registration_concurrency: 3,
+      user_registration_concurrency: 2,
+    });
+    const other = await f.db.one(
+      "INSERT INTO platform_users(id,email,name,password_hash,points) VALUES($1,'other@example.test','other','unused',10000) RETURNING *",
+      [id()],
+    );
+    const first = (await f.orders.create(f.user, { quantity: 10 }, id(), "web"))
+      .order;
+    const oauth = await f.create(true);
+    const existing = f.asset(false),
+      oauthItem = await f.item(oauth);
+    await f.db.query(
+      "UPDATE platform_items SET status='oauth_pending',asset_id=$2 WHERE id=$1",
+      [oauthItem.id, existing.id],
+    );
+    const second = (await f.orders.create(other, { quantity: 10 }, id(), "api"))
+      .order;
+    await f.worker.cycle();
+    assert.equal(live.size, 3);
+    assert.equal(
+      [...live.values()].filter((run) => run.owner === f.user.id).length,
+      2,
+    );
+    assert.equal(
+      f.calls.filter((call) => call.plan.taskKind === "oauth").length,
+      1,
+    );
+    await set({
+      registration_concurrency: 1,
+      user_registration_concurrency: 1,
+    });
+    await f.worker.cycle();
+    assert.equal(f.calls.length, 3); // existing work is not interrupted
+    const firstUserRuns = [...live].filter(
+      ([, run]) => run.owner === f.user.id,
+    );
+    for (const [runId, run] of firstUserRuns)
+      finish(runId, run.state.runPlan.taskKind === "oauth");
+    await f.worker.cycle();
+    assert.equal(live.size, 1);
+    assert.equal(f.calls.length, 3);
+    await set({
+      registration_concurrency: 5,
+      user_registration_concurrency: 1,
+    });
+    await f.worker.cycle();
+    assert.equal(live.size, 2); // only two users, even though five global slots exist
+    await set({ worker_enabled: false });
+    for (const runId of [...live.keys()]) finish(runId);
+    await f.worker.cycle();
+    assert.equal(live.size, 0);
+    await f.orders.cancel(f.user.id, first.id);
+    await f.orders.cancel(other.id, second.id);
+    await set({ worker_enabled: true });
+    await f.worker.cycle();
+    assert.equal(live.size, 0);
+  },
+);
 test("modern registration and OAuth share automatic proxies; explicit selections and legacy plans stay intact", () => {
   const manager = engine();
   for (const kind of ["register_session", "register_oauth", "oauth"]) {

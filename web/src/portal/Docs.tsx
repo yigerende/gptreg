@@ -679,6 +679,11 @@ export default function Docs({
                 OAuth。网页提交结果不明时会保留原请求，刷新后可继续确认；API
                 调用方也必须保存并复用原幂等键。
               </p>
+              <p>
+                网页与 API 订单共用注册队列，同时受全平台和单用户并发上限约束。
+                单用户的多笔订单及 OAuth 任务合并计算，超出名额的账号自动排队，任务结束后补位。
+                并发上限由运营配置；请求已受理不代表所有账号立即同时开始。
+              </p>
             </Section>
             <Section id="inputs" title="参数从哪里来">
               <div className="d-table">

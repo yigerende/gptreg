@@ -162,8 +162,8 @@ export default function Shell({
           <section className="p-mobile-account-actions">
             <p>账户操作</p>
             {!admin && actions}
-            {admin && <Link to="/">用户工作台 ↗</Link>}
-            <Link to="/profile">账户设置</Link>
+            {admin && <a href="/" target="_blank" rel="noopener noreferrer">用户工作台 ↗</a>}
+            <Link to="/profile">个人设置</Link>
             <button className="p-link" onClick={onLogout}>
               退出当前账户
             </button>
@@ -202,7 +202,7 @@ export default function Shell({
           </span>
           <div>
             {available("docs") && <Link to="/docs">接口文档</Link>}
-            <Link to="/profile">账户设置</Link>
+            <Link to="/profile">个人设置</Link>
             {pub.brand.support_url && (
               <a
                 href={pub.brand.support_url}

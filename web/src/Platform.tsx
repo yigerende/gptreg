@@ -14,12 +14,14 @@ import { Link, Router, useRouter } from "./router";
 import Auth from "./portal/Auth";
 import Workspace from "./portal/Workspace";
 import Dashboard from "./portal/Dashboard";
+import { CustomerOrderCenter, FundsAccount, PersonalSettings } from "./portal/CustomerCenter";
 import CustomPage from "./portal/CustomPage";
 import Docs from "./portal/Docs";
 import Shell, { type NavGroup } from "./portal/Shell";
 import { call, currentUser } from "./portal/client";
 import "./portal/portal.css";
 import "./portal/workspace.css";
+import "./portal/center.css";
 const AdminConsole = lazy(() => import("./AdminConsole"));
 const AdminChrome = lazy(() => import("./portal/AdminChrome"));
 const AdminEntry = lazy(() => import("./portal/AdminEntry"));
@@ -29,9 +31,9 @@ const customerGroups: NavGroup[] = [
     items: [
       { path: "/", name: "工作台概览", icon: LayoutDashboard },
       { path: "/register", name: "注册服务", icon: Sparkles },
-      { path: "/orders", name: "我的订单", icon: ChartNoAxesCombined },
+      { path: "/orders", name: "订单中心", icon: ChartNoAxesCombined },
       { path: "/accounts", name: "我的账号", icon: KeyRound },
-      { path: "/wallet", name: "积分钱包", icon: Wallet },
+      { path: "/wallet", name: "资金账户", icon: Wallet },
     ],
   },
   {
@@ -39,7 +41,7 @@ const customerGroups: NavGroup[] = [
     items: [
       { path: "/keys", name: "开发接入", icon: Code2 },
       { path: "/docs", name: "接口文档", icon: BookOpen },
-      { path: "/profile", name: "账户设置", icon: Settings },
+      { path: "/profile", name: "个人设置", icon: Settings },
     ],
   },
 ];
@@ -166,13 +168,18 @@ export default function Platform() {
         </div>
       ) : path === "/" ? (
         <Dashboard user={me.data} pub={pub.data} />
+      ) : path === "/orders" ? (
+        <CustomerOrderCenter user={me.data} pub={pub.data} />
+      ) : path === "/wallet" ? (
+        <FundsAccount user={me.data} pub={pub.data} />
+      ) : path === "/profile" ? (
+        <PersonalSettings user={me.data} pub={pub.data} onLogout={logout} />
       ) : (
         <Workspace
           key={`${me.data.id}:${path}${search}`}
           page={path.slice(1)}
           user={me.data}
           pub={pub.data}
-          onLogout={logout}
         />
       )}
     </Shell>

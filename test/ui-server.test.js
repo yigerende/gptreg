@@ -1227,6 +1227,69 @@ test('registration and auxiliary tasks use independent capacity while assets sta
   }
 });
 
+test('customer execution has durable global and per-user capacity, isolated from manual task slots', async (t) => {
+  const { cwd, config } = temporaryWorkspace();
+  const manager = new RunManager({ cwd, configService: new ConfigService({ cwd }), logStore: { append() {} } });
+  const releases = [];
+  t.after(async () => {
+    for (const active of manager.activeRuns()) { active.lock.release(); }
+    releases.forEach((release) => release());
+    manager.active = null; manager.customerActive.clear(); manager.auxiliaryActive.clear();
+    await manager.shutdown();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+  manager.runConfiguration = (input) => ({ config, plan: normalizeRunPlan(input, manager.config()) });
+  manager.proxySnapshot = () => null;
+  manager.preparedPreflight = async () => ({ snapshot: { ready: true }, resources: {} });
+  manager.execute = () => new Promise((resolve) => releases.push(resolve));
+  manager.setCustomerConcurrency(3, 2);
+  const plan = { taskKind: 'register_session', mailCount: 1, workerConcurrency: 1, aliasStrategy: 'root' };
+  const one = await manager.start(plan, { customerExecution: true, customerUserId: 'one' });
+  await manager.start(plan, { customerExecution: true, customerUserId: 'one' });
+  await assert.rejects(manager.start(plan, { customerExecution: true, customerUserId: 'one' }), (e) => e.details?.code === 'CUSTOMER_USER_CAPACITY');
+  const asset = manager.sessionAssets().upsert({ email: 'customer-oauth@example.test', accessToken: 'fake' });
+  await manager.start({ taskKind: 'oauth', workerConcurrency: 1, oauthSource: { kind: 'session_assets', assetIds: [asset.id] } }, { customerExecution: true, customerUserId: 'two' });
+  assert.equal(manager.taskCapacitySnapshot().customer.available, 0);
+  assert.equal(manager.taskCapacitySnapshot().main.available, 1);
+  assert.equal(manager.taskCapacitySnapshot().auxiliary.available, 3);
+  await assert.rejects(manager.start(plan, { customerExecution: true, customerUserId: 'three' }), (e) => e.details?.code === 'CUSTOMER_TASK_CAPACITY');
+  const manual = await manager.start({ ...plan, customerExecution: true, customerUserId: 'forged' });
+  assert.equal(manager.taskSlot(manager.load(manual.runId)), 'main');
+  assert.equal(manager.load(one.runId).customerUserId, 'one');
+  assert.equal(manager.load(one.runId).customerExecution, true);
+  await assert.rejects(manager.start({ taskKind: 'oauth', workerConcurrency: 1, oauthSource: { kind: 'session_assets', assetIds: [asset.id] } }), (e) => e.details?.code === 'SESSION_ASSET_IN_USE');
+  for (const active of [...manager.customerActive.values()]) {
+    active.lock.release(); active.state.status = 'paused'; saveV2State(active.stateFile, active.state);
+  }
+  manager.customerActive.clear();
+  manager.setCustomerConcurrency(1, 1);
+  assert.equal(manager.taskCapacitySnapshot().customer.running, 3);
+  await assert.rejects(manager.start(plan, { customerExecution: true, customerUserId: 'three' }), (e) => e.details?.code === 'CUSTOMER_TASK_CAPACITY');
+  // Already admitted paused work can drain after reducing both limits.
+  const token = manager.reserveStartingSlot('customer', one.runId, 'one');
+  assert.throws(() => manager.reserveStartingSlot('customer', one.runId, 'one'), (e) => e.details?.code === 'CUSTOMER_TASK_CAPACITY');
+  manager.releaseStartingSlot(token);
+  assert.equal(manager.customerStarting, 0);
+  assert.equal(manager.customerStartingUsers.size, 0);
+});
+
+test('customer checkpoints survive retention until durable settlement even above the history cap', async (t) => {
+  const { cwd } = temporaryWorkspace();
+  const manager = new RunManager({ cwd, configService: new ConfigService({ cwd }), logStore: { append() {} }, deferBootMaintenance: true });
+  t.after(async () => { await manager.shutdown(); fs.rmSync(cwd, { recursive: true, force: true }); });
+  const config = manager.config(), ids = [];
+  for (let i = 0; i < 65; i++) {
+    const runId = `customer-retention-${i}`, state = makeInitialBranchState(config, normalizeRunPlan({ taskKind: 'register_session', mailCount: 1 }, config), { runId });
+    state.customerExecution = true; state.status = 'complete'; state.jobs = [];
+    saveV2State(path.join(cwd, '.state', `run-${runId}.json`), state); ids.push(runId);
+  }
+  assert.equal(manager.pruneRetainedHistory().runsRemoved, 0); // boot, before queue restoration
+  manager.setCustomerPendingRuns(ids);
+  assert.equal(manager.pruneRetainedHistory().runsRemoved, 0);
+  manager.setCustomerPendingRuns([]);
+  assert.equal(manager.pruneRetainedHistory().runsRemoved, 5);
+});
+
 test('session asset classification stays blocked during asynchronous run startup', async (t) => {
   const { cwd, config } = temporaryWorkspace();
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));

@@ -64,9 +64,14 @@ export default function AdminChrome({
       title={current?.name || "页面不存在"}
       actions={
         <>
-          <Link className="p-mode-switch" to="/">
+          <a
+            className="p-mode-switch"
+            href="/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             用户工作台 ↗
-          </Link>
+          </a>
           <AdminEntry />
         </>
       }

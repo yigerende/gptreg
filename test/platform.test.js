@@ -315,6 +315,17 @@ test(
           ).json();
           assert.equal(s.price_standard, 50);
           assert.equal(s.price_oauth, 100);
+          assert.equal(s.registration_concurrency, 15);
+          assert.equal(s.user_registration_concurrency, 15);
+          assert.equal(s.max_quantity, 100);
+          for (const key of ["registration_concurrency", "user_registration_concurrency"]) {
+            for (const value of [0, 101, 1.5, "15"]) {
+              assert.equal((await request("PATCH", "/api/admin/v1/settings", { [key]: value }, adminCookie)).statusCode, 400);
+            }
+            assert.equal((await request("PATCH", "/api/admin/v1/settings", { [key]: 10 }, adminCookie)).statusCode, 200);
+            assert.equal((await store.settings())[key], 10);
+            await request("PATCH", "/api/admin/v1/settings", { [key]: 15 }, adminCookie);
+          }
           assert.equal(
             (
               await request(
@@ -592,6 +603,97 @@ test(
           );
         },
       );
+      await t.test("admin delivery credentials and exports are private, complete and audited", async () => {
+        const account = await store.one("SELECT * FROM platform_accounts WHERE id=$1", [accountId]);
+        const value = { ...crypt.decrypt(account.credentials), password: '=secret,"quoted"', oauth: { access_token: "admin-access-test", refresh_token: "admin-refresh-test", id_token: "admin-id-test", extra: { preserved: true } } };
+        await store.query("UPDATE platform_accounts SET credentials=$2,need_oauth=true WHERE id=$1", [accountId, crypt.encrypt(value)]);
+        try {
+          const path = `/api/admin/v1/accounts/${accountId}/credentials`;
+          for (const cookie of [undefined, aliceCookie, bobCookie]) {
+            const expected = cookie ? 403 : 401;
+            assert.equal((await request("GET", path, undefined, cookie)).statusCode, expected);
+            assert.equal((await request("POST", "/api/admin/v1/accounts/export", { ids: [accountId] }, cookie)).statusCode, expected);
+          }
+          assert.equal((await request("GET", path, undefined, undefined, undefined, { authorization: "Bearer gr_test", "x-role": "admin" })).statusCode, 401);
+          const response = await request("GET", path, undefined, adminCookie);
+          assert.equal(response.statusCode, 200);
+          assert.equal(response.headers["cache-control"], "no-store");
+          const revealed = response.json();
+          assert.equal(revealed.password, value.password);
+          assert.deepEqual(revealed.oauth, value.oauth);
+          assert.equal(revealed.delivery.owner_email, alice.email);
+          assert.equal(revealed.delivery.order_id, order.id);
+          assert.equal(revealed.delivery.need_oauth, true);
+          assert.match(revealed.totp_code, /^\d{6}$/);
+          for (const format of ["json", "csv", "txt"]) {
+            const r = await request("POST", "/api/admin/v1/accounts/export", { ids: [accountId, accountId], format }, adminCookie);
+            assert.equal(r.statusCode, 200, r.body);
+            const exported = r.json();
+            assert.equal(exported.filename, `gptreg-deliveries.${format}`);
+            if (format === "json") {
+              const records = JSON.parse(exported.content);
+              assert.equal(records.length, 1);
+              assert.deepEqual(records[0].oauth, value.oauth);
+              assert.equal(records[0].password, value.password);
+              assert.equal(records[0].delivery.user_id, alice.id);
+            } else if (format === "txt") assert.equal(exported.content, `${value.email}----${value.password}----${value.totp_secret}\n`);
+            else {
+              assert.ok(exported.content.includes('"\'=secret,""quoted"""'));
+              assert.ok(exported.content.includes('admin-refresh-test'));
+              assert.ok(exported.content.includes(alice.email));
+            }
+          }
+          assert.equal((await request("POST", "/api/admin/v1/accounts/export", { ids: [accountId, "missing"] }, adminCookie)).statusCode, 404);
+          for (const body of [{ ids: [] }, { ids: [accountId], format: "zip" }, { ids: Array(101).fill(accountId) }, { ids: [4] }])
+            assert.equal((await request("POST", "/api/admin/v1/accounts/export", body, adminCookie)).statusCode, 400);
+          const audit = (await store.query("SELECT action,detail,target FROM platform_audit WHERE action LIKE 'admin.account%' ORDER BY id")).rows;
+          assert.equal(audit.filter((r) => r.action === "admin.accounts.export").length, 3);
+          assert.ok(audit.some((r) => r.target === accountId));
+          assert.ok(!JSON.stringify(audit).includes(value.password));
+          assert.ok(!JSON.stringify(audit).includes(value.oauth.refresh_token));
+        } finally {
+          await store.query("UPDATE platform_accounts SET credentials=$2,need_oauth=$3 WHERE id=$1", [accountId, account.credentials, account.need_oauth]);
+        }
+      });
+      await t.test("funds account uses real balances, filtered totals, owned orders and feature access", async () => {
+        const get = async (route, cookie = aliceCookie) => {
+          const r = await request("GET", route, undefined, cookie);
+          assert.equal(r.statusCode, 200, r.body);
+          return r.json();
+        };
+        const wallet = await get("/api/user/v1/wallet?limit=1");
+        assert.equal(wallet.points, 950);
+        assert.equal(wallet.frozen, 0);
+        assert.equal(wallet.items.length, 1);
+        assert.deepEqual(wallet.totals, { credited: 1000, charged: 50, reserved: 150, released: 100 });
+        const reserve = await get("/api/user/v1/wallet?kind=reserve");
+        assert.equal(reserve.total, 1);
+        assert.equal(reserve.items[0].order_id, order.id);
+        assert.equal(reserve.items[0].points_after, 850);
+        assert.equal(reserve.items[0].frozen_after, 150);
+        assert.equal((await get(`/api/user/v1/wallet?q=${order.id}`)).total, 4);
+        assert.equal((await get("/api/user/v1/wallet?q=%25")).total, 0);
+        assert.equal((await get("/api/user/v1/wallet?tab=recharges")).total, 1);
+        const bobWallet = await get("/api/user/v1/wallet", bobCookie);
+        assert.equal(bobWallet.total, 0);
+        assert.deepEqual(bobWallet.totals, { credited: 0, charged: 0, reserved: 0, released: 0 });
+        for (const query of ["start=2026-02-30", "start=2026-12-01&end=2026-01-01", "kind=unknown", "tab=unknown"])
+          assert.equal((await request("GET", `/api/user/v1/wallet?${query}`, undefined, aliceCookie)).statusCode, 400);
+        assert.equal((await get("/api/user/v1/wallet?start=2000-01-01&end=2000-01-01")).total, 0);
+        const profile = await get("/api/user/v1/profile-summary");
+        assert.equal(profile.stats.orders, 1);
+        assert.equal(profile.stats.spent, 50);
+        const original = (await store.one("SELECT value FROM platform_settings WHERE id=1")).value;
+        try {
+          await store.query("UPDATE platform_settings SET value=value||$1::jsonb WHERE id=1", [{ features: { ...(original.features || {}), orders: false } }]);
+          const hidden = await get("/api/user/v1/wallet?kind=reserve");
+          assert.equal(hidden.items[0].order_id, undefined);
+          assert.equal((await get("/api/user/v1/profile-summary")).stats.orders, undefined);
+          await store.query("UPDATE platform_settings SET value=value||$1::jsonb WHERE id=1", [{ features: { ...(original.features || {}), orders: false, wallet: false } }]);
+          assert.equal((await request("GET", "/api/user/v1/wallet", undefined, aliceCookie)).statusCode, 403);
+          assert.deepEqual((await get("/api/user/v1/profile-summary")).stats, {});
+        } finally { await store.query("UPDATE platform_settings SET value=$1 WHERE id=1", [original]); }
+      });
       await t.test(
         "mail records show accepted/failed results without leaking SMTP secrets or message bodies",
         async () => {
@@ -1011,6 +1113,34 @@ test(
           assert.equal(audit.items[0].actor_email, "admin");
         },
       );
+      await t.test("redemption codes preserve encrypted originals, batches, expiry and private exports", async () => {
+        const issued = (await request("POST", "/api/admin/v1/redeem-codes", { points: 25, count: 3, days: 7, batch: "expiry-check" }, adminCookie)).json();
+        assert.equal(issued.codes.length, 3);
+        const list = (await request("GET", "/api/admin/v1/redeem-codes?q=expiry-check", undefined, adminCookie)).json();
+        assert.equal(list.total, 3);
+        assert.ok(list.items.every((row) => row.copyable && row.batch === "expiry-check" && row.status === "available"));
+        assert.ok(!JSON.stringify(list).includes(issued.codes[0]));
+        const saved = await store.one("SELECT * FROM platform_redeem_codes WHERE id=$1", [list.items[0].id]);
+        assert.ok(saved.encrypted_code.startsWith("v1."));
+        assert.ok(!JSON.stringify(saved).includes(issued.codes[0]));
+        const ids = list.items.map((row) => row.id);
+        const copied = await request("POST", "/api/admin/v1/redeem-codes/batch", { ids, action: "copy" }, adminCookie);
+        assert.deepEqual(copied.json().codes.slice().sort(), issued.codes.slice().sort());
+        assert.equal((await request("POST", "/api/admin/v1/redeem-codes/batch", { ids, action: "copy" }, aliceCookie)).statusCode, 403);
+        await store.query("UPDATE platform_redeem_codes SET expires_at=now()-interval '1 minute' WHERE id=$1", [ids[0]]);
+        const expired = copied.json().codes[0];
+        assert.equal((await request("POST", "/api/user/v1/redeem", { code: expired }, aliceCookie)).statusCode, 400);
+        await request("PATCH", `/api/admin/v1/redeem-codes/${ids[1]}`, { disabled: true }, adminCookie);
+        const exported = (await request("POST", "/api/admin/v1/redeem-codes/batch", { ids, action: "export" }, adminCookie)).json();
+        assert.equal(exported.codes.length, 1);
+        assert.equal(exported.skipped, 2);
+        assert.equal((await request("GET", "/api/admin/v1/redeem-codes?q=expiry-check&status=expired", undefined, adminCookie)).json().total, 1);
+        // Legacy codes remain redeemable but cannot be reconstructed from hashes.
+        await store.query("UPDATE platform_redeem_codes SET encrypted_code=NULL WHERE id=$1", [ids[2]]);
+        assert.equal((await request("POST", "/api/admin/v1/redeem-codes/batch", { ids: [ids[2]], action: "copy" }, adminCookie)).statusCode, 409);
+        const logs = (await request("GET", "/api/admin/v1/audit?q=redeem", undefined, adminCookie)).json();
+        assert.ok(issued.codes.every((code) => !JSON.stringify(logs).includes(code)));
+      });
       await t.test(
         "OAuth only retries the existing account and settles at the OAuth price",
         async () => {
@@ -1027,6 +1157,8 @@ test(
             calls = [];
           const manager = {
             activeRuns: () => [],
+            setCustomerConcurrency() {},
+            setCustomerPendingRuns() {},
             isTaskSlotBusy: () => false,
             activeRun: () => null,
             load: (rid) => {
@@ -1136,6 +1268,9 @@ test(
             load() {
               throw new Error("missing");
             },
+            setCustomerConcurrency() {},
+            setCustomerPendingRuns() {},
+            activeRun: () => null,
             activeRuns: () => [],
             isTaskSlotBusy: () => false,
             start() {

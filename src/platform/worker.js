@@ -98,24 +98,59 @@ class OrderWorker {
     };
   }
   async cycle() {
+    const s = await this.db.settings();
+    this.manager.setCustomerConcurrency(
+      s.registration_concurrency,
+      s.user_registration_concurrency,
+    );
     await this.syncSold();
     const running = (
       await this.db.query(
         "SELECT i.*,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.cancel_requested FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.status IN ('running','review')",
       )
     ).rows;
-    for (const item of running) await this.reconcile(item);
-    const s = await this.db.settings();
-    if (
-      !s.worker_enabled ||
-      this.manager.activeRuns().length ||
-      this.manager.isTaskSlotBusy("main")
-    )
-      return;
+    this.manager.setCustomerPendingRuns(running.map((item) => item.run_id));
+    for (const item of running) await this.reconcile(item, s.worker_enabled);
+    if (!s.worker_enabled || this.closed) return;
+    // The durable count also covers jobs whose engine checkpoint is missing
+    // after a crash. Never replace uncertain work with a duplicate execution.
+    const pending = (
+      await this.db.query(
+        "SELECT i.status,i.run_id,o.user_id FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.status IN ('running','review')",
+      )
+    ).rows;
+    this.manager.setCustomerPendingRuns(pending.map((item) => item.run_id));
+    const occupied = pending.filter((item) => {
+      if (item.status === "running" || this.manager.activeRun(item.run_id))
+        return true;
+      try {
+        return !TERMINAL.has(this.manager.load(item.run_id).status);
+      } catch {
+        return true;
+      }
+    });
+    const perUser = new Map();
+    for (const item of occupied)
+      perUser.set(item.user_id, (perUser.get(item.user_id) || 0) + 1);
+    const available = Math.max(0, s.registration_concurrency - occupied.length);
+    // Claims stay sequential and fair across orders; launched runs execute
+    // concurrently. Limit starts per cycle even when preflight fails quickly.
+    for (let n = 0; n < available; n += 1) {
+      if (this.closed || this.manager.isTaskSlotBusy("customer")) break;
+      const excluded = [...perUser]
+        .filter(([, count]) => count >= s.user_registration_concurrency)
+        .map(([userId]) => userId);
+      const owner = await this.startNext(excluded);
+      if (owner === false) break;
+      if (owner) perUser.set(owner, (perUser.get(owner) || 0) + 1);
+    }
+  }
+  async startNext(excludedUsers = []) {
     const candidate = await this.db.one(
-      "SELECT i.*,o.template,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.created_at AS order_created_at,o.user_id FROM platform_items i JOIN platform_orders o ON o.id=i.order_id JOIN platform_users u ON u.id=o.user_id WHERE i.status IN ('queued','oauth_pending') AND i.available_at<=now() AND NOT o.cancel_requested AND u.status='active' ORDER BY o.last_scheduled_at NULLS FIRST,o.created_at,i.position LIMIT 1",
+      "SELECT i.*,o.template,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.created_at AS order_created_at,o.user_id FROM platform_items i JOIN platform_orders o ON o.id=i.order_id JOIN platform_users u ON u.id=o.user_id WHERE i.status IN ('queued','oauth_pending') AND i.available_at<=now() AND NOT o.cancel_requested AND u.status='active' AND NOT (u.id=ANY($1::text[])) ORDER BY o.last_scheduled_at NULLS FIRST,o.created_at,i.position LIMIT 1",
+      [excludedUsers],
     );
-    if (!candidate) return;
+    if (!candidate) return false;
     // Each customer receives one account per turn. Durable run IDs are written
     // before invoking the engine so a restart can never silently start a duplicate.
     const runId = `customer-${id()}`,
@@ -179,11 +214,16 @@ class OrderWorker {
         : {}),
     };
     try {
-      await this.manager.start(plan, { runId });
+      await this.manager.start(plan, {
+        runId,
+        customerExecution: true,
+        customerUserId: candidate.user_id,
+      });
       await this.db.query(
         "UPDATE platform_attempts SET status='running' WHERE run_id=$1",
         [runId],
       );
+      return candidate.user_id;
     } catch (e) {
       const failure = executionFailure(e);
       await this.recordFailure(runId, failure);
@@ -196,7 +236,7 @@ class OrderWorker {
           { ...candidate, run_id: runId },
           "任务已保存，等待管理员检查恢复",
         );
-        return;
+        return candidate.user_id;
       }
       // start() fails before launching a job: safe to retry within the saved budget.
       const fresh = await this.db.one(
@@ -327,7 +367,7 @@ class OrderWorker {
       await this.orders.refresh(q, o.id);
     });
   }
-  async reconcile(item) {
+  async reconcile(item, allowResume = true) {
     let state;
     try {
       state = this.manager.load(item.run_id);
@@ -349,10 +389,20 @@ class OrderWorker {
     }
     if (!TERMINAL.has(state.status)) {
       if (state.status === "paused" && !expired && item.status !== "review") {
+        if (!allowResume) return;
         try {
           await this.manager.resume(item.run_id);
           return;
-        } catch {}
+        } catch (e) {
+          // Lowering concurrency keeps already admitted work queued for
+          // recovery, without turning a normal capacity wait into a review.
+          if (
+            ["CUSTOMER_TASK_CAPACITY", "CUSTOMER_USER_CAPACITY"].includes(
+              executionFailure(e).code,
+            )
+          )
+            return;
+        }
       }
       if (expired) {
         try {
