@@ -358,6 +358,8 @@ function buildApp(options = {}) {
     return result;
   });
 
+  require('./execution-settings-routes').registerExecutionSettings(app, configService, runManager);
+
   app.post('/api/v1/config/validate', async (request) => configService.validate(request.body?.config || request.body || {}));
 
   app.put('/api/v1/config', async (request, reply) => {

@@ -113,7 +113,7 @@ class Orders {
       const orderId = id();
       const order = (
         await q.query(
-          "INSERT INTO platform_orders(id,user_id,quantity,need_oauth,unit_price,source,request_key,request_hash,template,attempt_limit,timeout_minutes,registration_region) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *",
+          "INSERT INTO platform_orders(id,user_id,quantity,need_oauth,unit_price,source,request_key,request_hash,template,attempt_limit,timeout_minutes,registration_region,resource_retry_limit) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *",
           [
             orderId,
             user.id,
@@ -127,6 +127,7 @@ class Orders {
             s.attempt_limit,
             s.timeout_minutes,
             region,
+            s.resource_retry_limit ?? 2,
           ],
         )
       ).rows[0];
@@ -164,7 +165,7 @@ class Orders {
     fail(row, "订单不存在", 404);
     const items = (
       await this.db.query(
-        "SELECT id,position,status,attempts,oauth_attempts,recovery_attempts,message,CASE WHEN status IN ('queued','oauth_pending','running','review') THEN available_at END AS next_retry_at,execution_started_at,execution_started_at+$2*interval '1 minute' AS execution_deadline_at,updated_at FROM platform_items WHERE order_id=$1 ORDER BY position",
+        "SELECT id,position,status,attempts,oauth_attempts,recovery_attempts,resource_replacements,message,CASE WHEN status IN ('queued','oauth_pending','running','review') THEN available_at END AS next_retry_at,execution_started_at,execution_started_at+$2*interval '1 minute' AS execution_deadline_at,updated_at FROM platform_items WHERE order_id=$1 ORDER BY position",
         [orderId, row.timeout_minutes],
       )
     ).rows;

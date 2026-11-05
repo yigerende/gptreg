@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS platform_items (
  UNIQUE(order_id,position)
 );
 ALTER TABLE platform_orders ADD COLUMN IF NOT EXISTS registration_region text;
+-- Existing orders keep their original budget; new orders snapshot the setting.
+ALTER TABLE platform_orders ADD COLUMN IF NOT EXISTS resource_retry_limit integer NOT NULL DEFAULT 0;
+ALTER TABLE platform_items ADD COLUMN IF NOT EXISTS resource_replacements integer NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS platform_attempts (
  id text PRIMARY KEY,item_id text NOT NULL REFERENCES platform_items(id),run_id text UNIQUE NOT NULL,
  stage text NOT NULL,status text NOT NULL DEFAULT 'starting',created_at timestamptz NOT NULL DEFAULT now(),finished_at timestamptz

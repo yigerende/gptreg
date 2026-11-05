@@ -52,6 +52,90 @@ function engine() {
     bindSessionAssetMailProvider: (p) => p,
   };
 }
+
+test('incomplete mailbox is replaced after cleanup, retired assets cannot deliver and deadline stays fixed', { skip: !connection }, async t => {
+  const f=await fixture(t),o=await f.create(); await f.worker.cycle();
+  const old=await f.item(o),a=f.asset();
+  a.security.passwordStatus='failed'; a.security.totpStatus='failed';
+  f.states.get(old.run_id).status='partial';
+  f.states.get(old.run_id).jobs=[{sessionAssetId:a.id,sessionState:{step:'verified',security:{failures:[{feature:'password',code:'EMAIL_OTP_TIMEOUT'}]}}}];
+  await f.worker.cycle();
+  let i=await f.item(o);
+  assert.equal(i.status,'queued'); assert.equal(i.run_id,null); assert.equal(i.resource_replacements,1);
+  assert.equal(+i.execution_started_at,+old.execution_started_at);
+  assert.equal((await f.orders.detail(f.user.id,o.id)).released,0);
+  await f.db.query("UPDATE platform_items SET available_at=now() WHERE id=$1",[i.id]);
+  await f.worker.cycle(); assert.equal(f.calls.length,1,'new execution waits for old resource cleanup');
+  await require('../src/platform/order-recovery').cleanupRuns(f.worker);
+  await f.worker.cycle(); i=await f.item(o);
+  assert.equal(f.calls.length,2); assert.notEqual(i.run_id,old.run_id);
+  assert.equal(await f.orders.finish(i.id,f.worker.credentials(f.asset(),false),undefined,old.run_id),null,'late old execution is fenced');
+  const fresh=f.asset(); f.states.get(i.run_id).jobs=[{sessionAssetId:fresh.id}];
+  await f.worker.cycle(); assert.equal((await f.item(o)).status,'delivered');
+  await f.db.query('UPDATE platform_run_cleanup SET finished_at=NULL,next_attempt_at=now() WHERE run_id=$1',[old.run_id]);
+  await require('../src/platform/order-recovery').cleanupRuns(f.worker);
+  assert.equal((await f.db.one('SELECT count(*)::int AS n FROM platform_quarantined_assets WHERE asset_id=$1',[fresh.id])).n,0);
+  assert.equal((await f.db.one('SELECT count(*)::int AS n FROM platform_quarantined_assets WHERE asset_id=$1',[a.id])).n,1);
+  assert.equal((await f.orders.detail(f.user.id,o.id)).charged,50);
+});
+
+test('mailbox replacement count survives worker restart and ends with one refund at its configured limit', { skip: !connection }, async t => {
+  const f=await fixture(t),o=await f.create(); await f.worker.cycle();
+  for(let n=0;n<3;n++) {
+    const i=await f.item(o);
+    f.states.get(i.run_id).jobs=[{status:'skipped',sessionState:{step:'email_otp_sent'},error:{code:'EMAIL_OTP_TIMEOUT'}}];
+    const worker=new OrderWorker(f.db,f.orders,f.manager);
+    await worker.cycle();
+    if(n<2) {
+      assert.equal((await f.item(o)).resource_replacements,n+1);
+      await require('../src/platform/order-recovery').cleanupRuns(worker);
+      await f.db.query('UPDATE platform_items SET available_at=now()');
+      await worker.cycle();
+    }
+  }
+  assert.equal(f.calls.length,3); assert.equal((await f.item(o)).status,'failed');
+  assert.equal((await f.orders.detail(f.user.id,o.id)).released,50);
+  assert.equal((await f.db.one("SELECT count(*)::int AS n FROM platform_ledger WHERE kind='release'")).n,1);
+});
+test('preflight waits without checkpoints do not block later mailbox replacement cleanup', { skip: !connection }, async t => {
+  const f = await fixture(t), o = await f.create();
+  const start = f.manager.start;
+  f.manager.start = async () => { throw Object.assign(new Error('busy'), { code: 'MAIN_TASK_CAPACITY' }); };
+  await f.worker.cycle();
+  const preflight = await f.item(o);
+  assert.equal(f.states.has(preflight.run_id), false);
+  f.manager.start = start;
+  await f.db.query('UPDATE platform_items SET available_at=now() WHERE id=$1', [preflight.id]);
+  await f.worker.cycle();
+  const old = await f.item(o);
+  f.states.get(old.run_id).jobs = [{ error: { code: 'EMAIL_OTP_TIMEOUT' }, sessionState: { step: 'email_otp_sent' } }];
+  await f.worker.cycle();
+  assert.equal((await f.item(o)).resource_replacements, 1);
+  assert.equal((await f.db.one('SELECT count(*)::int AS n FROM platform_run_cleanup WHERE run_id=$1', [preflight.run_id])).n, 0);
+  await require('../src/platform/order-recovery').cleanupRuns(f.worker);
+  await f.db.query('UPDATE platform_items SET available_at=now() WHERE id=$1', [old.id]);
+  await f.worker.cycle();
+  assert.equal(f.calls.length, 2);
+  assert.notEqual((await f.item(o)).run_id, old.run_id);
+});
+
+test('stalled retired resource cleanup cannot keep customer points frozen past the original deadline', { skip: !connection }, async t => {
+  const f = await fixture(t), o = await f.create();
+  await f.worker.cycle();
+  const old = await f.item(o);
+  f.states.get(old.run_id).jobs = [{ error: { code: 'EMAIL_OTP_TIMEOUT' } }];
+  await f.worker.cycle();
+  assert.equal((await f.item(o)).status, 'queued');
+  await f.db.query("UPDATE platform_items SET execution_started_at=now()-interval '1 day' WHERE id=$1", [old.id]);
+  await f.worker.cycle();
+  await f.worker.cycle();
+  assert.equal((await f.item(o)).status, 'failed');
+  assert.equal(f.calls.length, 1);
+  assert.equal((await f.orders.detail(f.user.id, o.id)).released, 50);
+  assert.equal((await f.db.one("SELECT count(*)::int AS n FROM platform_ledger WHERE kind='release'")).n, 1);
+  assert.equal((await f.db.one('SELECT count(*)::int AS n FROM platform_run_cleanup WHERE finished_at IS NULL')).n, 1);
+});
+
 async function fixture(t) {
   const setup = new Database(connection),
     schema = `flow_${crypto.randomBytes(8).toString("hex")}`;
@@ -270,6 +354,7 @@ test("email timeout before account creation retries safely while uncertain creat
   await f.worker.cycle();
   assert.equal((await f.item(o)).status,'queued');
   assert.match((await f.item(o)).message,/邮箱验证码等待超时/);
+  await require("../src/platform/order-recovery").cleanupRuns(f.worker);
   await f.db.query("UPDATE platform_items SET available_at=now()"); await f.worker.cycle();
   i=await f.item(o); let resumed=0;
   f.states.get(i.run_id).jobs=[{sessionState:{createAccountAttempt:{status:'uncertain'}}}];

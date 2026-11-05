@@ -1,4 +1,5 @@
 'use strict';
+const { normalizeRetryPolicy } = require('./execution-settings');
 
 const path = require('node:path');
 
@@ -388,6 +389,7 @@ function validateV2Config(input = {}, options = {}) {
   const normalized = {
     ...input,
     schemaVersion: CONFIG_SCHEMA_VERSION,
+    retryPolicy: normalizeRetryPolicy(input.retryPolicy),
     mail: {
       ...mail,
       provider: mailProvider,
@@ -467,14 +469,17 @@ function validateV2Config(input = {}, options = {}) {
         countries: firefoxCountries,
         maxPrice: firefoxMaxPrice,
       },
-      replacementBudget: asPositiveInteger(
+      sendRetryLimit: asBoundedInteger(sms.sendRetryLimit, 1, 'sms.sendRetryLimit', 0, 3),
+      replacementBudget: asBoundedInteger(
         sms.replacementBudget,
         DEFAULT_REPLACEMENT_BUDGET,
         'sms.replacementBudget',
+        0,
         MAX_REPLACEMENT_BUDGET,
       ),
       pollIntervalMs: asPositiveInteger(sms.pollIntervalMs, 5000, 'sms.pollIntervalMs', 60000),
       codeTimeoutMs: asPositiveInteger(sms.codeTimeoutMs, 120000, 'sms.codeTimeoutMs', 3600000),
+      oauthCodeTimeoutMs: asPositiveInteger(sms.oauthCodeTimeoutMs, 60000, 'sms.oauthCodeTimeoutMs', 300000),
       inventoryWaitMs: asPositiveInteger(sms.inventoryWaitMs, 600000, 'sms.inventoryWaitMs', 86400000),
       fraudGuardThreshold: asPositiveInteger(sms.fraudGuardThreshold, 5, 'sms.fraudGuardThreshold', 20),
       fraudGuardCooldownMs: asPositiveInteger(sms.fraudGuardCooldownMs, 900000, 'sms.fraudGuardCooldownMs', 86400000),

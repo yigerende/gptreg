@@ -78,6 +78,8 @@ function sessionAssetSearch(query: SessionAssetQuery = {}) {
 }
 
 export const endpoints = {
+  platformConfig: () => api<{ fields: import('./PlatformConfigPage').ExecutionSetting[] }>('/platform-config'),
+  savePlatformConfig: (values: Record<string, number | number[]>) => api<{ fields: import('./PlatformConfigPage').ExecutionSetting[] }>('/platform-config', { method: 'PUT', body: JSON.stringify({ values }) }),
   smsSettings: (provider: string) => api<any>(`/sms/settings/${encodeURIComponent(provider)}`),
   testSmsSettings: (provider: string, body: unknown) => api<any>(`/sms/settings/${encodeURIComponent(provider)}/test`, { method: 'POST', body: JSON.stringify(body) }),
   saveSmsSettings: (provider: string, body: unknown) => api<ConfigSnapshot>(`/sms/settings/${encodeURIComponent(provider)}`, { method: 'PUT', body: JSON.stringify(body) }),

@@ -70,6 +70,8 @@ test(
             (await request("GET", "/api/v1/config")).statusCode,
             401,
           );
+          assert.equal((await request("GET", "/api/v1/platform-config")).statusCode, 401);
+          assert.equal((await request("PUT", "/api/v1/platform-config", {values:{}})).statusCode, 401);
           assert.equal(
             (await request("GET", "/assets/AdminConsole-test.js")).statusCode,
             401,
@@ -99,6 +101,7 @@ test(
           bob = (
             await request("GET", "/api/user/v1/me", undefined, bobCookie)
           ).json();
+          assert.equal((await request("PUT", "/api/v1/platform-config", {values:{'sms.sendRetryLimit':0}}, aliceCookie)).statusCode, 403);
           for (const route of [
             "/admin",
             "/admin/engine",
@@ -112,6 +115,8 @@ test(
             "/assets/AdminEntry-test.js",
             "/api/admin/v1/settings",
             "/api/v1/health",
+            "/api/v1/platform-config",
+            "/admin/engine/platform-config",
           ]) {
             for (const method of ["GET", "HEAD"]) {
               assert.equal(

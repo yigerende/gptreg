@@ -119,6 +119,8 @@ const PHASE_LABELS: Record<string, string> = {
   waiting_email_baseline: '等待邮件基线',
   waiting_email_provider: '等待邮箱服务',
   waiting_email_timeout: '邮件超时',
+  waiting_security_retry: '重试密码／2FA',
+  waiting_security_email_retry: '等待补密码邮件重试',
   waiting_mail_rental: '等待租用邮箱',
   waiting_mail_rental_watch: '等待挂租库存',
   waiting_mailbox_cleanup: '邮箱清理中',

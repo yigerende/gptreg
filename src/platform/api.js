@@ -285,6 +285,7 @@ function registerApi(app, db, orders, crypt) {
         "user_registration_concurrency",
         "max_open_orders",
         "attempt_limit",
+        "resource_retry_limit",
         "timeout_minutes",
         "template",
         "smtp",
@@ -323,6 +324,8 @@ function registerApi(app, db, orders, crypt) {
       integer(s.user_registration_concurrency, 1, 100, "单用户注册并发数");
       integer(s.max_open_orders, 1, 20, "订单上限");
       integer(s.attempt_limit, 1, 5, "尝试次数");
+      s.resource_retry_limit ??= 2;
+      integer(s.resource_retry_limit, 0, 10, "换邮箱次数");
       integer(s.timeout_minutes, 2, 120, "执行超时");
       fail(
         typeof s.site_name === "string" &&

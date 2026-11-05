@@ -82,7 +82,7 @@ class OrderWorker {
     this.cleanupPending = cleanupRuns(this).catch(() => {}).finally(() => { this.cleanupPending = null; });
   }
   async current(itemId) {
-    return this.db.one(`SELECT i.*,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.cancel_requested,
+    return this.db.one(`SELECT i.*,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.resource_retry_limit,o.cancel_requested,
       COALESCE(LEAST(i.execution_started_at,(SELECT min(a.created_at) FROM platform_attempts a WHERE a.item_id=i.id)),i.attempt_started_at) AS execution_started_at
       FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.id=$1`, [itemId]);
   }
@@ -175,7 +175,7 @@ class OrderWorker {
     await this.syncSold();
     const running = (
       await this.db.query(
-        "SELECT i.*,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.cancel_requested FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.status IN ('running','review')",
+        "SELECT i.*,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.resource_retry_limit,o.cancel_requested FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.status IN ('running','review')",
       )
     ).rows;
     const cleanup = (await this.db.query("SELECT run_id FROM platform_run_cleanup WHERE finished_at IS NULL")).rows;
@@ -228,7 +228,7 @@ class OrderWorker {
   }
   async startNext(excludedUsers = []) {
     const candidate = await this.db.one(
-      "SELECT i.*,o.template,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.created_at AS order_created_at,o.user_id FROM platform_items i JOIN platform_orders o ON o.id=i.order_id JOIN platform_users u ON u.id=o.user_id WHERE i.status IN ('queued','oauth_pending') AND i.available_at<=now() AND NOT o.cancel_requested AND u.status='active' AND NOT (u.id=ANY($1::text[])) ORDER BY o.last_scheduled_at NULLS FIRST,o.created_at,i.position LIMIT 1",
+      "SELECT i.*,o.template,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.resource_retry_limit,o.created_at AS order_created_at,o.user_id FROM platform_items i JOIN platform_orders o ON o.id=i.order_id JOIN platform_users u ON u.id=o.user_id WHERE i.status IN ('queued','oauth_pending') AND i.available_at<=now() AND NOT EXISTS (SELECT 1 FROM platform_run_cleanup c WHERE c.item_id=i.id AND c.finished_at IS NULL) AND NOT o.cancel_requested AND u.status='active' AND NOT (u.id=ANY($1::text[])) ORDER BY o.last_scheduled_at NULLS FIRST,o.created_at,i.position LIMIT 1",
       [excludedUsers],
     );
     if (!candidate) return false;
@@ -322,7 +322,7 @@ class OrderWorker {
       }
       // start() fails before launching a job: safe to retry within the saved budget.
       const fresh = await this.db.one(
-        "SELECT i.*,o.attempt_limit,o.timeout_minutes,o.cancel_requested FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.id=$1",
+        "SELECT i.*,o.attempt_limit,o.timeout_minutes,o.resource_retry_limit,o.cancel_requested FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.id=$1",
         [candidate.id],
       );
       if (failure.wait && !fresh.cancel_requested) {
@@ -401,6 +401,12 @@ class OrderWorker {
       [item.run_id],
     );
     const used = item.stage === "oauth" ? item.oauth_attempts : item.attempts;
+    if (!item.cancel_requested && !expired(item) && used >= item.attempt_limit && item.resource_retry_limit > 0) {
+      let state;
+      try { state = this.manager.load(item.run_id); } catch {}
+      if (state && TERMINAL.has(state.status) && !(state.jobs || []).some(j => !j.sessionAssetId && !j.assetId && creationUncertain(j)))
+        return this.replaceResource(item, state, `${message}，当前资源重试已达上限`);
+    }
     if (item.cancel_requested || expired(item) || used >= item.attempt_limit) {
       await this.orders.finish(
         item.id,
@@ -452,6 +458,36 @@ class OrderWorker {
       await this.orders.refresh(q, o.id);
     });
   }
+  async replaceResource(item, state, reason) {
+    // Orders created before this feature retain their original attempt budget.
+    if (!item.resource_retry_limit && !item.asset_id)
+      return this.retryOrFinish(item, reason);
+    if (item.cancel_requested || expired(item) || item.resource_replacements >= item.resource_retry_limit)
+      return this.refund(item, `${reason}，换邮箱次数已用尽或执行时限已到`);
+    if (this.manager.activeRun(item.run_id)) return;
+    await this.orders.withItem(item.id, async (q, order, current) => {
+      if (current.run_id !== item.run_id || ITEM_TERMINAL.has(current.status)) return;
+      if (await this.orders.settlement(q, order, current)) return;
+      if (order.cancel_requested || expired({ ...current, timeout_minutes: order.timeout_minutes })) {
+        await this.orders.release(q, order, current, order.cancel_requested ? 'cancelled' : 'failed', '执行结束，未交付积分已退回');
+        await this.orders.queueCleanup(q, current);
+        await this.orders.refresh(q, order.id);
+        return;
+      }
+      if (current.resource_replacements >= order.resource_retry_limit) return;
+      const ids = [...new Set([current.asset_id, ...(state.jobs || []).map(j => j.sessionAssetId || j.assetId)].filter(Boolean))];
+      for (const assetId of ids) await q.query(`INSERT INTO platform_quarantined_assets(asset_id,item_id,run_id,reason)
+        SELECT $1,$2,$3,'资源重试已结束，旧账号禁止自动交付'
+        WHERE NOT EXISTS(SELECT 1 FROM platform_accounts WHERE asset_id=$1) ON CONFLICT DO NOTHING`, [assetId,current.id,current.run_id]);
+      await q.query("INSERT INTO platform_run_cleanup(run_id,item_id) VALUES($1,$2) ON CONFLICT DO NOTHING", [current.run_id,current.id]);
+      await q.query("UPDATE platform_attempts SET status='finished',finished_at=COALESCE(finished_at,now()) WHERE run_id=$1", [current.run_id]);
+      await q.query(`UPDATE platform_items SET status='queued',run_id=NULL,asset_id=NULL,stage='register',
+        attempts=0,oauth_attempts=0,recovery_attempts=0,resource_replacements=resource_replacements+1,
+        available_at=now()+interval '30 seconds',updated_at=now(),message=$2 WHERE id=$1`,
+      [current.id,`${reason}，正在释放旧资源并更换邮箱 ${current.resource_replacements+1}/${order.resource_retry_limit}`]);
+      await this.orders.refresh(q, order.id);
+    });
+  }
   async reconcile(item, allowResume = true) {
     // Re-read after acquiring the per-item executor lock. Financial evidence is
     // authoritative even when an older worker overwrote the terminal status.
@@ -469,6 +505,8 @@ class OrderWorker {
       else this.costSyncAt.delete(item.run_id);
     }
     if (active) {
+      const message = require("./execution-progress").executionProgress(state, item);
+      await this.db.query("UPDATE platform_items SET message=$3,updated_at=now() WHERE id=$1 AND run_id=$2 AND status='running' AND message IS DISTINCT FROM $3", [item.id,item.run_id,message]);
       if (expired(item)) await this.refund(item, "执行超过总时限");
       return;
     }
@@ -507,7 +545,10 @@ class OrderWorker {
       if (item.need_oauth && item.stage === "register" && this.credentials(asset, false))
         return this.queueNext(item, "oauth_pending", "账号已注册，等待 OAuth 授权");
       if (item.stage === "oauth") return this.retryOrFinish(item, "OAuth 授权未完成");
-      // Restore security on this account; never replace an already-created one.
+      const mailFailure = jobs.flatMap(j => j.sessionState?.security?.failures || []).find(require("../transport-errors").isEmailDeliveryFailure);
+      if (mailFailure) return this.replaceResource(item, state, mailFailure.feature === 'totp' ? "2FA 安全验证邮箱验证码未收到" : "补密码邮箱验证码未收到");
+      if (item.recovery_attempts >= item.attempt_limit)
+        return this.replaceResource(item, state, "账号安全设置重试已达上限");
       return this.recover(item, "账号安全设置未完成", allowResume);
     }
     if (jobs.some(creationUncertain))
@@ -515,6 +556,8 @@ class OrderWorker {
     // targetTouchedAt only means registration was started (e.g. password sent).
     // It is not evidence that create_account succeeded. An OTP timeout before
     // account creation may retry within the original time/attempt budget.
+    if (item.resource_retry_limit > 0 || require("../transport-errors").isEmailDeliveryFailure({ code: failure.code }))
+      return this.replaceResource(item, state, failure.detail);
     await this.retryOrFinish(item, failure.detail);
   }
   async close() {

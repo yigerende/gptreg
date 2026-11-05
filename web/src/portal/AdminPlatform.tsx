@@ -318,6 +318,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                     "user_registration_concurrency",
                     "max_open_orders",
                     "attempt_limit",
+                    "resource_retry_limit",
                     "timeout_minutes",
                     "template",
                   ]
@@ -401,8 +402,9 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                     100,
                   ],
                   ["max_open_orders", "每用户未完成订单上限", 1, 20],
-                  ["attempt_limit", "每阶段最大尝试次数", 1, 5],
-                  ["timeout_minutes", "每次执行时限（分钟）", 2, 120],
+                  ["attempt_limit", "启动／授权最大尝试次数（含首次）", 1, 5],
+                  ["resource_retry_limit", "未交付账号最多换邮箱次数（不含首次）", 0, 10],
+                  ["timeout_minutes", "单个账号总时限（含换邮箱／恢复，分钟）", 2, 120],
                 ].map(([key, label, min, max]) => (
                   <label key={String(key)}>
                     {label}

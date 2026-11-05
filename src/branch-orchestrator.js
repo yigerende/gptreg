@@ -1,4 +1,5 @@
 'use strict';
+const executionSettings = require('./execution-settings');
 
 const crypto = require('node:crypto');
 
@@ -100,6 +101,7 @@ const RETRY_BACKOFF_PHASE = 'waiting_retry_backoff';
 // already saved. Worth retrying in-run: the account is safe either way, so the
 // only thing at stake is a second round trip.
 const SECURITY_RETRY_PHASE = 'waiting_security_retry';
+const SECURITY_EMAIL_RETRY_PHASE = 'waiting_security_email_retry';
 // A pool can be exhausted simply because more Workers than exits arrived at
 // once — with a 20-Worker ceiling that is the normal case, not an operator
 // problem. It retries on a long ladder so the losers pick up exits as the
@@ -244,9 +246,8 @@ const PROXY_POOL_REFRESH_COOLDOWN_MS = 30000;
 const PROXY_ROTATION_CYCLE_DELAY_MS = 250;
 
 // In-run retry policy for the waits a Worker can recover from by itself.
-// Module constants rather than config: every config field feeds the checkpoint
-// fingerprint, so making these tunable would invalidate open checkpoints on
-// every tweak.
+// Defaults are overlaid by the task's saved retryPolicy. Tuning is snapshotted
+// independently from the identity/configuration fingerprint.
 // `maxRetries` counts retries only: a job runs once, then up to maxRetries more times.
 const RETRY_POLICIES = {
   // The challenged exit is banned and unbound before this policy is read, so
@@ -266,6 +267,7 @@ const RETRY_POLICIES = {
   [PROXY_CONTINUITY_PHASE]: { delaysMs: [250], maxRetries: 0, onExhausted: 'restart_on_fresh_exit' },
   [TRANSIENT_PHASE]: { delaysMs: [2000, 5000, 15000, 45000, 120000], maxRetries: 5 },
   [SECURITY_RETRY_PHASE]: { delaysMs: [3000, 10000, 30000], maxRetries: 3 },
+  [SECURITY_EMAIL_RETRY_PHASE]: { delaysMs: [5000], maxRetries: 1 },
   // Slower than the proxy ladders on purpose: each attempt may buy a number,
   // so a hot loop here costs real money.
   [PHONE_CONTINUITY_PHASE]: { delaysMs: [3000, 12000, 30000], maxRetries: 3 },
@@ -643,6 +645,7 @@ function makeInitialBranchState(config, plan, options = {}) {
     taskKind: plan.taskKind,
     runId: options.runId || `branch-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`,
     configFingerprint: configFingerprint(normalized),
+    executionSettings: executionSettings.snapshot(normalized),
     runPlan: clone(plan),
     status: 'initialized',
     phase: 'initializing',
@@ -1466,7 +1469,9 @@ function ensureBranchRuntimeState(state, config) {
 }
 
 function makeContext(har, state, config, options = {}) {
-  const normalized = validateV2Config(config, options);
+  const normalized = validateV2Config(state.executionSettings
+    ? executionSettings.applySnapshot(clone(config), state.executionSettings)
+    : config, options);
   ensureBranchRuntimeState(state, normalized);
   // Paused runs also enter here through cancellation, without initializeJobs.
   // Apply newer compaction rules before any cleanup checkpoint is written.
@@ -1562,9 +1567,9 @@ function makeContext(har, state, config, options = {}) {
   };
   context.random = typeof options.random === 'function' ? options.random : Math.random;
   context.mailRentalRetryDelayMs = Math.max(1, Number(options.mailRentalRetryDelayMs || MAIL_RENTAL_RETRY_DELAY_MS));
-  // Overridable so tests can collapse the backoff ladder; production always
-  // uses the module defaults.
-  context.retryPolicies = options.retryPolicies || RETRY_POLICIES;
+  // Tests can collapse the backoff ladder; production uses the saved tuning
+  // overlaid on defaults, including resumes outside the web run manager.
+  context.retryPolicies = options.retryPolicies || Object.fromEntries(Object.entries(RETRY_POLICIES).map(([phase, policy]) => [phase, { ...policy, ...context.config.retryPolicy?.[phase] }]));
   context.action = () => options.control?.requestedAction?.() || state.control?.requestedAction || '';
   context.signal = () => options.control?.signal || context.fatalAbortController.signal;
   return context;
@@ -6808,7 +6813,7 @@ function ensureOAuthPhoneCodeDeadline(lease, context, fallbackStartedAt = '') {
       || '',
   ));
   const startedAt = Number.isFinite(sentAt) ? sentAt : nowMs(context);
-  lease.codeDeadlineAt = new Date(startedAt + OAUTH_PHONE_CODE_TIMEOUT_MS).toISOString();
+  lease.codeDeadlineAt = new Date(startedAt + (context.config.sms.oauthCodeTimeoutMs ?? OAUTH_PHONE_CODE_TIMEOUT_MS)).toISOString();
   return lease.codeDeadlineAt;
 }
 
@@ -7073,7 +7078,7 @@ async function pollPhoneCode(job, context, deadlineAt = null) {
     if (code) return code;
     const remainingMs = deadline - nowMs(context);
     if (remainingMs <= 0) break;
-    if (!await waitControlled(Math.min(PHONE_POLL_INTERVAL_MS, remainingMs), context)) break;
+    if (!await waitControlled(Math.min(context.config.sms.pollIntervalMs ?? PHONE_POLL_INTERVAL_MS, remainingMs), context)) break;
     // The last wait ends on the deadline itself, and the loop used to exit
     // there without looking: up to a full poll interval of arrivals was never
     // read, and a code that landed in it was only found by the cleanup that
@@ -7313,7 +7318,7 @@ async function reconcileAmbiguousPhoneValidation(job, runner, runnerState, conte
     lease.code = '';
     lease.codeReceived = false;
     await context.checkpoint('target_phone_validation_rejected');
-    if (scope !== 'oauth' && job.sms.sendRetries < 1) {
+    if (scope !== 'oauth' && job.sms.sendRetries < (context.config.sms.sendRetryLimit ?? 1)) {
       await resendSameNumber(job, runner, runnerState, context, 'confirmed_invalid_phone_code');
       return;
     }
@@ -7444,7 +7449,7 @@ async function processPhoneLease(job, runner, runnerState, context, scope) {
         }
       }
       code = await pollPhoneCode(job, context, scope === 'oauth' ? job.sms.current.codeDeadlineAt : null);
-      if (!code && scope !== 'oauth' && job.sms.sendRetries < 1) {
+      while (!code && scope !== 'oauth' && job.sms.sendRetries < (context.config.sms.sendRetryLimit ?? 1)) {
         await resendSameNumber(job, runner, runnerState, context, 'sms_timeout');
         code = await pollPhoneCode(job, context);
       }
@@ -7466,7 +7471,7 @@ async function processPhoneLease(job, runner, runnerState, context, scope) {
     try {
       await runner.validatePhone(runnerState, code);
     } catch (error) {
-      if (scope !== 'oauth' && INVALID_PHONE_CODE_ERRORS.has(smsErrorCode(error)) && job.sms.sendRetries < 1) {
+      if (scope !== 'oauth' && INVALID_PHONE_CODE_ERRORS.has(smsErrorCode(error)) && job.sms.sendRetries < (context.config.sms.sendRetryLimit ?? 1)) {
         job.sms.current.effect = null;
         await resendSameNumber(job, runner, runnerState, context, 'invalid_phone_code');
         continue;
@@ -7645,6 +7650,11 @@ async function establishSession(job, worker, context, options = {}) {
   const security = options.security || {};
   let state = job.sessionState;
   if (state) migrateSessionCheckpoint(state, asset);
+  if (state && job.retry?.phase === SECURITY_EMAIL_RETRY_PHASE && !job.securityEmailExhausted) {
+    // Hydration restores the asset's last failed transaction. Re-arm after
+    // hydration so the next send cannot reuse an expired OTP boundary.
+    prepareAssetSecurityRecovery(state, security);
+  }
   if (state && options.securityRetryOnly === true && securityWorkRequested(security)) {
     await rebindSecurityForProxyChange(job, state, asset, worker, context);
   }
@@ -8616,6 +8626,30 @@ function armSecurityRetry(job) {
  * retrying it would just fail the same way.
  */
 async function scheduleSecurityRetry(job, worker, context) {
+  const security = job.sessionState?.security;
+  const emailFailure = (security?.failures || []).find(failure => failure.feature === 'password'
+    && security.passwordStatus !== 'configured' && require('./transport-errors').isEmailDeliveryFailure(failure));
+  if (emailFailure) {
+    const limit = retryPolicyForWait(SECURITY_EMAIL_RETRY_PHASE, context).maxRetries;
+    // This counter survives operator/platform resumes and is separate from
+    // network retries. An empty inbox is not evidence of a bad proxy.
+    if (Number(job.securityEmailRetries || 0) >= limit) {
+      job.securityEmailExhausted = true;
+      return false;
+    }
+    if (!await scheduleRetryForWait(job, SECURITY_EMAIL_RETRY_PHASE, worker, context, emailFailure)) return false;
+    job.securityEmailRetries = Number(job.securityEmailRetries || 0) + 1;
+    security.passwordStatus = 'retry_pending';
+    security.passwordTransaction = { ...(security.passwordTransaction || {}), step: 'retry_pending', emailBoundary: null };
+    job.status = 'waiting';
+    job.phase = SECURITY_EMAIL_RETRY_PHASE;
+    job.completedAt = '';
+    event(context.state, 'security_mail_retry_scheduled', {
+      jobId: job.id, attempt: job.securityEmailRetries, maxRetries: limit,
+      message: 'Password email code did not arrive; retrying this mailbox within its separate delivery budget',
+    }, context);
+    return true;
+  }
   if (!armSecurityRetry(job)) return false;
   if (!await scheduleRetryForWait(job, SECURITY_RETRY_PHASE, worker, context, null)) return false;
   job.status = 'waiting';
@@ -8939,7 +8973,10 @@ async function bindJobWorkerAffinity(job, worker, context) {
 }
 
 function retryPolicyForWait(phase, context) {
-  return (context?.retryPolicies || RETRY_POLICIES)[phase] || null;
+  const base = (context?.retryPolicies || RETRY_POLICIES)[phase];
+  if (!base) return null;
+  if (context?.retryPolicies) return base;
+  return { ...base, ...context?.config?.retryPolicy?.[phase] };
 }
 
 function retryDelayMs(policy, attempt, context) {
@@ -10515,6 +10552,7 @@ const LANE_HOLDING_WAIT_PHASES = new Set([
   PROXY_ROTATION_PHASE,
   PROXY_CONTINUITY_PHASE,
   SECURITY_RETRY_PHASE,
+  SECURITY_EMAIL_RETRY_PHASE,
 ]);
 
 function laneHoldingWait(job) {

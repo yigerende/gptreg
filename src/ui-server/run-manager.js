@@ -1752,6 +1752,7 @@ class RunManager extends EventEmitter {
 
   configForState(state) {
     const base = this.config();
+    if (state.executionSettings) require('../execution-settings').applySnapshot(base, state.executionSettings);
     if (state.smsConfig) base.sms = structuredClone(state.smsConfig);
     const plan = state.runPlan ? this.bindStateMailProvider(state) : null;
     const effective = plan ? applyRunPlan(base, plan) : base;
