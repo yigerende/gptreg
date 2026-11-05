@@ -684,6 +684,9 @@ describe('console shell', () => {
     fireEvent.click(screen.getByRole('link', { name: '登录态' }));
     expect(await screen.findByRole('heading', { name: '登录态资产' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: `OAuth ${asset.email}` }));
+    const confirmProxy = await screen.findByRole('button', { name: '确认代理并继续' });
+    await waitFor(() => expect(confirmProxy).toBeEnabled());
+    fireEvent.click(confirmProxy);
     await waitFor(() => expect(oauthRequests).toContainEqual([asset.id]));
   });
 
@@ -1218,76 +1221,36 @@ describe('console shell', () => {
     await waitFor(() => expect(screen.getByText('iCloud mailbox API')).toBeInTheDocument());
   });
 
-  it('refreshes the SMS balance for the selected provider instead of reusing the old preflight value', async () => {
-    const serviceProviders: string[] = [];
-    const baseConfig = payloads['/api/v1/config'] as any;
-    const configPayload = {
-      ...baseConfig,
-      config: {
-        ...baseConfig.config,
-        sms: { provider: 'smsbower', maxPrice: 0.03, firefox: { baseUrl: 'https://firefox.fun/yhapi.ashx' } },
-      },
-    };
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+  it('tests the selected SMS vendor with its own balance and selectable countries', async () => {
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost');
       let payload: any = payloads[url.pathname] || {};
-      if (url.pathname === '/api/v1/config') payload = configPayload;
-      if (url.pathname === '/api/v1/services') {
-        const provider = url.searchParams.get('smsProvider') || 'smsbower';
-        serviceProviders.push(provider);
-        payload = {
-          services: [],
-          sms: { name: provider, status: 'online', balance: provider === 'firefox' ? 1.234 : 7.547, currency: provider === 'firefox' ? 'CNY' : 'USD' },
-        };
+      if (url.pathname.startsWith('/api/v1/sms/settings/')) {
+        const provider = url.pathname.includes('/firefox') ? 'firefox' : 'smsbower';
+        if (url.pathname.endsWith('/test')) {
+          requests.push(provider);
+          payload = { ok: true, message: '连接成功', balance: provider === 'firefox' ? 1.234 : 7.547, currency: provider === 'firefox' ? 'CNY' : 'USD', countries: [{ id: 'usa', code: 'usa', name: '美国' }], market: null };
+        } else payload = { provider, baseUrl: 'https://example.test/sms', apiKeyConfigured: true, service: 'dr', countries: [], maxPrice: 0.03 };
       }
-      if (url.pathname === '/api/v1/sms/market') {
-        payload = {
-          provider: 'smsbower',
-          currency: 'USD',
-          service: { code: 'dr', name: 'OpenAI' },
-          country: { id: 151, name: 'Chile' },
-          cheapestPrice: 0.031,
-          offers: 3,
-          lowestOffers: [{ providerId: 'market-1', price: 0.031, count: 12 }],
-          checkedAt: new Date().toISOString(),
-        };
-      }
-      if (url.pathname === '/api/v1/sms/firefox/countries') {
-        payload = {
-          countries: [
-            { code: 'usa', name: '美国', englishName: 'United States', dialingCode: '1', price: 0.28 },
-            { code: 'chl', name: '智利', englishName: 'Chile', dialingCode: '56', price: 0.31 },
-          ],
-        };
-      }
-      if (url.pathname === '/api/v1/preflight') {
-        payload = {
-          ...payloads['/api/v1/preflight'] as any,
-          sms: { ...(payloads['/api/v1/preflight'] as any).sms, provider: 'smsbower', balance: 7.547 },
-        };
-      }
-      return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify(payload));
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><Tooltip.Provider><Router><App /></Router></Tooltip.Provider></QueryClientProvider>);
-
-    const dialog = await (async () => {
-      fireEvent.click(await screen.findByRole('button', { name: '短信配置' }));
-      return screen.findByRole('dialog');
-    })();
-    expect(await within(dialog).findByText('$7.547')).toBeInTheDocument();
-    expect(await within(dialog).findByText('$0.031')).toBeInTheDocument();
-    expect(within(dialog).queryByText('本次短信预计')).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: '短信配置' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByLabelText('短信 API Key');
+    fireEvent.click(within(dialog).getByRole('button', { name: '测试连接' }));
+    expect(await within(dialog).findByText('7.547 USD')).toBeInTheDocument();
+    await waitFor(() => expect(within(dialog).getByRole('radio', { name: '火狐狸' })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole('radio', { name: '火狐狸' }));
-    await waitFor(() => expect(serviceProviders).toContain('firefox'));
-    expect(await within(dialog).findByText('¥1.234')).toBeInTheDocument();
-    expect(within(dialog).queryByText('$7.547')).not.toBeInTheDocument();
-    const countryTrigger = within(dialog).getByRole('button', { name: '火狐狸国家范围' });
-    expect(countryTrigger).toHaveTextContent('默认：全部国家 · 自动最低价');
-    fireEvent.click(countryTrigger);
-    expect(within(dialog).getByRole('group', { name: '火狐狸国家选择' })).toBeInTheDocument();
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: '测试连接' })).toBeEnabled());
+    fireEvent.click(within(dialog).getByRole('button', { name: '测试连接' }));
+    expect(await within(dialog).findByText('1.234 CNY')).toBeInTheDocument();
+    expect(requests).toEqual(['smsbower', 'firefox']);
+    expect(within(dialog).queryByText('7.547 USD')).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('checkbox', { name: /美国/ }));
-    await waitFor(() => expect(countryTrigger).toHaveTextContent('美国'));
+    expect(within(dialog).getByRole('checkbox', { name: /美国/ })).toBeChecked();
   });
 
   it('switches proxy API providers and builds the selected source from country, count, and protocol controls', async () => {
@@ -2161,7 +2124,7 @@ describe('console shell', () => {
     await waitFor(() => expect(catalogReads).toBeGreaterThan(readsBeforePull));
   });
 
-  it('adjusts OAuth Worker concurrency while keeping the maintenance proxy editor hidden', async () => {
+  it('adjusts OAuth Worker concurrency while keeping country/fixed proxy selection visible', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), 'http://localhost');
       return new Response(JSON.stringify(payloads[url.pathname] || {}), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -2182,8 +2145,8 @@ describe('console shell', () => {
     fireEvent.wheel(workerInput, { deltaY: 100 });
     expect(workerInput).toHaveValue(MAX_WORKER_CONCURRENCY - 1);
     expect(screen.queryByRole('group', { name: 'Worker 2 代理类型' })).not.toBeInTheDocument();
-    fireEvent.change(mailboxInput, { target: { value: 'one@example.test\ntwo@example.test\nthree@example.test' } });
-    await waitFor(() => expect(screen.queryByRole('group', { name: 'Worker 2 代理类型' })).not.toBeInTheDocument());
+    fireEvent.change(mailboxInput, { target: { value: ['one', 'two', 'three'].map((n) => `${n}@example.test----ExamplePassword!----JBSWY3DPEHPK3PXP`).join('\n') } });
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Worker 2 代理类型' })).toBeInTheDocument());
     expect(workerInput).toHaveValue(MAX_WORKER_CONCURRENCY - 1);
     fireEvent.wheel(workerInput, { deltaY: -100 });
     expect(workerInput).toHaveValue(MAX_WORKER_CONCURRENCY);
@@ -2979,7 +2942,7 @@ describe('console shell', () => {
       await waitFor(() => expect(requests).toEqual([expectedSelection, expectedSelection]));
       await waitFor(() => expect(quantity).toHaveAttribute('max', '1'));
       expect(exportButton).toBeDisabled();
-      expect(clickSpy).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
       fireEvent.change(quantity, { target: { value: '1' } });
       await waitFor(() => expect(exportButton).toBeEnabled());
       fireEvent.click(exportButton);
@@ -3072,10 +3035,16 @@ describe('console shell', () => {
       if (['/api/v1/artifacts/cpa/credentials', '/api/v1/artifacts/cpa/sub2api'].includes(url.pathname)) {
         calls.push({ path: url.pathname, body: JSON.parse(String(init?.body || '{}')) });
         if (url.pathname === '/api/v1/artifacts/cpa/credentials') {
-          return new Response('a@b.com----pw----SECRET', {
+          const content = 'a@b.com----pw----SECRET\nc@d.com----pw----SECRET\n';
+          const response = new Response(content, {
             status: 200,
             headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': 'attachment; filename="gpt-re-selected-cpa-credentials.txt"' },
           });
+          // jsdom's Blob lacks text(); provide the browser method used by batching.
+          const blob = await response.blob();
+          Object.assign(blob, { text: async () => content });
+          response.blob = async () => blob;
+          return response;
         }
         payload = { accounts: [] };
       }
@@ -3098,7 +3067,7 @@ describe('console shell', () => {
       fireEvent.click(await screen.findByRole('button', { name: '按数量导出邮箱凭证' }));
       const selection = { items: ['first', 'second'].map((name) => ({ runId: base.runId, jobId: `job-${name}`, key: `${name}.json` })), unexportedOnly: true };
       await waitFor(() => expect(calls).toEqual([{ path: '/api/v1/artifacts/cpa/credentials', body: selection }]));
-      expect(clickSpy).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(clickSpy).toHaveBeenCalledTimes(1));
 
       fireEvent.click(screen.getByRole('combobox', { name: '导出格式' }));
       fireEvent.click(await screen.findByRole('option', { name: 'sub' }));

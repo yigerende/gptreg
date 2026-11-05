@@ -8,6 +8,7 @@ const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
 
 const {
+  MAX_WORKER_CONCURRENCY,
   REMOTE_MAIL_PROVIDERS,
   REMOTE_MAILBOX_PROVIDERS,
   secretFromEnv,
@@ -54,6 +55,7 @@ const {
   requiresSmsPreflight,
 } = require('../run-plan');
 const { createSmsProvider } = require('../sms-provider');
+const { defaultOAuthAssignments, assertOAuthProxySelection, ProxyClaims } = require('../oauth-proxies');
 const {
   balanceAccountFingerprint,
   currencyName,
@@ -702,6 +704,7 @@ class RunManager extends EventEmitter {
     this.configService = options.configService;
     this.logStore = options.logStore;
     this.proxyService = options.proxyService || new ProxyService(options.configService);
+    this.proxyClaims = new Map();
     this.harPath = options.harPath || '';
     // The one seam the sub2api push has: tests drive the gateway through this
     // rather than binding a real listener on 8080.
@@ -1490,6 +1493,20 @@ class RunManager extends EventEmitter {
 
   runConfiguration(planInput = {}) {
     const base = this.config();
+    // Modern registration callers share the same default pool selection as
+    // OAuth and the launch page. Keep explicit v1/checkpoint semantics intact.
+    if (['register_session', 'register_oauth'].includes(planInput.taskKind) && Number(planInput.schemaVersion) >= 2 && !planInput.proxyAssignments?.length) {
+      const workers = Number(planInput.workerConcurrency ?? base.workers.maxConcurrency);
+      if (!Number.isInteger(workers) || workers < 1 || workers > MAX_WORKER_CONCURRENCY) throw new HttpError(400, '注册 Worker 数量无效');
+      planInput = { ...planInput, proxyAssignments: defaultOAuthAssignments(workers, this.proxyService.list()) };
+    }
+    if (planInput.taskKind === 'oauth') {
+      const count = planInput.oauthSource?.accounts?.length || planInput.oauthSource?.assetIds?.length || 1;
+      const workers = Number(planInput.workerConcurrency ?? Math.min(base.workers.maxConcurrency, count));
+      if (!Number.isInteger(workers) || workers < 1 || workers > MAX_WORKER_CONCURRENCY || workers > count) throw new HttpError(400, 'OAuth Worker 数量无效或超过账号数');
+      if (!planInput.proxyAssignments?.length) planInput = { ...planInput, proxyAssignments: defaultOAuthAssignments(workers, this.proxyService.list()) };
+      assertOAuthProxySelection(planInput);
+    }
     const plan = this.bindSessionAssetMailProvider(normalizeRunPlan(planInput, base));
     if (Array.isArray(planInput.mailAliasDomains)) {
       plan.mailAliasDomains = [...planInput.mailAliasDomains];
@@ -1498,6 +1515,7 @@ class RunManager extends EventEmitter {
   }
 
   proxySnapshot(plan) {
+    assertOAuthProxySelection(plan);
     const taskKind = String(plan.taskKind || '');
     const sourceTask = taskKind === 'oauth' || taskKind === 'session_refresh';
     const configuredAssignments = Array.isArray(plan.proxyAssignments) ? plan.proxyAssignments : [];
@@ -1683,6 +1701,7 @@ class RunManager extends EventEmitter {
 
   configForState(state) {
     const base = this.config();
+    if (state.smsConfig) base.sms = structuredClone(state.smsConfig);
     const plan = state.runPlan ? this.bindStateMailProvider(state) : null;
     const effective = plan ? applyRunPlan(base, plan) : base;
     // Applying a plan can turn on required health checks (for example the v3
@@ -2907,6 +2926,7 @@ class RunManager extends EventEmitter {
         config = applyRunPlan(config, plan);
       }
       const state = makeInitialBranchState(config, plan, { runId: startOptions.runId ? safeRunId(startOptions.runId) : generatedRunId() });
+      state.smsConfig = structuredClone(config.sms);
       state.runPlan = plan;
       if (proxyResourceSnapshot) state.proxyResourceSnapshot = proxyResourceSnapshot;
       // Keep the preflight plan as the original checkpoint baseline. The live
@@ -2968,8 +2988,13 @@ class RunManager extends EventEmitter {
       const har = this.protocolCapture(state, config);
       const initialProxyEntries = this.proxyEntriesForState(state, config);
       active.proxyEntries = Array.isArray(initialProxyEntries) ? initialProxyEntries : [];
+      const usedProxyIds = new ProxyClaims(this.proxyClaims, state.runId);
+      for (const worker of state.workers || []) {
+        if (worker.proxyId && worker.proxy?.resourceKind !== 'maintenance') usedProxyIds.add(worker.proxyId);
+      }
       const runOptions = {
         proxyEntries: active.proxyEntries,
+        usedProxyIds,
         control: gate,
         saveState: (next) => saveV2StateWithRetry(stateFile, next),
         onEvent: (event) => this.logStore.append(state.runId, {
@@ -3091,6 +3116,7 @@ class RunManager extends EventEmitter {
       if (TERMINAL_RUN_STATUSES.has(state.status)) this.appendTerminalSummary(state);
     } finally {
       try { active.lock.release(); } catch { /* Surface lock issues on the next operation. */ }
+      new ProxyClaims(this.proxyClaims, state.runId).clear();
       const finalStatus = state.status;
       if (active.slot === 'auxiliary') {
         if (this.auxiliaryActive.get(state.runId) === active) this.auxiliaryActive.delete(state.runId);
@@ -3481,6 +3507,32 @@ class RunManager extends EventEmitter {
     }
     const startingToken = this.reserveStartingSlot(slot, runId);
     try {
+      if (state.taskKind === 'oauth') {
+        if (options.proxyAssignments) {
+          if ((state.jobs || []).some((j) => j.sms?.current || j.sms?.acquisition || j.sms?.pendingCleanup?.length)) throw new HttpError(409, '还有短信激活或取号结果待处理，请先完成核实与清理再更换代理');
+          const previous = this.configForState(state);
+          if (configFingerprint(previous) !== state.configFingerprint) throw new HttpError(409, '任务配置已变化，请先核对原任务配置');
+          const plan = normalizeRunPlan({ ...state.runPlan, proxyAssignments: options.proxyAssignments }, previous);
+          assertOAuthProxySelection(plan);
+          const snapshot = this.proxySnapshot(plan);
+          const effective = validateV2Config(applyRunPlan(previous, plan), { cwd: this.cwd });
+          const prepared = await this.preparedPreflight(effective, plan, snapshot, { reuseUnready: false });
+          if (!prepared.snapshot.ready) throw new HttpError(409, '代理预检未通过', prepared.snapshot);
+          state.runPlan = plan;
+          state.proxyResourceSnapshot = snapshot;
+          state.configFingerprint = configFingerprint(effective);
+          state.proxyLeases = {}; state.proxyHealth = {};
+          for (const worker of state.workers || []) { worker.proxy = null; worker.proxyId = ''; worker.lastProxyId = ''; }
+          for (const job of state.jobs || []) {
+            if (job.status === 'complete') continue;
+            job.proxy = null; job.proxyId = ''; job.oauthState = null; job.sessionState = null;
+            job.oauthTransportRecovery = null; job.proxyTransportRecovery = null;
+          }
+        } else {
+          try { assertOAuthProxySelection(state.runPlan || { taskKind: 'oauth' }); }
+          catch (error) { throw new HttpError(409, error.message, { code: error.code }); }
+        }
+      }
       const previousPlan = state.runPlan ? { ...state.runPlan } : null;
       const previousConfig = previousPlan
         ? (() => {

@@ -38,10 +38,8 @@ export function defaultProxyAssignments(workerConcurrency: number, catalog?: Pro
 }
 
 /**
- * Upkeep on accounts that already exist — OAuth top-up, security top-up — goes
- * out through the configured local forwarder rather than a country pool. The
- * pools are a paid resource that registration needs, and a stable address is
- * what these calls actually want.
+ * Session/security refresh retains the configured maintenance forwarder.
+ * Independent OAuth uses explicit country-pool or fixed assignments instead.
  */
 export function maintenanceProxyAssignments(workerConcurrency: number): ProxyAssignment[] {
   return Array.from({ length: Math.max(1, workerConcurrency) }, (_unused, index) => ({

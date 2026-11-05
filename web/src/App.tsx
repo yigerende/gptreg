@@ -1,3 +1,5 @@
+import { OAuthProxyDialog } from './OAuthProxyDialog';
+import { SmsSettingsDialog } from './SmsSettingsDialog';
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -89,7 +91,7 @@ import {
 } from './components/ConsoleUi';
 import { useRangeSelection } from './components/useRangeSelection';
 import { isSkippableJobStatus, isTerminalJobStatus } from './job-lifecycle';
-import { MAX_WORKER_CONCURRENCY, balancedPoolAssignments, countryPoolAssignments, defaultProxyAssignments, maintenanceProxyAssignments, proxyAssignmentsAreReady, resizeProxyAssignments } from './run-plan-ui';
+import { MAX_WORKER_CONCURRENCY, balancedPoolAssignments, countryPoolAssignments, defaultProxyAssignments, proxyAssignmentsAreReady, resizeProxyAssignments } from './run-plan-ui';
 import { exportFileName } from './export-file-name';
 import { detectCredentialSourceMode, maskSecret, parseCredentialInput, parseEmailInput, totpCode, totpRemaining, type CredentialEntry, type CredentialRejection, type EmailEntry } from './credential-input';
 import { Link, NavLink, useNavigate, useParams, useRouter } from './router';
@@ -99,7 +101,7 @@ import { RobotsPage, durationLabel } from './RobotsPage';
 import { SessionAssetsPage } from './SessionAssetsPage';
 import { RebindPage } from './RebindPage';
 import { SmsbowerMailConfig } from './SmsbowerMailConfig';
-import type { OAuthSkippedCounts, BalanceReconciliation, CpaArtifact, CpaArtifactSelectionItem, CpaCredentialPreflight, CpaExportSelection, JobSummary, LogRecord, MailRentalConfigureBody, MailcomAliasDomains, MailcomImportProgress, NvtokensPushResult, PreflightSnapshot, ProxyAssignment, ProxyCatalogSnapshot, ProxyRecord, RegistrationOutcomeCounts, RegistrationSkippedCounts, RobotRun, RunListSnapshot, RunPlan, RunSummary, ServiceStatus, SessionAssetResolveMatch, SmsCountryMarket, TaskCapacitySnapshot, TaskSlotCapacity, SettableSessionAssetLifecycle, Sub2ApiFailedAccounts } from './types';
+import type { OAuthSkippedCounts, BalanceReconciliation, CpaArtifact, CpaArtifactSelectionItem, CpaCredentialPreflight, CpaExportSelection, JobSummary, LogRecord, MailRentalConfigureBody, MailcomAliasDomains, MailcomImportProgress, NvtokensPushResult, PreflightSnapshot, ProxyAssignment, ProxyCatalogSnapshot, ProxyRecord, RegistrationOutcomeCounts, RegistrationSkippedCounts, RobotRun, RunListSnapshot, RunPlan, RunSummary, ServiceStatus, SessionAssetResolveMatch, TaskCapacitySnapshot, TaskSlotCapacity, SettableSessionAssetLifecycle, Sub2ApiFailedAccounts } from './types';
 
 const navItems = [
   { to: '/', label: '启动工作台', icon: LayoutDashboard },
@@ -129,16 +131,6 @@ const PROXY_API_PROVIDER_OPTIONS = [
   { value: 'cliproxy', label: 'CLI Proxy' },
 ];
 const DEFAULT_PROXY_API_COUNT = 600;
-const SMSBOWER_COUNTRY_OPTIONS = [
-  { id: 151, name: '智利', dialingCode: '56' },
-  { id: 6, name: '印度尼西亚', dialingCode: '62' },
-  { id: 43, name: '德国', dialingCode: '49' },
-  { id: 4, name: '菲律宾', dialingCode: '63' },
-  { id: 73, name: '巴西', dialingCode: '55' },
-  { id: 33, name: '哥伦比亚', dialingCode: '57' },
-  { id: 1, name: 'Ukraine', dialingCode: '380' },
-  { id: 53, name: 'Saudi Arabia', dialingCode: '966' },
-] as const;
 const PROXY_API_PROVIDER_META: Record<string, { label: string; sessionMinutes: number; regionalOnly: boolean; defaultProtocol: 'http' | 'socks5'; defaultCount?: number; maxCount?: number }> = {
   '711proxy': { label: '711Proxy', sessionMinutes: 180, regionalOnly: false, defaultProtocol: 'http', defaultCount: DEFAULT_PROXY_API_COUNT, maxCount: 900 },
   b2proxy: { label: 'B2Proxy', sessionMinutes: 60, regionalOnly: true, defaultProtocol: 'socks5', defaultCount: DEFAULT_PROXY_API_COUNT, maxCount: 900 },
@@ -1693,250 +1685,6 @@ function IcloudConfigDialog({
   </Dialog.Root>;
 }
 
-type FirefoxCountryOption = {
-  code: string;
-  name?: string;
-  englishName?: string;
-  dialingCode?: string;
-  price?: number;
-};
-
-function smsBowerSelectedIds(draft: Record<string, any>) {
-  const configured = Array.isArray(draft.sms?.countries) && draft.sms.countries.length
-    ? draft.sms.countries
-    : [draft.sms?.country || { id: 151 }];
-  return [...new Set(configured
-    .map((item: any) => String(item?.id ?? item?.country ?? item?.code ?? item).trim())
-    .filter(Boolean))];
-}
-
-function SmsBowerCountrySelector({
-  draft,
-  updateConfig,
-  marketCountries = [],
-  compact = false,
-}: {
-  draft: Record<string, any>;
-  updateConfig: (path: string, value: unknown) => void;
-  marketCountries?: SmsCountryMarket[];
-  compact?: boolean;
-}) {
-  const selectedIds = smsBowerSelectedIds(draft);
-  const marketById = new Map(marketCountries.map((market) => [String(market.id), market] as const));
-  const maxPrice = Number(draft.sms?.maxPrice);
-  const updateSelection = (id: string) => {
-    const nextIds = selectedIds.includes(id)
-      ? selectedIds.filter((candidate) => candidate !== id)
-      : [...selectedIds, id];
-    if (!nextIds.length) return;
-    const countries = nextIds.map((countryId) => {
-      const option = SMSBOWER_COUNTRY_OPTIONS.find((candidate) => String(candidate.id) === countryId);
-      return option ? { id: option.id, name: option.name } : { id: Number(countryId) || countryId };
-    });
-    updateConfig('sms.countries', countries);
-  };
-  return <div className={`sms-bower-country-selector${compact ? ' is-compact' : ''}`}>
-    {SMSBOWER_COUNTRY_OPTIONS.map((option) => {
-      const id = String(option.id);
-      const selected = selectedIds.includes(id);
-      const market = marketById.get(id);
-      const priceOverMax = market?.cheapestPrice !== null
-        && market?.cheapestPrice !== undefined
-        && Number.isFinite(maxPrice)
-        && market.cheapestPrice > maxPrice;
-      const marketHasInventory = Boolean(market
-        && Number(market.offers) > 0
-        && Number.isFinite(Number(market.cheapestPrice)));
-      const marketIssue = String(market?.issue || '');
-      const unavailable = Boolean(market && (
-        priceOverMax
-        || (marketIssue && marketIssue !== 'SMS_PRICE_ABOVE_MAX')
-        || (!marketIssue && !marketHasInventory)
-      ));
-      const reason = priceOverMax
-        ? '超过最高价'
-        : (marketIssue === 'SMS_INVENTORY_EMPTY' || (!marketIssue && !marketHasInventory)
-          ? '暂无库存'
-          : (marketIssue && marketIssue !== 'SMS_PRICE_ABOVE_MAX' ? '暂不可用' : ''));
-      return <label className={`sms-bower-country-option${unavailable ? ' is-unavailable' : ''}`} key={id}>
-        <input
-          type="checkbox"
-          checked={selected}
-          disabled={!selected && unavailable}
-          onChange={() => updateSelection(id)}
-        />
-        <span>
-          <strong>{option.name}</strong>
-          <small>ID {option.id} · +{option.dialingCode}</small>
-        </span>
-        <em>{market
-          ? (market.cheapestPrice !== null && market.cheapestPrice !== undefined
-            ? `${formatCurrency(market.cheapestPrice, 'USD', 3)} · ${market.offers || 0}`
-            : reason || '无库存')
-          : '待查询'}</em>
-        {reason && <i>{reason}</i>}
-      </label>;
-    })}
-  </div>;
-}
-
-function SmsSettingsDialog({
-  open,
-  onOpenChange,
-  provider,
-  onProviderChange,
-  draft,
-  updateConfig,
-  countries,
-  countriesLoading,
-  countriesError,
-  configNotice,
-  saving,
-  onSave,
-  balance,
-  balanceStatus,
-  marketPrice,
-  marketLoading,
-  marketError,
-  marketCountries,
-  currency,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  provider: 'smsbower' | 'firefox';
-  onProviderChange: (provider: 'smsbower' | 'firefox') => void;
-  draft: Record<string, any>;
-  updateConfig: (path: string, value: unknown) => void;
-  countries: FirefoxCountryOption[];
-  countriesLoading: boolean;
-  countriesError?: unknown;
-  configNotice?: { tone: string; text: string } | null;
-  saving: boolean;
-  onSave: (provider: 'smsbower' | 'firefox') => void;
-  balance?: number | null;
-  balanceStatus?: ServiceStatus['status'];
-  marketPrice?: number | null;
-  marketLoading?: boolean;
-  marketError?: unknown;
-  marketCountries?: SmsCountryMarket[];
-  currency?: string;
-}) {
-  const [countryQuery, setCountryQuery] = useState('');
-  const [countryPickerOpen, setCountryPickerOpen] = useState(false);
-  const firefox = draft.sms?.firefox || {};
-  const selectedCountries = Array.isArray(firefox.countries) ? firefox.countries : [];
-  const selectedCodes: string[] = selectedCountries.map((item: any) => String(item?.code ?? item?.country ?? item?.id ?? item).toLowerCase());
-  const countryByCode = useMemo(() => new Map(countries.map((country) => [country.code, country] as const)), [countries]);
-  const selectedCountryLabels = selectedCodes.map((code) => {
-    const catalogCountry = countryByCode.get(code);
-    const savedCountry = selectedCountries.find((item: any) => String(item?.code ?? item?.country ?? item?.id ?? item).toLowerCase() === code);
-    return catalogCountry?.name || savedCountry?.name || code.toUpperCase();
-  });
-  const selectedCountrySummary = selectedCountryLabels.length > 3
-    ? `${selectedCountryLabels.slice(0, 3).join('、')} 等 ${selectedCountryLabels.length} 个`
-    : (selectedCountryLabels.join('、') || '默认：全部国家 · 自动最低价');
-  const query = countryQuery.trim().toLowerCase();
-  const visibleCountries = countries.filter((country) => {
-    if (!query) return true;
-    return [country.code, country.name, country.englishName, country.dialingCode].some((value) => String(value || '').toLowerCase().includes(query));
-  });
-  const pricedCountries = selectedCodes.length
-    ? countries.filter((country) => selectedCodes.includes(country.code))
-    : countries;
-  const catalogPrices = pricedCountries
-    .map((country) => Number(country.price))
-    .filter((price) => Number.isFinite(price));
-  const catalogLowestPrice = catalogPrices.length ? Math.min(...catalogPrices) : null;
-  const toggleCountry = (country: FirefoxCountryOption) => {
-    const next = new Set<string>(selectedCodes);
-    if (next.has(country.code)) next.delete(country.code); else next.add(country.code);
-    const byCode = new Map<string, FirefoxCountryOption>(countries.map((item) => [item.code, item] as const));
-    updateConfig('sms.firefox.countries', [...next].map((code) => {
-      const item = byCode.get(code);
-      return item ? { code: item.code, name: item.name || '', dialingCode: item.dialingCode || '' } : { code };
-    }));
-  };
-  useEffect(() => {
-    if (!open) {
-      setCountryPickerOpen(false);
-      setCountryQuery('');
-    }
-  }, [open]);
-  const feedbackTone = configNotice?.tone || 'info';
-  const providerId = provider === 'firefox' ? 'firefox' : 'smsbower';
-  const displayCurrency = smsCurrency(providerId, currency);
-  const displayMarketPrice = providerId === 'firefox' && catalogLowestPrice !== null
-    ? catalogLowestPrice
-    : marketPrice;
-  return <Dialog.Root open={open} onOpenChange={onOpenChange}>
-    <Dialog.Portal>
-      <Dialog.Overlay className="dialog-overlay" />
-      <Dialog.Content className="dialog-content dialog-wide sms-settings-dialog">
-        <Dialog.Title>OAuth 短信配置</Dialog.Title>
-        <Dialog.Description>只用于 OAuth 手机验证。保存配置并切换后，后续新任务使用所选供应商；正在运行的任务保持原配置。</Dialog.Description>
-        <div className="sms-settings-summary" aria-live="polite">
-          <div><span>当前余额</span><strong>{formatCurrency(balance, displayCurrency)}</strong><small>{balanceStatus === 'online' ? '已同步' : (balanceStatus === 'degraded' ? '读取异常' : '等待读取')}</small></div>
-          <div><span>{providerId === 'firefox' ? '公开价目最低价' : '当前最低价'}</span><strong>{formatCurrency(displayMarketPrice, displayCurrency, 3)}</strong><small>{providerId === 'firefox' ? '公开目录报价，不代表实时库存' : (marketLoading ? '正在读取当前报价' : (marketError ? '最低价读取失败' : '按当前市场报价'))}</small></div>
-        </div>
-        <div className="sms-provider-switch segmented" role="radiogroup" aria-label="短信供应商">
-          {[
-            ['smsbower', 'SMSBower'],
-            ['firefox', '火狐狸'],
-          ].map(([id, label]) => <button
-            type="button"
-            role="radio"
-            aria-checked={providerId === id}
-            className={providerId === id ? 'selected' : ''}
-            key={id}
-            onClick={() => onProviderChange(id as 'smsbower' | 'firefox')}
-          >{label}</button>)}
-        </div>
-        {providerId === 'smsbower' ? <div className="sms-settings-firefox">
-          <div className="sms-settings-grid">
-            <label><span>服务代码</span><input value={draft.sms?.service?.code || 'dr'} onChange={(event) => updateConfig('sms.service.code', event.target.value)} /></label>
-            <label><span>最高单价 USD</span><ConfigNumberInput min={0} max={0.1} step={0.001} value={draft.sms?.maxPrice ?? 0.03} onValueChange={(value) => updateConfig('sms.maxPrice', value)} /></label>
-            <label><span>平台密钥</span><input type="password" value="" placeholder="已配置；留空保持" onChange={() => {}} readOnly /></label>
-          </div>
-          <div className="sms-country-heading"><div><strong>参与国家</strong><small>只会在勾选的国家中随机取号；每个国家内部由平台按最高价自动选择最低价号码。</small></div></div>
-          <SmsBowerCountrySelector draft={draft} updateConfig={updateConfig} marketCountries={marketCountries} />
-        </div> : <div className="sms-settings-firefox">
-          <div className="sms-settings-grid">
-            <label><span>接口地址</span><input value="https://firefox.fun/yhapi.ashx" readOnly /></label>
-            <label><span>固定项目</span><input value="1096 · OpenAI / ChatGpt" readOnly /></label>
-            <label><span>价格上限 CNY</span><input inputMode="decimal" placeholder="留空表示不限制" value={firefox.maxPrice ?? ''} onChange={(event) => updateConfig('sms.firefox.maxPrice', event.target.value)} /></label>
-          </div>
-          <div className="sms-country-heading"><div><strong>国家范围</strong><small>未选择时使用全部公开价目，并自动选择最低价。</small></div></div>
-          <button
-            type="button"
-            className="sms-country-trigger"
-            aria-label="火狐狸国家范围"
-            aria-expanded={countryPickerOpen}
-            aria-controls="firefox-country-picker"
-            onClick={() => setCountryPickerOpen((current) => !current)}
-          ><span><strong>{selectedCodes.length ? `已选 ${selectedCodes.length} 个国家` : '默认选择'}</strong><small>{selectedCountrySummary}</small></span><ChevronDown size={15} /></button>
-          {countryPickerOpen && <div id="firefox-country-picker" className="sms-country-panel">
-            <div className="sms-country-panel-heading"><span>勾选后只在这些国家中选择最低价</span>{selectedCodes.length > 0 && <button type="button" className="sms-country-clear" aria-label="清空国家选择" title="清空国家选择" onClick={() => updateConfig('sms.firefox.countries', [])}><X size={13} /></button>}</div>
-            <input className="sms-country-search" type="search" value={countryQuery} placeholder="搜索国家、三字母代码或区号" aria-label="搜索火狐狸国家" onChange={(event) => setCountryQuery(event.target.value)} />
-            {countriesLoading && <div className="loading-line"><LoaderCircle className="spin" size={15} />正在读取火狐狸国家目录</div>}
-            {Boolean(countriesError) && <Notice tone="warning">国家目录读取失败：{errorMessage(countriesError)}。可以先保存，已配置的国家仍会按代码使用。</Notice>}
-            {!countriesLoading && <div className="sms-country-list" role="group" aria-label="火狐狸国家选择">
-              {visibleCountries.length ? visibleCountries.map((country) => <label className="sms-country-option" key={country.code}>
-                <input type="checkbox" checked={selectedCodes.includes(country.code)} onChange={() => toggleCountry(country)} />
-                <span><strong>{country.name || country.code}</strong><small>{country.code.toUpperCase()} · +{country.dialingCode || '—'}{country.price !== undefined ? ` · ¥${Number(country.price).toFixed(3)}` : ''}</small></span>
-              </label>) : <span className="sms-country-empty">没有匹配的国家</span>}
-            </div>}
-          </div>}
-        </div>}
-        {configNotice?.text && <div className={`mailcom-dialog-feedback mailcom-dialog-feedback-${feedbackTone}`} role={feedbackTone === 'danger' ? 'alert' : 'status'}><span>{configNotice.text}</span></div>}
-        <div className="dialog-actions sms-settings-actions">
-          <Dialog.Close asChild><Button tone="quiet">关闭</Button></Dialog.Close>
-          <Button tone="primary" onClick={() => onSave(providerId)} disabled={saving} icon={saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}>{saving ? '保存中' : '保存配置并切换'}</Button>
-        </div>
-      </Dialog.Content>
-    </Dialog.Portal>
-  </Dialog.Root>;
-}
-
 function SmsMailboxSettingsDialog({
   open,
   onOpenChange,
@@ -2074,9 +1822,8 @@ function DashboardPage() {
   const [mailApiDialogProvider, setMailApiDialogProvider] = useState<'mailcom' | 'fastmail'>('mailcom');
   const [icloudDialogOpen, setIcloudDialogOpen] = useState(false);
   const [smsDialogOpen, setSmsDialogOpen] = useState(false);
-  const [smsDialogProvider, setSmsDialogProvider] = useState<'smsbower' | 'firefox'>('smsbower');
+  const [smsDialogProvider, setSmsDialogProvider] = useState<'smsbower' | 'firefox' | 'hero-sms'>('smsbower');
   const [smsMailDialogOpen, setSmsMailDialogOpen] = useState(false);
-  const [smsApiKey, setSmsApiKey] = useState('');
   // Seeded from the CPA page's sub2api rail when it hands over a list of
   // addresses to re-login. Read once on mount: it is a handoff, not state the
   // launch page owns, and leaving it behind would refill the box on every
@@ -2115,13 +1862,6 @@ function DashboardPage() {
     staleTime: 15_000,
   });
   const config = useQuery({ queryKey: ['config'], queryFn: endpoints.config });
-  const firefoxCountries = useQuery({
-    queryKey: ['sms-firefox-countries'],
-    queryFn: endpoints.smsFirefoxCountries,
-    enabled: smsDialogOpen && smsDialogProvider === 'firefox',
-    retry: false,
-    staleTime: 300_000,
-  });
   const smsMarket = useQuery({
     queryKey: ['sms-market', smsDialogProvider],
     queryFn: () => endpoints.smsMarket(smsDialogProvider),
@@ -2208,7 +1948,7 @@ function DashboardPage() {
     setDraft(config.data.config);
     setJsonText(JSON.stringify(config.data.config, null, 2));
     if (!smsDialogOpen) {
-      setSmsDialogProvider(String(config.data.config.sms?.provider || 'smsbower').toLowerCase() === 'firefox' ? 'firefox' : 'smsbower');
+      setSmsDialogProvider(config.data.config.sms?.provider === 'hero-sms' ? 'hero-sms' : config.data.config.sms?.provider === 'firefox' ? 'firefox' : 'smsbower');
     }
   }, [config.data]);
   useEffect(() => {
@@ -2291,13 +2031,6 @@ function DashboardPage() {
   const aliasLockedReason = activeMailChannel.supportsAliases === true
     ? ''
     : (activeMailChannel.aliasLockedReason || '该邮箱接口不支持别名');
-  // A credentials run has no proxy choice to make, so the endpoint it will use
-  // is stated in the panel head instead of being picked per Worker.
-  const maintenanceProxyLabel = useMemo(() => {
-    const url = String((cfg as any)?.proxyPool?.maintenanceProxy || '').trim();
-    if (!url) return '本机转发未配置';
-    try { return `本机转发 ${new URL(url).host}`; } catch { return `本机转发 ${url}`; }
-  }, [cfg]);
   const snapshot = resources.data;
   // A preflight snapshot belongs to the provider that produced it. Keep it
   // out of the SMS widgets after a provider switch so an old balance or quote
@@ -2312,12 +2045,6 @@ function DashboardPage() {
   const marketCountry = smsSnapshot?.sms.country.chn || smsSnapshot?.sms.country.name || smsSnapshot?.sms.country.eng || smsSnapshot?.sms.country.id || smsMarket.data?.country?.name || smsMarket.data?.country?.id || '—';
   const marketService = smsSnapshot?.sms.service.name || smsSnapshot?.sms.service.code || smsMarket.data?.service?.name || smsMarket.data?.service?.code || '—';
   const activeSmsCurrency = smsCurrency(smsDialogProvider, smsSnapshot?.sms.currency || smsMarket.data?.currency || serviceSummary.data?.sms.currency);
-  const selectedSmsIds = smsBowerSelectedIds(draft);
-  const selectedSmsMarkets = (smsMarket.data?.countries || []).filter((market) => selectedSmsIds.includes(String(market.id)));
-  const selectedSmsPrices = selectedSmsMarkets.map((market) => market.cheapestPrice).filter((price): price is number => Number.isFinite(price));
-  const smsMarketPrice = smsDialogProvider === 'smsbower'
-    ? (selectedSmsPrices.length ? Math.min(...selectedSmsPrices) : (smsMarket.data?.cheapestPrice ?? smsSnapshot?.sms.cheapestPrice))
-    : smsSnapshot?.sms.cheapestPrice;
   const updatePlan = (patch: Partial<RunPlan>) => {
     setPlanNotice(null);
     setPlan((current) => {
@@ -2374,13 +2101,7 @@ function DashboardPage() {
       }
       next.workerConcurrency = Math.min(next.mailCount, requestedWorkers);
       if (next.mailCount === 0) next.workerConcurrency = 1;
-      next.proxyAssignments = taskKind === 'oauth'
-        // Signing in to an account that already exists wants a stable address,
-        // not a fresh residential IP — and the country pools are the paid
-        // resource registration needs. Pinned rather than merely defaulted, so
-        // no other control in the form can drag these lanes onto a pool.
-        ? maintenanceProxyAssignments(next.workerConcurrency)
-        : resizeProxyAssignments(next.proxyAssignments || [], next.workerConcurrency, proxyCatalog.data);
+      next.proxyAssignments = resizeProxyAssignments((next.proxyAssignments || []).filter((p) => taskKind !== 'oauth' || p.kind !== 'maintenance'), next.workerConcurrency, proxyCatalog.data);
       if (taskKind === 'oauth' || !aliasesAllowed || next.aliasStrategy === 'root') {
         next.aliasStrategy = 'root';
         next.aliasCount = 1;
@@ -2433,7 +2154,7 @@ function DashboardPage() {
         : { kind: 'credentials', accounts },
       postRegistrationOAuth: false,
       security: { setPassword: false, enrollTotp: false },
-      proxyAssignments: maintenanceProxyAssignments(workerConcurrency),
+      proxyAssignments: resizeProxyAssignments(plan.proxyAssignments.filter((p) => p.kind !== 'maintenance'), workerConcurrency, proxyCatalog.data),
     });
   };
   // Text only. The OAuth source is derived from the paste by an effect below,
@@ -2516,7 +2237,7 @@ function DashboardPage() {
     setConfigNotice(null);
     return next;
   });
-  const buildSmsProviderConfig = (input: Record<string, any>, provider: 'smsbower' | 'firefox') => {
+  const buildSmsProviderConfig = (input: Record<string, any>, provider: 'smsbower' | 'firefox' | 'hero-sms') => {
     let next = setPath(input, 'sms.provider', provider);
     if (provider === 'firefox') {
       next = setPath(next, 'sms.firefox.iid', '1096');
@@ -2531,21 +2252,19 @@ function DashboardPage() {
     return next;
   };
   const selectMailApiProvider = (provider: 'mailcom' | 'fastmail') => setMailApiDialogProvider(provider);
-  const configSavePayload = (switchProvider?: 'mailcom' | 'fastmail' | 'icloud', switchSmsProvider?: 'smsbower' | 'firefox') => {
+  const configSavePayload = (switchProvider?: 'mailcom' | 'fastmail' | 'icloud', switchSmsProvider?: 'smsbower' | 'firefox' | 'hero-sms') => {
     let parsed: Record<string, any>;
     try { parsed = JSON.parse(jsonText); } catch { throw new Error('高级 JSON 不是有效格式'); }
     if (switchProvider) parsed = buildMailProviderConfig(parsed, switchProvider);
     if (switchSmsProvider) parsed = buildSmsProviderConfig(parsed, switchSmsProvider);
     const secretPatch: Record<string, string> = {};
     if (mailPassword) secretPatch.mailPassword = mailPassword;
-    if (smsApiKey) secretPatch.smsApiKey = smsApiKey;
     return { config: parsed, secretPatch };
   };
   const saveConfig = useMutation({
-    mutationFn: (variables?: { switchProvider?: 'mailcom' | 'fastmail' | 'icloud'; switchSmsProvider?: 'smsbower' | 'firefox' }) => endpoints.saveConfig(configSavePayload(variables?.switchProvider, variables?.switchSmsProvider)),
+    mutationFn: (variables?: { switchProvider?: 'mailcom' | 'fastmail' | 'icloud'; switchSmsProvider?: 'smsbower' | 'firefox' | 'hero-sms' }) => endpoints.saveConfig(configSavePayload(variables?.switchProvider, variables?.switchSmsProvider)),
     onSuccess: (data, variables) => {
       setMailPassword('');
-      setSmsApiKey('');
       setConfigNotice({
         tone: 'success',
         text: variables?.switchProvider
@@ -2851,7 +2570,7 @@ function DashboardPage() {
           <Tabs.List className="tabs-list"><Tabs.Trigger value="task">本次任务</Tabs.Trigger><Tabs.Trigger value="resources">全局资源</Tabs.Trigger><Tabs.Trigger value="advanced">高级 JSON</Tabs.Trigger></Tabs.List>
           <Tabs.Content value="task" className={`launch-tab-content${taskKind !== 'oauth' ? ' launch-task-tab' : ''}`}>
              {!config.data ? <div className="loading-line"><LoaderCircle className="spin" />正在读取任务默认值</div> : <>
-             <div className={`task-config-split${taskKind === 'oauth' ? ' task-config-wide' : ''}`}>
+             <div className="task-config-split">
              <div className="task-input-column">
              <div className="task-input-scroll">
              {planNotice && <Notice tone={planNotice.tone} floating onClose={() => setPlanNotice(null)} autoDismissToken={planNotice}>{planNotice.text}</Notice>}
@@ -2879,7 +2598,7 @@ function DashboardPage() {
                 <div><strong>账号凭据</strong><small>{credentialMode === 'emails' ? '每行一个已保存登录态的邮箱，自动匹配资产、用已保存会话直接授权' : '已注册且已完成安全设置的账号，用密码 + TOTP 直接登录授权'}</small></div>
                 <div className="credential-chips">
                   <span className="credential-chip">{credentialMode === 'emails' ? <><KeyRound size={14} />登录态直登</> : <><ShieldCheck size={14} />免邮箱验证</>}</span>
-                  <span className="credential-chip neutral" title="已有账号的登录授权固定走本机转发，不占用国家池"><Radio size={14} />{maintenanceProxyLabel}</span>
+                  <span className="credential-chip neutral"><Radio size={14} />使用下方 Worker 所选代理</span>
                 </div>
               </div>
               <div className="credential-split">
@@ -2965,7 +2684,7 @@ function DashboardPage() {
                 </div>
               </section>}
               </div>
-              {taskKind !== 'oauth' && <div className="task-proxy-column">
+              <div className="task-proxy-column">
             <div className="worker-proxy-plan">
               <div className="section-heading"><div><h2>Worker 代理</h2><p>本地端口固定绑定；国家池在启动前随机检测</p></div><div className="worker-proxy-heading-actions">
                 <IconButton label={pullAllProxies.pending ? '正在刷新全部国家池' : '立即刷新全部国家池'} onClick={() => pullAllProxies.trigger.mutate()} disabled={pullAllProxies.pending}>{pullAllProxies.pending ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</IconButton>
@@ -3007,7 +2726,7 @@ function DashboardPage() {
               {!hasAnyProxyResources && <Notice tone="warning">没有可分配代理，请先进入代理页导入本地端口或拉取国家池。</Notice>}
                {hasAnyProxyResources && !proxyAssignmentsReady && <Notice tone="warning">Worker 代理分配无效。固定本地端口会优先保留，请检查已选国家池或试用池的剩余容量和重复地址。</Notice>}
              </div>
-              </div>}
+              </div>
               </div>
               </>}
           </Tabs.Content>
@@ -3016,8 +2735,8 @@ function DashboardPage() {
             {configNotice && <Notice tone={configNotice.tone} floating onClose={() => setConfigNotice(null)} autoDismissToken={configNotice}>{configNotice.text}</Notice>}
             {config.isLoading ? <div className="loading-line"><LoaderCircle className="spin" />正在读取配置</div> : <div className="launch-resource-grid">
               <section className="config-section"><div className="config-title"><h2>邮箱</h2><p>小苹果接口与验证码筛选</p></div><div className="form-grid"><Field label="小苹果接口地址"><input value={draft.mail?.xiaopingguoBaseUrl || (draft.mail?.provider === 'xiaopingguo' ? draft.mail?.baseUrl : '') || DEFAULT_XIAOPINGGUO_BASE_URL} onChange={(event) => updateConfig('mail.xiaopingguoBaseUrl', event.target.value)} /></Field><Field label="邮箱密码" hint={config.data?.secrets.mailPasswordConfigured ? '已配置；留空保持' : '尚未配置'}><input type="password" value={mailPassword} placeholder={config.data?.secrets.mailPasswordConfigured ? '••••••••' : '输入密码'} onChange={(event) => setMailPassword(event.target.value)} /></Field><Field label="邮件关键词"><input value={draft.mail?.keyword || ''} onChange={(event) => updateConfig('mail.keyword', event.target.value)} /></Field><Field label="租用邮箱 service" hint="SMSBower 邮箱渠道用，短信那边同为 dr"><input placeholder="dr" value={draft.mail?.service ?? ''} onChange={(event) => updateConfig('mail.service', event.target.value)} /></Field><Field label="租用邮箱单价上限 (USD)" hint="SMSBower 邮箱渠道必填，超过则不启动"><ConfigNumberInput min={0} max={5} step={0.01} value={Number(draft.mail?.maxPrice ?? 0)} onValueChange={(value) => updateConfig('mail.maxPrice', value)} /></Field></div></section>
-              <section className="config-section"><div className="config-title"><h2>短信</h2><p>市场、服务与号码预算</p></div><div className="form-grid"><div className="sms-inline-country-field"><span>参与国家</span><SmsBowerCountrySelector draft={draft} updateConfig={updateConfig} marketCountries={smsMarket.data?.countries || []} compact /></div><Field label="服务代码"><input value={draft.sms?.service?.code || 'dr'} onChange={(event) => updateConfig('sms.service.code', event.target.value)} /></Field><Field label="最高单价 USD"><ConfigNumberInput min={0} max={0.1} step={0.001} value={draft.sms?.maxPrice ?? 0.03} onValueChange={(value) => updateConfig('sms.maxPrice', value)} /></Field><Field label="替换号码预算"><ConfigNumberInput min={1} max={30} value={draft.sms?.replacementBudget ?? 20} onValueChange={(value) => updateConfig('sms.replacementBudget', value)} /></Field><Field label="平台密钥" hint={config.data?.secrets.smsApiKeyConfigured ? '已配置；留空保持' : '尚未配置'}><input type="password" value={smsApiKey} placeholder={config.data?.secrets.smsApiKeyConfigured ? '••••••••' : '输入 API Key'} onChange={(event) => setSmsApiKey(event.target.value)} /></Field></div></section>
-              <section className="config-section"><div className="config-title"><h2>代理</h2><p>Worker 必须绑定代理，启动任务时独立选择</p></div><div className="form-grid"><Field label="默认协议"><AppSelect ariaLabel="默认协议" value={draft.proxyPool?.defaultProtocol || 'http'} onValueChange={(value) => updateConfig('proxyPool.defaultProtocol', value)} options={[{ value: 'http', label: 'HTTP' }, { value: 'socks5', label: 'SOCKS5' }]} /></Field><Field label="检测目标"><input value={draft.proxyPool?.healthCheck?.probeUrl || ''} onChange={(event) => updateConfig('proxyPool.healthCheck.probeUrl', event.target.value)} /></Field><Field label="检测超时 ms" hint="超时即跳过该出口；若绑定成功率突然大跌，先排查本机网络再动这个值"><ConfigNumberInput min={1000} max={120000} step={500} value={Number(draft.proxyPool?.healthCheck?.timeoutMs ?? 8000)} onValueChange={(value) => updateConfig('proxyPool.healthCheck.timeoutMs', value)} /></Field><Field label="本机转发" hint="补 OAuth、补安全配置、AT 测活走这里，不占用国家池"><input placeholder="http://127.0.0.1:7890" value={draft.proxyPool?.maintenanceProxy ?? ''} onChange={(event) => updateConfig('proxyPool.maintenanceProxy', event.target.value)} /></Field><div className="toggle-field"><div><span>健康检查</span><small>绑定 Worker 前检测</small></div><Switch.Root className="switch-root" checked={draft.proxyPool?.healthCheck?.enabled !== false} onCheckedChange={(checked) => updateConfig('proxyPool.healthCheck.enabled', checked)}><Switch.Thumb className="switch-thumb" /></Switch.Root></div></div></section>
+              <section className="config-section"><div className="config-title"><h2>短信</h2><p>供应商、密钥、参与国家与单价均在短信配置中管理</p></div><div className="form-grid"><Button onClick={() => setSmsDialogOpen(true)}>短信供应商配置</Button><Field label="替换号码预算"><ConfigNumberInput min={1} max={30} value={draft.sms?.replacementBudget ?? 20} onValueChange={(value) => updateConfig('sms.replacementBudget', value)} /></Field></div></section>
+              <section className="config-section"><div className="config-title"><h2>代理</h2><p>Worker 必须绑定代理，启动任务时独立选择</p></div><div className="form-grid"><Field label="默认协议"><AppSelect ariaLabel="默认协议" value={draft.proxyPool?.defaultProtocol || 'http'} onValueChange={(value) => updateConfig('proxyPool.defaultProtocol', value)} options={[{ value: 'http', label: 'HTTP' }, { value: 'socks5', label: 'SOCKS5' }]} /></Field><Field label="检测目标"><input value={draft.proxyPool?.healthCheck?.probeUrl || ''} onChange={(event) => updateConfig('proxyPool.healthCheck.probeUrl', event.target.value)} /></Field><Field label="检测超时 ms" hint="超时即跳过该出口；若绑定成功率突然大跌，先排查本机网络再动这个值"><ConfigNumberInput min={1000} max={120000} step={500} value={Number(draft.proxyPool?.healthCheck?.timeoutMs ?? 8000)} onValueChange={(value) => updateConfig('proxyPool.healthCheck.timeoutMs', value)} /></Field><Field label="本机转发" hint="登录态刷新、补安全配置和 AT 测活使用；独立 OAuth 使用 Worker 所选代理"><input placeholder="http://127.0.0.1:7890" value={draft.proxyPool?.maintenanceProxy ?? ''} onChange={(event) => updateConfig('proxyPool.maintenanceProxy', event.target.value)} /></Field><div className="toggle-field"><div><span>健康检查</span><small>绑定 Worker 前检测</small></div><Switch.Root className="switch-root" checked={draft.proxyPool?.healthCheck?.enabled !== false} onCheckedChange={(checked) => updateConfig('proxyPool.healthCheck.enabled', checked)}><Switch.Thumb className="switch-thumb" /></Switch.Root></div></div></section>
               <section className="config-section"><div className="config-title"><h2>注册链路</h2><p>Sentinel 与 OAuth</p></div><div className="form-grid"><Field label="显示名称"><input value={draft.registration?.name || ''} onChange={(event) => updateConfig('registration.name', event.target.value)} /></Field><Field label="出生日期"><input type="date" value={draft.registration?.birthdate || ''} onChange={(event) => updateConfig('registration.birthdate', event.target.value)} /></Field><Field label="最大运行时间 ms"><ConfigNumberInput min={1000} value={draft.registration?.maxRuntimeMs ?? 900000} onValueChange={(value) => updateConfig('registration.maxRuntimeMs', value)} /></Field><div className="toggle-field"><div><span>动态 Sentinel</span><small>关键阶段生成新证明</small></div><Switch.Root className="switch-root" checked={draft.registration?.dynamicSentinel !== false} onCheckedChange={(checked) => updateConfig('registration.dynamicSentinel', checked)}><Switch.Thumb className="switch-thumb" /></Switch.Root></div></div></section>
             </div>}
           </Tabs.Content>
@@ -3091,30 +2810,7 @@ function DashboardPage() {
       onSave={(provider) => saveConfig.mutate({ switchProvider: provider })}
       onImport={() => importIcloud.mutate(icloudImportText)}
     />
-    <SmsSettingsDialog
-      open={smsDialogOpen}
-      onOpenChange={(open) => {
-        setSmsDialogOpen(open);
-        if (!open) setSmsDialogProvider(String(draft.sms?.provider || 'smsbower').toLowerCase() === 'firefox' ? 'firefox' : 'smsbower');
-      }}
-      provider={smsDialogProvider}
-      onProviderChange={setSmsDialogProvider}
-      draft={draft}
-      updateConfig={updateConfig}
-      countries={firefoxCountries.data?.countries || []}
-      countriesLoading={firefoxCountries.isLoading}
-      countriesError={firefoxCountries.error}
-      configNotice={configNotice}
-      saving={saveConfig.isPending}
-      balance={smsBalance}
-      balanceStatus={serviceSummary.data?.sms.status}
-      marketPrice={smsMarketPrice}
-      marketLoading={smsMarket.isFetching && smsDialogProvider === 'smsbower'}
-      marketError={smsMarket.error}
-      marketCountries={smsMarket.data?.countries || []}
-      currency={smsSnapshot?.sms.currency || smsMarket.data?.currency || serviceSummary.data?.sms.currency}
-      onSave={(provider) => saveConfig.mutate({ switchSmsProvider: provider })}
-    />
+    <SmsSettingsDialog open={smsDialogOpen} onOpenChange={setSmsDialogOpen} onSaved={(provider) => setSmsDialogProvider(provider)} />
     <SmsMailboxSettingsDialog
       open={smsMailDialogOpen}
       onOpenChange={setSmsMailDialogOpen}
@@ -3503,10 +3199,11 @@ function RunPage() {
     // whole page back to "正在读取状态" on every switch.
     placeholderData: keepPreviousData,
   });
+  const [oauthResumeOpen, setOAuthResumeOpen] = useState(false);
   const action = useMutation({
-    mutationFn: async ({ kind, resolveSmsAcquisition }: { kind: 'pause' | 'resume' | 'cancel'; resolveSmsAcquisition?: 'retry' }) => {
+    mutationFn: async ({ kind, resolveSmsAcquisition, proxyAssignments }: { kind: 'pause' | 'resume' | 'cancel'; resolveSmsAcquisition?: 'retry'; proxyAssignments?: RunPlan['proxyAssignments'] }) => {
       if (kind === 'pause') return endpoints.pauseRun(runId);
-      if (kind === 'resume') return endpoints.resumeRun(runId, resolveSmsAcquisition ? { resolveSmsAcquisition } : {});
+      if (kind === 'resume') return endpoints.resumeRun(runId, { ...(resolveSmsAcquisition ? { resolveSmsAcquisition } : {}), ...(proxyAssignments ? { proxyAssignments } : {}) });
       return endpoints.cancelRun(runId);
     },
     onMutate: ({ kind }) => {
@@ -3727,7 +3424,9 @@ function RunPage() {
     <PageHeader title={taskKindLabel(data?.taskKind || data?.plan?.taskKind, data?.plan)} description={runHeaderDescription(data, runId)} actions={<>
       {canConfigureMailRental && <Button icon={mailRentalConfigure.isPending ? <LoaderCircle className="spin" size={17} /> : <Settings2 size={17} />} disabled={mailRentalConfigure.isPending || action.isPending} onClick={() => setMailRentalDialogOpen(true)}>邮箱租约</Button>}
       {active && <Button icon={<CirclePause size={17} />} onClick={() => action.mutate({ kind: 'pause' })} disabled={action.isPending}>安全暂停</Button>}
-      {!active && data && (data.resumable === true || !isTerminalRunStatus(data.status)) && <Button tone="primary" icon={action.isPending ? <LoaderCircle className="spin" size={17} /> : <CirclePlay size={17} />} onClick={() => action.mutate({ kind: 'resume' })} disabled={action.isPending}>{action.isPending ? '启动中' : '从检查点继续'}</Button>}
+      <OAuthProxyDialog open={oauthResumeOpen} onOpenChange={setOAuthResumeOpen} workers={data?.plan?.workerConcurrency || 1} initial={data?.plan?.proxyAssignments} busy={action.isPending} error={action.error ? errorMessage(action.error) : ''} onConfirm={(proxyAssignments) => action.mutate({ kind: 'resume', proxyAssignments }, { onSuccess: () => setOAuthResumeOpen(false) })} />
+      {!active && data && (data.resumable === true || !isTerminalRunStatus(data.status)) && <Button tone="primary" icon={action.isPending ? <LoaderCircle className="spin" size={17} /> : <CirclePlay size={17} />} onClick={() => data.taskKind === 'oauth' && (!data.plan?.proxyAssignments?.length || data.plan.proxyAssignments.some((p) => p.kind === 'maintenance')) ? setOAuthResumeOpen(true) : action.mutate({ kind: 'resume' })} disabled={action.isPending}>{action.isPending ? '启动中' : '从检查点继续'}</Button>}
+      {!active && data?.taskKind === 'oauth' && data.resumable === true && <Button disabled={action.isPending} onClick={() => setOAuthResumeOpen(true)}>更换代理并继续</Button>}
       {data && !['complete', 'cancelled'].includes(data.status) && <ConfirmDialog trigger={<Button tone="danger" icon={cancelling ? <LoaderCircle className="spin" size={16} /> : <Square size={16} />} disabled={cancelling || action.isPending}>{cancelling ? '取消中' : '取消任务'}</Button>} title="取消整个任务" description="同一任务下的所有 Worker 会在各自当前安全边界统一停止，并清理短信 activation、邮箱和代理资源。" danger confirmLabel="确认取消" onConfirm={() => action.mutate({ kind: 'cancel' })} />}
     </>} />
     {notice && <Notice tone={notice.tone} floating onClose={() => setNotice(null)} autoDismissToken={notice}>{notice.text}</Notice>}

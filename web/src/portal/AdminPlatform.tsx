@@ -10,10 +10,24 @@ import {
   useAction,
 } from "./Workspace";
 import { Link } from "../router";
+import { RefreshCw } from "lucide-react";
+import { Filters, Pagination, number } from "./Insights";
+import AdminOverview, { AdminFinance } from "./AdminOverview";
+import AdminCreateUser from "./AdminCreateUser";
+import AdminUserDetail from "./AdminUserDetail";
 import BrandSettings from "./BrandSettings";
-export default function AdminPlatform() {
-  const [tab, setTab] = useState("overview"),
-    [offset, setOffset] = useState(0),
+import AdminSiteControls from "./AdminSiteControls";
+import AdminAnnouncements from "./AdminAnnouncements";
+export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
+  const [offset, setOffset] = useState(0),
+    [filters, setFilters] = useState<Row>(() => ({
+      status: new URLSearchParams(location.search).get("status") || "",
+    })),
+    [days, setDays] = useState(7),
+    [settingTab, setSettingTab] = useState("features"),
+    [userDetail, setUserDetail] = useState(""),
+    [createUser, setCreateUser] = useState(false),
+    [selectedCodes, setSelectedCodes] = useState<string[]>([]),
     [settings, setSettings] = useState<Row | null>(null),
     [detail, setDetail] = useState(""),
     [adjust, setAdjust] = useState<Row | null>(null),
@@ -24,17 +38,29 @@ export default function AdminPlatform() {
     [points, setPoints] = useState(100),
     [codes, setCodes] = useState<string[]>([]);
   const a = useAction();
+  const settingsPage = ["settings", "products", "announcements"].includes(tab);
+  const endpoint = settingsPage
+    ? "settings"
+    : tab === "codes"
+      ? "redeem-codes"
+      : tab;
+  const params = new URLSearchParams({
+    limit: "50",
+    offset: String(offset),
+    days: String(days),
+    ...filters,
+  });
   const { data, error, refetch, isFetching } = useQuery({
-    queryKey: ["admin", tab, offset],
-    queryFn: () =>
-      call(
-        `/api/admin/v1/${tab === "codes" ? "redeem-codes" : tab}?limit=50&offset=${offset}`,
-      ),
-    refetchInterval: (query) => tab === "orders" && query.state.data?.items?.some(orderPending) ? 5000 : false,
-    refetchOnReconnect: tab !== "settings",
+    queryKey: ["admin", tab, offset, filters, days],
+    queryFn: () => call(`/api/admin/v1/${endpoint}?${params}`),
+    refetchInterval: (query) =>
+      tab === "orders" && query.state.data?.items?.some(orderPending)
+        ? 5000
+        : false,
+    refetchOnReconnect: !settingsPage,
   });
   useEffect(() => {
-    if (tab === "settings" && data) setSettings(structuredClone(data));
+    if (settingsPage && data) setSettings(structuredClone(data));
   }, [data, tab]);
   function field(key: string, value: any) {
     setSettings((s) => ({ ...s, [key]: value }));
@@ -42,8 +68,12 @@ export default function AdminPlatform() {
   const rows = data?.items || [];
   const tabs: Row = {
     overview: "运营概览",
-    orders: "客户订单",
-    users: "用户与积分",
+    orders: "订单监控",
+    finance: "积分报表",
+    accounts: "账号交付",
+    products: "服务与定价",
+    announcements: "站点公告",
+    users: "账户管理",
     codes: "积分兑换码",
     settings: "站点设置",
     audit: "操作审计",
@@ -52,70 +82,135 @@ export default function AdminPlatform() {
     <>
       <div className="p-page-heading">
         <div>
-          <span className="p-eyebrow">ADMINISTRATION</span>
-          <h1>平台管理</h1>
-          <p>管理客户、积分、订单和开放策略。</p>
+          <span className="p-eyebrow">OPERATIONS / {tab.toUpperCase()}</span>
+          <h1>{tabs[tab] || "运营控制台"}</h1>
+          <p>
+            {
+              {
+                overview: "掌握客户、交付与积分流转，让每一笔业务都有据可查。",
+                orders: "查看全部客户订单，跟踪执行进度与异常处理。",
+                users: "管理客户状态、查询业务记录与调整账户积分。",
+                finance: "从预留到结算，每一笔积分都有完整记录。",
+                accounts: "查询已交付账号及其客户和订单归属。",
+                products: "设置两种注册服务的单价、限额及执行模板。",
+                codes: "发行积分兑换码，跟踪使用与停用状态。",
+                announcements: "向客户同步服务动态和使用说明。",
+                audit: "追溯账户、积分和配置的管理操作。",
+                settings: "塑造你的品牌，管理服务约定与平台基础配置。",
+              }[tab]
+            }
+          </p>
         </div>
-        <a className="p-button secondary" href="/admin/engine">
-          进入原注册管理台 ↗
-        </a>
       </div>
-      <div className="p-admin-tabs">
-        {Object.entries(tabs).map(([k, v]) => (
-          <button
-            key={k}
-            className={tab === k ? "selected" : ""}
-            onClick={() => {
-              setTab(k);
+      <div className="p-admin-toolbar">
+        {tab === "users" && (
+          <button className="p-button" onClick={() => setCreateUser(true)}>
+            创建客户账户 +
+          </button>
+        )}
+        {["overview", "finance"].includes(tab) && (
+          <select
+            aria-label="统计时段"
+            value={days}
+            onChange={(e) => {
+              setDays(Number(e.target.value));
               setOffset(0);
             }}
           >
-            {v}
+            <option value={7}>最近 7 天</option>
+            <option value={30}>最近 30 天</option>
+            <option value={90}>最近 90 天</option>
+          </select>
+        )}
+        {!settingsPage && (
+          <button
+            className="p-button secondary"
+            disabled={isFetching}
+            onClick={() => refetch()}
+          >
+            <RefreshCw size={15} />
+            刷新数据
           </button>
-        ))}
+        )}
       </div>
       <Feedback a={a} />
-      {tab !== "settings" && <div className="p-refresh-row"><button className="p-button secondary" disabled={isFetching} onClick={() => refetch()}>刷新数据</button></div>}
+
       {error && <div className="p-alert">{error.message}</div>}
       {tab === "overview" && data && (
-        <>
-          <div className="p-stats">
-            <div>
-              <small>平台用户</small>
-              <strong>{data.users}</strong>
-            </div>
-            <div>
-              <small>客户订单</small>
-              <strong>{data.orders}</strong>
-            </div>
-            <div>
-              <small>已交付账号</small>
-              <strong>{data.accounts}</strong>
-            </div>
-          </div>
-          <div className="p-card">
-            <h2>执行器状态</h2>
-            <p>
-              {data.worker &&
-              Date.now() - new Date(data.worker.heartbeat).getTime() < 90000
-                ? "执行器在线"
-                : "执行器离线或正在启动"}
-            </p>
-            <p className="p-muted">最近心跳：{date(data.worker?.heartbeat)}</p>
-            {data.worker?.error && (
-              <div className="p-alert">{data.worker.error}</div>
-            )}
-            <p>
-              资源配置在原管理台维护；用户下单使用本站点设置中的注册模板。关闭接单只阻止新订单，关闭队列领取会让当前任务完成后暂停。
-            </p>
-            <button className="p-button" onClick={() => setTab("settings")}>
-              配置价格与接单规则
-            </button>
-          </div>
-        </>
+        <AdminOverview data={data} onOrder={setDetail} />
+      )}
+      {["orders", "users", "accounts", "finance", "codes", "audit"].includes(
+        tab,
+      ) && (
+        <Filters
+          value={filters}
+          onChange={(v) => {
+            setFilters(v);
+            setOffset(0);
+            setSelectedCodes([]);
+          }}
+          mode={["orders", "accounts"].includes(tab)}
+          kind={tab === "finance"}
+          status={
+            tab === "orders"
+              ? {
+                  queued: "排队中",
+                  running: "执行中",
+                  review: "待核实",
+                  completed: "全部完成",
+                  partial: "部分完成",
+                  failed: "未完成",
+                  cancelled: "已取消",
+                }
+              : tab === "users"
+                ? { active: "正常", disabled: "停用" }
+                : tab === "codes"
+                  ? { available: "未使用", used: "已使用", disabled: "已停用" }
+                  : undefined
+          }
+          placeholder={
+            tab === "codes"
+              ? "搜索兑换码前缀或兑换人邮箱"
+              : tab === "audit"
+                ? "搜索操作、说明或操作者邮箱"
+                : tab === "users"
+                  ? "搜索账户邮箱或用户名"
+                  : tab === "finance"
+                    ? "搜索客户邮箱或账本说明"
+                    : "搜索订单编号或邮箱"
+          }
+        />
+      )}
+      {tab === "finance" && data && <AdminFinance data={data} />}
+      {tab === "accounts" && (
+        <section className="p-card p-record-card">
+          <Table
+            rows={rows}
+            columns={[
+              { title: "交付账号", render: (r) => <b>{r.email}</b> },
+              { title: "所属客户", render: (r) => r.owner_email },
+              {
+                title: "注册服务",
+                render: (r) => (r.need_oauth ? "OAuth 授权账号" : "标准账号"),
+              },
+              {
+                title: "关联订单",
+                render: (r) => (
+                  <button
+                    className="p-link"
+                    onClick={() => setDetail(r.order_id)}
+                  >
+                    {r.order_id.slice(0, 12)} ↗
+                  </button>
+                ),
+              },
+              { title: "交付时间", render: (r) => date(r.created_at) },
+            ]}
+          />
+        </section>
       )}
       {tab === "orders" && (
-        <section className="p-card">
+        <section className="p-card p-record-card">
           <Table
             rows={rows}
             columns={[
@@ -144,7 +239,7 @@ export default function AdminPlatform() {
         </section>
       )}
       {tab === "users" && (
-        <section className="p-card">
+        <section className="p-card p-record-card">
           <Table
             rows={rows}
             columns={[
@@ -152,7 +247,12 @@ export default function AdminPlatform() {
                 title: "用户",
                 render: (r) => (
                   <>
-                    <b>{r.name}</b>
+                    <button
+                      className="p-link"
+                      onClick={() => setUserDetail(r.id)}
+                    >
+                      <b>{r.name}</b>
+                    </button>
                     <small className="p-block">{r.email}</small>
                   </>
                 ),
@@ -164,6 +264,10 @@ export default function AdminPlatform() {
               {
                 title: "可用 / 预留积分",
                 render: (r) => `${r.points} / ${r.frozen}`,
+              },
+              {
+                title: "订单 / 消费",
+                render: (r) => `${r.orders} 笔 / ${number(r.spent)} 积分`,
               },
               { title: "状态", render: (r) => <Status value={r.status} /> },
               {
@@ -247,9 +351,78 @@ export default function AdminPlatform() {
             </button>
           </form>
           <section className="p-card">
+            <div className="p-section-heading">
+              <button
+                className="p-link"
+                onClick={() =>
+                  setSelectedCodes(
+                    selectedCodes.length
+                      ? []
+                      : rows
+                          .filter((r: Row) => !r.redeemed_by)
+                          .map((r: Row) => r.id),
+                  )
+                }
+              >
+                选择 / 取消本页未使用兑换码
+              </button>
+              <span className="p-muted p-fine">
+                已选 {selectedCodes.length} 条
+              </span>
+            </div>
+            <div className="p-inline">
+              {[
+                ["enable", "批量启用"],
+                ["disable", "批量停用"],
+                ["delete", "删除未使用"],
+              ].map(([action, label]) => (
+                <button
+                  className="p-button secondary"
+                  key={action}
+                  disabled={!selectedCodes.length || a.busy}
+                  onClick={() => {
+                    if (
+                      action !== "delete" ||
+                      window.confirm("删除所选未使用兑换码？已兑换记录将保留。")
+                    )
+                      void a
+                        .run(
+                          () =>
+                            call("/api/admin/v1/redeem-codes/batch", "POST", {
+                              ids: selectedCodes,
+                              action,
+                            }),
+                          "批量操作完成",
+                        )
+                        .then((r) => r && setSelectedCodes([]));
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             <Table
               rows={rows}
               columns={[
+                {
+                  title: "选择",
+                  render: (r) => (
+                    <input
+                      type="checkbox"
+                      aria-label={`选择兑换码 ${r.prefix}`}
+                      disabled={Boolean(r.redeemed_by)}
+                      checked={selectedCodes.includes(r.id)}
+                      onChange={(e) =>
+                        setSelectedCodes(
+                          e.target.checked
+                            ? [...selectedCodes, r.id]
+                            : selectedCodes.filter((x) => x !== r.id),
+                        )
+                      }
+                    />
+                  ),
+                },
+                { title: "兑换人", render: (r) => r.redeemed_email || "—" },
                 { title: "前缀", render: (r) => <code>{r.prefix}…</code> },
                 { title: "积分", render: (r) => r.points },
                 {
@@ -284,265 +457,250 @@ export default function AdminPlatform() {
           </section>
         </>
       )}
-      {tab === "settings" && settings && (
+      {settingsPage && settings && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            const s = structuredClone(settings);
-            delete s.smtp.password_configured;
+            const fields =
+              tab === "products"
+                ? [
+                    "price_standard",
+                    "price_oauth",
+                    "max_quantity",
+                    "max_open_orders",
+                    "attempt_limit",
+                    "timeout_minutes",
+                    "template",
+                  ]
+                : tab === "announcements"
+                  ? ["announcement", "announcements"]
+                  : (
+                      {
+                        features: [
+                          "features",
+                          "orders_open",
+                          "worker_enabled",
+                          "api_enabled",
+                        ],
+                        security: [
+                          "registration_open",
+                          "email_verify_enabled",
+                          "email_domains",
+                        ],
+                        mail: ["smtp"],
+                        custom_menus: ["custom_menus"],
+                        brand: ["site_name", "brand"],
+                      } as Record<string, string[]>
+                    )[settingTab];
+            const s = Object.fromEntries(
+              fields.map((k) => [k, structuredClone(settings[k])]),
+            );
+            if (s.smtp) delete s.smtp.password_configured;
             a.run(
               () => call("/api/admin/v1/settings", "PATCH", s),
               "站点设置已保存",
             );
           }}
         >
-          <BrandSettings settings={settings} field={field} />
-          <section className="p-card">
-            <h2>开放策略</h2>
-            <div className="p-form-grid">
-              <label>
-                允许注册的邮箱域名
-                <input
-                  value={settings.email_domains.join(", ")}
-                  onChange={(e) =>
-                    field(
-                      "email_domains",
-                      e.target.value
-                        .split(",")
-                        .map((x) => x.trim())
-                        .filter(Boolean),
-                    )
-                  }
-                  placeholder="留空不限制，多个域名用逗号分隔"
-                />
-              </label>
-            </div>
-            <label>
-              站点公告
-              <textarea
-                maxLength={5000}
-                value={settings.announcement}
-                onChange={(e) => field("announcement", e.target.value)}
-              />
-            </label>
-            <div className="p-checks">
+          {tab === "settings" && (
+            <div className="p-setting-tabs">
               {Object.entries({
-                registration_open: "开放用户注册",
-                email_verify_enabled: "注册需要邮箱验证码",
-                orders_open: "开放新订单",
-                api_enabled: "开放外部 API",
-                worker_enabled: "允许队列领取任务",
+                features: "功能开关",
+                security: "安全与认证",
+                mail: "邮件设置",
+                custom_menus: "自定义菜单",
+                brand: "品牌与服务",
               }).map(([k, v]) => (
-                <label key={k}>
-                  <input
-                    type="checkbox"
-                    checked={settings[k]}
-                    onChange={(e) => field(k, e.target.checked)}
-                  />
+                <button
+                  type="button"
+                  key={k}
+                  className={settingTab === k ? "selected" : ""}
+                  onClick={() => setSettingTab(k)}
+                >
                   {v}
-                </label>
+                </button>
               ))}
             </div>
-          </section>
-          <section className="p-card">
-            <h2>积分价格与限额</h2>
-            <div className="p-form-grid">
-              {[
-                ["price_standard", "不带 OAuth / 个", 0, 1000000],
-                ["price_oauth", "含 OAuth / 个", 0, 1000000],
-                ["max_quantity", "每单最大数量", 1, 1000],
-                ["max_open_orders", "每用户未完成订单上限", 1, 20],
-                ["attempt_limit", "每阶段最大尝试次数", 1, 5],
-                ["timeout_minutes", "每次执行时限（分钟）", 2, 120],
-              ].map(([key, label, min, max]) => (
-                <label key={String(key)}>
-                  {label}
-                  <input
-                    type="number"
-                    required
-                    min={Number(min)}
-                    max={Number(max)}
-                    value={settings[String(key)]}
-                    onChange={(e) => field(String(key), Number(e.target.value))}
-                  />
-                </label>
-              ))}
-            </div>
-            <p className="p-muted">
-              下单锁定单价。改价只影响后续新订单；失败与取消的未交付部分退回预留积分。
-            </p>
-          </section>
-          <section className="p-card">
-            <h2>客户订单注册模板</h2>
-            <p className="p-muted">
-              邮箱 API
-              Key、库存和代理池在原管理台维护。订单每次调度一个账号，多用户按轮次排队。
-            </p>
-            <div className="p-form-grid">
-              <label>
-                邮箱供应商
-                <select
-                  value={settings.template.mailProvider || ""}
-                  onChange={(e) => {
-                    const t = { ...settings.template };
-                    if (e.target.value) t.mailProvider = e.target.value;
-                    else delete t.mailProvider;
-                    field("template", t);
-                  }}
-                >
-                  <option value="">使用注册引擎当前默认</option>
-                  <option value="smsbower">SMSBower Gmail</option>
-                  <option value="xiaopingguo">小苹果</option>
-                  <option value="mailcom">Mail.com</option>
-                  <option value="fastmail">Fastmail</option>
-                  <option value="icloud">iCloud</option>
-                </select>
-              </label>
-              <label>
-                代理来源
-                <select
-                  value={settings.template.proxyAssignments?.[0]?.kind || ""}
-                  onChange={(e) => {
-                    const kind = e.target.value;
-                    field(
-                      "template",
-                      kind
-                        ? {
-                            ...settings.template,
-                            schemaVersion: 2,
-                            proxyAssignments: [
-                              {
-                                workerSlot: 1,
-                                kind,
-                                ...(kind === "countryPool"
-                                  ? { countryCode: "US" }
-                                  : { localProxyId: "" }),
-                              },
-                            ],
-                          }
-                        : {
-                            ...(settings.template.mailProvider
-                              ? { mailProvider: settings.template.mailProvider }
-                              : {}),
-                          },
-                    );
-                  }}
-                >
-                  <option value="">使用引擎本地代理池</option>
-                  <option value="countryPool">国家动态代理池</option>
-                  <option value="local">指定本地代理</option>
-                </select>
-              </label>
-              {settings.template.proxyAssignments?.[0]?.kind ===
-                "countryPool" && (
-                <label>
-                  国家代码
-                  <input
-                    required
-                    pattern="GLOBAL|[A-Z]{2}"
-                    value={settings.template.proxyAssignments[0].countryCode}
-                    onChange={(e) =>
-                      field("template", {
-                        ...settings.template,
-                        proxyAssignments: [
-                          {
-                            workerSlot: 1,
-                            kind: "countryPool",
-                            countryCode: e.target.value.toUpperCase(),
-                          },
-                        ],
-                      })
-                    }
-                    placeholder="US、PH 或 GLOBAL"
-                  />
-                </label>
-              )}
-              {settings.template.proxyAssignments?.[0]?.kind === "local" && (
-                <label>
-                  本地代理 ID
-                  <input
-                    required
-                    value={settings.template.proxyAssignments[0].localProxyId}
-                    onChange={(e) =>
-                      field("template", {
-                        ...settings.template,
-                        proxyAssignments: [
-                          {
-                            workerSlot: 1,
-                            kind: "local",
-                            localProxyId: e.target.value,
-                          },
-                        ],
-                      })
-                    }
-                  />
-                </label>
-              )}
-            </div>
-            <a href="/admin/engine/proxies" className="p-link">
-              管理代理资源 ↗
-            </a>
-          </section>
-          <section className="p-card">
-            <h2>邮件服务 SMTP</h2>
-            <p className="p-muted">用于邮箱验证码与找回密码，保存后生效。</p>
-            <div className="p-form-grid">
-              {[
-                ["host", "SMTP 主机", "text"],
-                ["port", "端口", "number"],
-                ["user", "SMTP 用户名", "text"],
-                ["password", "SMTP 密码", "password"],
-                ["from", "发件人邮箱", "email"],
-              ].map(([k, label, type]) => (
-                <label key={k}>
-                  {label}
-                  <input
-                    type={type}
-                    value={settings.smtp[k] || ""}
-                    placeholder={
-                      k === "password" && settings.smtp.password_configured
-                        ? "已配置，留空保持原值"
-                        : ""
-                    }
-                    autoComplete={k === "password" ? "new-password" : "off"}
-                    onChange={(e) =>
-                      field("smtp", {
-                        ...settings.smtp,
-                        [k]:
-                          k === "port"
-                            ? Number(e.target.value)
-                            : e.target.value,
-                      })
-                    }
-                  />
-                </label>
-              ))}
-            </div>
-            <label className="p-check">
-              <input
-                type="checkbox"
-                checked={settings.smtp.secure}
-                onChange={(e) =>
-                  field("smtp", { ...settings.smtp, secure: e.target.checked })
-                }
+          )}
+          {tab === "settings" &&
+            (settingTab === "brand" ? (
+              <BrandSettings settings={settings} field={field} />
+            ) : (
+              <AdminSiteControls
+                key={settingTab}
+                tab={settingTab}
+                settings={settings}
+                field={field}
               />
-              使用隐式 TLS（通常端口 465；587 使用 STARTTLS）
-            </label>
-          </section>
+            ))}
+          {tab === "announcements" && (
+            <AdminAnnouncements settings={settings} field={field} />
+          )}
+          {tab === "products" && (
+            <section className="p-card">
+              <h2>积分价格与限额</h2>
+              <div className="p-form-grid">
+                {[
+                  ["price_standard", "不带 OAuth / 个", 0, 1000000],
+                  ["price_oauth", "含 OAuth / 个", 0, 1000000],
+                  ["max_quantity", "每单最大数量", 1, 1000],
+                  ["max_open_orders", "每用户未完成订单上限", 1, 20],
+                  ["attempt_limit", "每阶段最大尝试次数", 1, 5],
+                  ["timeout_minutes", "每次执行时限（分钟）", 2, 120],
+                ].map(([key, label, min, max]) => (
+                  <label key={String(key)}>
+                    {label}
+                    <input
+                      type="number"
+                      required
+                      min={Number(min)}
+                      max={Number(max)}
+                      value={settings[String(key)]}
+                      onChange={(e) =>
+                        field(String(key), Number(e.target.value))
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+              <p className="p-muted">
+                下单锁定单价。改价只影响后续新订单；失败与取消的未交付部分退回预留积分。
+              </p>
+            </section>
+          )}
+          {tab === "products" && (
+            <section className="p-card">
+              <h2>客户订单注册模板</h2>
+              <p className="p-muted">
+                邮箱 API
+                Key、库存和代理池在原管理台维护。订单每次调度一个账号，多用户按轮次排队。
+              </p>
+              <div className="p-form-grid">
+                <label>
+                  邮箱供应商
+                  <select
+                    value={settings.template.mailProvider || ""}
+                    onChange={(e) => {
+                      const t = { ...settings.template };
+                      if (e.target.value) t.mailProvider = e.target.value;
+                      else delete t.mailProvider;
+                      field("template", t);
+                    }}
+                  >
+                    <option value="">使用注册引擎当前默认</option>
+                    <option value="smsbower">SMSBower Gmail</option>
+                    <option value="xiaopingguo">小苹果</option>
+                    <option value="mailcom">Mail.com</option>
+                    <option value="fastmail">Fastmail</option>
+                    <option value="icloud">iCloud</option>
+                  </select>
+                </label>
+                <label>
+                  代理来源
+                  <select
+                    value={settings.template.proxyAssignments?.[0]?.kind || ""}
+                    onChange={(e) => {
+                      const kind = e.target.value;
+                      field(
+                        "template",
+                        kind
+                          ? {
+                              ...settings.template,
+                              schemaVersion: 2,
+                              proxyAssignments: [
+                                {
+                                  workerSlot: 1,
+                                  kind,
+                                  ...(kind === "countryPool"
+                                    ? { countryCode: "US" }
+                                    : { localProxyId: "" }),
+                                },
+                              ],
+                            }
+                          : {
+                              ...(settings.template.mailProvider
+                                ? {
+                                    mailProvider:
+                                      settings.template.mailProvider,
+                                  }
+                                : {}),
+                            },
+                      );
+                    }}
+                  >
+                    <option value="">使用引擎本地代理池</option>
+                    <option value="countryPool">国家动态代理池</option>
+                    <option value="local">指定本地代理</option>
+                  </select>
+                </label>
+                {settings.template.proxyAssignments?.[0]?.kind ===
+                  "countryPool" && (
+                  <label>
+                    国家代码
+                    <input
+                      required
+                      pattern="GLOBAL|[A-Z]{2}"
+                      value={settings.template.proxyAssignments[0].countryCode}
+                      onChange={(e) =>
+                        field("template", {
+                          ...settings.template,
+                          proxyAssignments: [
+                            {
+                              workerSlot: 1,
+                              kind: "countryPool",
+                              countryCode: e.target.value.toUpperCase(),
+                            },
+                          ],
+                        })
+                      }
+                      placeholder="US、PH 或 GLOBAL"
+                    />
+                  </label>
+                )}
+                {settings.template.proxyAssignments?.[0]?.kind === "local" && (
+                  <label>
+                    本地代理 ID
+                    <input
+                      required
+                      value={settings.template.proxyAssignments[0].localProxyId}
+                      onChange={(e) =>
+                        field("template", {
+                          ...settings.template,
+                          proxyAssignments: [
+                            {
+                              workerSlot: 1,
+                              kind: "local",
+                              localProxyId: e.target.value,
+                            },
+                          ],
+                        })
+                      }
+                    />
+                  </label>
+                )}
+              </div>
+              <a href="/admin/engine/proxies" className="p-link">
+                管理代理资源 ↗
+              </a>
+            </section>
+          )}
           <div className="p-save-bar">
             <button className="p-button" disabled={a.busy}>
-              {a.busy ? "保存中…" : "保存全部设置"}
+              {a.busy ? "保存中…" : "保存配置"}
             </button>
           </div>
         </form>
       )}
       {tab === "audit" && (
-        <section className="p-card">
+        <section className="p-card p-record-card">
           <Table
             rows={rows}
             columns={[
               { title: "操作", render: (r) => r.action },
-              { title: "执行用户", render: (r) => r.actor_id || "系统" },
+              {
+                title: "执行用户",
+                render: (r) => r.actor_email || r.actor_id || "系统",
+              },
               { title: "目标", render: (r) => r.target || "—" },
               { title: "说明", render: (r) => r.detail || "—" },
               { title: "时间", render: (r) => date(r.created_at) },
@@ -550,24 +708,22 @@ export default function AdminPlatform() {
           />
         </section>
       )}
-      {["users", "orders", "codes", "audit"].includes(tab) && (
-        <div className="p-pagination">
-          <button
-            className="p-button secondary"
-            disabled={!offset}
-            onClick={() => setOffset(Math.max(0, offset - 50))}
-          >
-            上一页
-          </button>
-          <span>第 {offset / 50 + 1} 页</span>
-          <button
-            className="p-button secondary"
-            disabled={rows.length < 50}
-            onClick={() => setOffset(offset + 50)}
-          >
-            下一页
-          </button>
-        </div>
+      {["users", "orders", "accounts", "finance", "codes", "audit"].includes(
+        tab,
+      ) && (
+        <Pagination
+          offset={offset}
+          total={data?.total}
+          count={rows.length}
+          onChange={(n) => {
+            setOffset(n);
+            setSelectedCodes([]);
+          }}
+        />
+      )}
+      {createUser && <AdminCreateUser onClose={() => setCreateUser(false)} />}
+      {userDetail && (
+        <AdminUserDetail id={userDetail} onClose={() => setUserDetail("")} />
       )}
       {detail && (
         <OrderDetail id={detail} admin onClose={() => setDetail("")} />

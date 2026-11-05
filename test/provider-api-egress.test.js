@@ -101,10 +101,10 @@ test('with no forwarders configured the plain fetch is used', async () => {
   assert.equal(direct, 1);
 });
 
-test('the default rotation is 10808 then 7890, and an explicit list wins', () => {
-  assert.deepEqual(providerApiProxiesFromConfig({}), [A, B]);
+test('no desktop proxies are invented and an explicit list wins', () => {
+  assert.deepEqual(providerApiProxiesFromConfig({}), []);
   assert.deepEqual(providerApiProxiesFromConfig({ proxyPool: { apiRequestProxy: A, maintenanceProxy: B } }), [A, B]);
-  assert.deepEqual(providerApiProxiesFromConfig({ proxyPool: { apiRequestProxy: A, maintenanceProxy: A } }), [A, B]);
+  assert.deepEqual(providerApiProxiesFromConfig({ proxyPool: { apiRequestProxy: A, maintenanceProxy: A } }), [A]);
   assert.deepEqual(providerApiProxiesFromConfig({ proxyPool: { providerApiProxies: [B] } }), [B]);
   assert.deepEqual(providerApiProxiesFromConfig({ proxyPool: { providerApiProxies: [] } }), []);
 });

@@ -10,8 +10,8 @@ const { executePureHttpUrl } = require('./pure-url');
  * forwarder — one exit IP — took every request of a 20-Worker run. When that
  * exit got throttled, every claim, poll and status call timed out together.
  *
- * Requests now go through an explicit list of local forwarders (by default
- * 10808 then 7890). The current one keeps serving until it fails
+ * Requests use only explicitly configured forwarders; otherwise they go direct.
+ * The current forwarder keeps serving until it fails
  * `failoverAfter` times in a row; then traffic moves to the next and the
  * rotation continues around the list. A forwarder that refuses the connection
  * outright is skipped at once and the request is retried on the next one,
@@ -22,7 +22,6 @@ const { executePureHttpUrl } = require('./pure-url');
 
 const DEFAULT_FAILOVER_AFTER = 2;
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_PROXIES = ['http://127.0.0.1:10808', 'http://127.0.0.1:7890'];
 // The forwarder itself is unreachable: nothing was sent upstream.
 const CONNECT_FAILURE = /ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ENOTFOUND|EADDRNOTAVAIL|Proxy socket closed before connect|Proxy socket timed out|proxy connect/i;
 
@@ -42,14 +41,16 @@ function uniqueProxies(list) {
  * The forwarders the vendor API should use, from `proxyPool`.
  *
  * An explicit `providerApiProxies` array wins (an empty one means "go
- * direct"). Otherwise the two local forwarders the console already knows —
- * `apiRequestProxy` (10808) and `maintenanceProxy` (7890) — in that order.
+ * direct"). Otherwise use explicitly configured `apiRequestProxy` and
+ * `maintenanceProxy`, in that order. No desktop endpoint is invented.
  */
 function providerApiProxiesFromConfig(config = {}) {
   const pool = config?.proxyPool || {};
   if (Array.isArray(pool.providerApiProxies)) return uniqueProxies(pool.providerApiProxies);
   const configured = uniqueProxies([pool.apiRequestProxy, pool.maintenanceProxy]);
-  return configured.length ? uniqueProxies([...configured, ...DEFAULT_PROXIES]).slice(0, Math.max(2, configured.length)) : DEFAULT_PROXIES.slice();
+  // No implicit desktop proxy on a server. Explicit providerApiProxies keeps
+  // its existing meaning, including [] for direct access.
+  return configured;
 }
 
 function headerBag(response = {}) {

@@ -58,3 +58,12 @@ CREATE INDEX IF NOT EXISTS platform_order_owner ON platform_orders(user_id,creat
 CREATE INDEX IF NOT EXISTS platform_item_queue ON platform_items(status,available_at);
 CREATE INDEX IF NOT EXISTS platform_account_owner ON platform_accounts(user_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS platform_ledger_owner ON platform_ledger(user_id,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS platform_mail_logs (id bigserial PRIMARY KEY,recipient text NOT NULL,purpose text NOT NULL,status text NOT NULL,detail text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT now());
+
+ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS error_code text NOT NULL DEFAULT '';
+ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS error_category text NOT NULL DEFAULT '';
+ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS error_detail text NOT NULL DEFAULT '';
+ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS engine_sold_at timestamptz;
+ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS engine_sold_retry_at timestamptz NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS platform_account_sold_pending ON platform_accounts(engine_sold_retry_at,id) WHERE engine_sold_at IS NULL;

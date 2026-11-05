@@ -77,11 +77,14 @@ function sessionAssetSearch(query: SessionAssetQuery = {}) {
 }
 
 export const endpoints = {
+  smsSettings: (provider: string) => api<any>(`/sms/settings/${encodeURIComponent(provider)}`),
+  testSmsSettings: (provider: string, body: unknown) => api<any>(`/sms/settings/${encodeURIComponent(provider)}/test`, { method: 'POST', body: JSON.stringify(body) }),
+  saveSmsSettings: (provider: string, body: unknown) => api<ConfigSnapshot>(`/sms/settings/${encodeURIComponent(provider)}`, { method: 'PUT', body: JSON.stringify(body) }),
   health: () => api<{ ok: boolean; activeRunId: string; activeRunIds?: string[]; taskCapacity?: TaskCapacitySnapshot | null; now: string }>('/health'),
-  services: (smsProvider?: 'smsbower' | 'firefox') => api<{ services: ServiceStatus[]; sms: ServiceStatus }>(`/services${smsProvider ? `?smsProvider=${encodeURIComponent(smsProvider)}` : ''}`),
+  services: (smsProvider?: 'smsbower' | 'firefox' | 'hero-sms') => api<{ services: ServiceStatus[]; sms: ServiceStatus }>(`/services${smsProvider ? `?smsProvider=${encodeURIComponent(smsProvider)}` : ''}`),
   config: () => api<ConfigSnapshot>('/config'),
   smsFirefoxCountries: () => api<{ countries: Array<{ code: string; name?: string; englishName?: string; dialingCode?: string; price?: number }> }>('/sms/firefox/countries'),
-  smsMarket: (provider: 'smsbower' | 'firefox') => api<SmsMarketSnapshot>(`/sms/market?provider=${encodeURIComponent(provider)}`),
+  smsMarket: (provider: 'smsbower' | 'firefox' | 'hero-sms') => api<SmsMarketSnapshot>(`/sms/market?provider=${encodeURIComponent(provider)}`),
   saveConfig: (body: unknown) => api<ConfigSnapshot>('/config', { method: 'PUT', body: JSON.stringify(body) }),
   mailcomStatus: (provider?: string) => api<MailcomStatus>(`/mailcom/status${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`),
   // Accepted-and-running, not finished: poll `mailcomImportProgress` for the rest.

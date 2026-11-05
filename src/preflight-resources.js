@@ -148,9 +148,13 @@ function summarizeSmsPreflight(result = {}, config = {}, options = {}) {
     : Number((requiredBalance - balance).toFixed(6));
   let issue = '';
   let message = '';
+  const readFailure = countryMarkets.find((market) => market.issue && !['SMS_INVENTORY_EMPTY', 'SMS_PRICE_ABOVE_MAX'].includes(market.issue));
   if (result.ready === false) {
     issue = 'SMS_PROVIDER_NOT_READY';
     message = 'SMS provider reported that it is not ready';
+  } else if (!mock && !eligibleCountries.length && readFailure) {
+    issue = readFailure.issue;
+    message = '短信报价查询失败，请检查密钥、服务项目和服务器网络';
   } else if (!mock && !countryMarkets.some((market) => market.offers > 0)) {
     issue = 'SMS_INVENTORY_EMPTY';
     message = 'No priced SMS inventory with a positive count is available';

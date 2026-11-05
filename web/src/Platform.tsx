@@ -1,31 +1,51 @@
-import { lazy, Suspense, useState, useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
   ChartNoAxesCombined,
-  ChevronRight,
   Code2,
   KeyRound,
   LayoutDashboard,
-  LogOut,
-  Menu,
   Settings,
-  ShieldCheck,
   Wallet,
-  X,
+  Sparkles,
 } from "lucide-react";
 import { Link, Router, useRouter } from "./router";
 import Auth from "./portal/Auth";
 import Workspace from "./portal/Workspace";
+import Dashboard from "./portal/Dashboard";
+import CustomPage from "./portal/CustomPage";
 import Docs from "./portal/Docs";
+import Shell, { type NavGroup } from "./portal/Shell";
 import { call, currentUser } from "./portal/client";
 import "./portal/portal.css";
+import "./portal/workspace.css";
 const AdminConsole = lazy(() => import("./AdminConsole"));
-const AdminPlatform = lazy(() => import("./portal/AdminPlatform"));
+const AdminChrome = lazy(() => import("./portal/AdminChrome"));
+const AdminEntry = lazy(() => import("./portal/AdminEntry"));
+const customerGroups: NavGroup[] = [
+  {
+    label: "注册与交付",
+    items: [
+      { path: "/", name: "工作台概览", icon: LayoutDashboard },
+      { path: "/register", name: "注册服务", icon: Sparkles },
+      { path: "/orders", name: "我的订单", icon: ChartNoAxesCombined },
+      { path: "/accounts", name: "我的账号", icon: KeyRound },
+      { path: "/wallet", name: "积分钱包", icon: Wallet },
+    ],
+  },
+  {
+    label: "工具与账户",
+    items: [
+      { path: "/keys", name: "开发接入", icon: Code2 },
+      { path: "/docs", name: "接口文档", icon: BookOpen },
+      { path: "/profile", name: "账户设置", icon: Settings },
+    ],
+  },
+];
 export default function Platform() {
   const q = useQueryClient(),
-    { path, navigate } = useRouter(),
-    [mobile, setMobile] = useState(false);
+    { path, search, navigate } = useRouter();
   const pub = useQuery({
     queryKey: ["public"],
     queryFn: () => call("/api/public"),
@@ -42,10 +62,10 @@ export default function Platform() {
   }, [path, q]);
   useEffect(() => {
     if (!pub.data) return;
-    document.title = `${pub.data.site_name} · 用户工作台`;
+    document.title = `${pub.data.site_name} · ${path === "/docs" ? "开发者文档" : "用户工作台"}`;
     const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
     if (icon) icon.href = pub.data.brand.icon_url;
-  }, [pub.data]);
+  }, [pub.data, path]);
   async function logout() {
     try {
       await call("/api/auth/logout", "POST", {});
@@ -64,21 +84,10 @@ export default function Platform() {
         <button onClick={() => location.reload()}>重新加载</button>
       </div>
     );
-  if (path === "/docs" && !me.data)
+  if (path === "/docs")
     return (
       <div className="portal">
-        <header className="p-public-header">
-          <Link className="p-brand" to="/">
-            <img className="p-logo" src={pub.data.brand.icon_url} alt="" />
-            {pub.data.site_name}
-          </Link>
-          <Link className="p-button" to="/">
-            登录工作台
-          </Link>
-        </header>
-        <main className="p-public-docs">
-          <Docs />
-        </main>
+        <Docs pub={pub.data} signedIn={Boolean(me.data)} />
       </div>
     );
   if (!me.data)
@@ -88,8 +97,7 @@ export default function Platform() {
           pub={pub.data}
           onLogin={() => {
             q.invalidateQueries({ queryKey: ["me"] });
-            if (path.startsWith("/admin")) navigate("/admin");
-            else navigate("/");
+            navigate(path.startsWith("/admin") ? "/admin" : "/");
           }}
         />
       </div>
@@ -98,8 +106,8 @@ export default function Platform() {
     return (
       <>
         <div className="p-engine-return">
-          <a href="/admin">← 平台管理</a>
-          <a href="/">用户前台</a>
+          <a href="/admin">← 运营控制台</a>
+          <a href="/">用户工作台</a>
         </div>
         <Suspense
           fallback={<div className="portal p-loading">正在加载注册管理台…</div>}
@@ -110,110 +118,63 @@ export default function Platform() {
         </Suspense>
       </>
     );
-  const menus = [
-    { path: "/", name: "控制台", icon: LayoutDashboard, page: "home" },
-    {
-      path: "/orders",
-      name: "我的订单",
-      icon: ChartNoAxesCombined,
-      page: "orders",
-    },
-    { path: "/accounts", name: "我的账号", icon: KeyRound, page: "accounts" },
-    { path: "/wallet", name: "积分钱包", icon: Wallet, page: "wallet" },
-    { path: "/keys", name: "API 管理", icon: Code2, page: "keys" },
-    { path: "/docs", name: "API 文档", icon: BookOpen, page: "docs" },
-    { path: "/profile", name: "个人设置", icon: Settings, page: "profile" },
-    ...(me.data.role === "admin"
-      ? [{ path: "/admin", name: "平台管理", icon: ShieldCheck, page: "admin" }]
-      : []),
-  ];
-  const current = menus.find((m) => m.path === path);
+  if (
+    (path === "/admin" || path.startsWith("/admin/")) &&
+    me.data.role === "admin"
+  )
+    return (
+      <Suspense
+        fallback={<div className="portal p-loading">正在打开运营控制台…</div>}
+      >
+        <AdminChrome user={me.data} pub={pub.data} onLogout={logout} />
+      </Suspense>
+    );
+  const visibleGroups = customerGroups.map((g) => ({
+    ...g,
+    items: g.items.filter(
+      (i) =>
+        me.data.role === "admin" ||
+        pub.data.features?.[i.path === "/" ? "home" : i.path.slice(1)] !==
+          false,
+    ),
+  }));
+  const current = visibleGroups
+    .flatMap((g) => g.items)
+    .find((x) => x.path === path);
+  const custom = path.startsWith("/custom/");
   return (
-    <div className="portal p-shell">
-      <aside className={`p-sidebar ${mobile ? "open" : ""}`}>
-        <Link className="p-brand" to="/">
-          <img className="p-logo" src={pub.data.brand.icon_url} alt="" />
-          {pub.data.site_name}
-        </Link>
-        <span className="p-sidebar-label">工作空间</span>
-        <nav>
-          {menus.map((m) => (
-            <Link
-              key={m.path}
-              to={m.path}
-              onClick={() => setMobile(false)}
-              className={path === m.path ? "active" : ""}
-            >
-              <m.icon size={18} />
-              {m.name}
-              {path === m.path && <ChevronRight size={15} />}
-            </Link>
-          ))}
-        </nav>
-        <div className="p-sidebar-bottom">
-          <div className="p-avatar">
-            {me.data.name.slice(0, 1).toUpperCase()}
-          </div>
-          <div>
-            <b>{me.data.name}</b>
-            <small>{me.data.role === "admin" ? "管理员" : "用户账户"}</small>
-          </div>
-          <button aria-label="退出登录" onClick={logout}>
-            <LogOut size={18} />
-          </button>
+    <Shell
+      user={me.data}
+      pub={pub.data}
+      onLogout={logout}
+      groups={visibleGroups}
+      title={custom ? "更多服务" : current?.name || "功能暂未开放"}
+      actions={
+        me.data.role === "admin" ? (
+          <Suspense fallback={null}>
+            <AdminEntry operations />
+          </Suspense>
+        ) : null
+      }
+    >
+      {custom ? (
+        <CustomPage id={path.slice(8)} />
+      ) : !current ? (
+        <div className="p-card">
+          <h1>此功能暂未开放</h1>
+          <Link to="/">返回工作台</Link>
         </div>
-      </aside>
-      {mobile && (
-        <button
-          className="p-overlay"
-          aria-label="关闭菜单"
-          onClick={() => setMobile(false)}
+      ) : path === "/" ? (
+        <Dashboard user={me.data} pub={pub.data} />
+      ) : (
+        <Workspace
+          key={`${me.data.id}:${path}${search}`}
+          page={path.slice(1)}
+          user={me.data}
+          pub={pub.data}
+          onLogout={logout}
         />
       )}
-      <div className="p-body">
-        <header className="p-topbar">
-          <button
-            className="p-menu-toggle"
-            aria-label="打开菜单"
-            onClick={() => setMobile(!mobile)}
-          >
-            {mobile ? <X size={21} /> : <Menu size={21} />}
-          </button>
-          <span>{current?.name || "页面不存在"}</span>
-          <div>
-            <span className="p-muted">可用积分</span>
-            <b>{me.data.points.toLocaleString()}</b>
-            <Link to="/wallet">充值 / 兑换</Link>
-          </div>
-        </header>
-        <main className="p-main">
-          <Suspense fallback={<div className="p-card">加载中…</div>}>
-            {!current ? (
-              <div className="p-card">
-                <h1>页面不存在</h1>
-                <Link to="/">返回控制台</Link>
-              </div>
-            ) : current.page === "docs" ? (
-              <Docs />
-            ) : current.page === "admin" ? (
-              <AdminPlatform />
-            ) : (
-              <Workspace
-                key={me.data.id}
-                page={current.page}
-                user={me.data}
-                pub={pub.data}
-                onLogout={logout}
-              />
-            )}
-          </Suspense>
-        </main>
-        <footer className="p-footer">
-          {pub.data.site_name}
-          <span>{pub.data.brand.tagline}</span>
-          {pub.data.brand.support_url && <a href={pub.data.brand.support_url} target="_blank" rel="noopener noreferrer">联系客服 ↗</a>}
-        </footer>
-      </div>
-    </div>
+    </Shell>
   );
 }

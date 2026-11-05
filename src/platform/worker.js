@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const runtimeSecrets = require("./runtime-secrets");
 const { id } = require("./security");
+const { executionFailure } = require("./execution-failure");
 const TERMINAL = new Set(["complete", "partial", "failed", "cancelled"]);
 class OrderWorker {
   constructor(db, orders, manager) {
@@ -97,6 +98,7 @@ class OrderWorker {
     };
   }
   async cycle() {
+    await this.syncSold();
     const running = (
       await this.db.query(
         "SELECT i.*,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.cancel_requested FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.status IN ('running','review')",
@@ -111,7 +113,7 @@ class OrderWorker {
     )
       return;
     const candidate = await this.db.one(
-      "SELECT i.*,o.template,o.need_oauth,o.attempt_limit,o.user_id FROM platform_items i JOIN platform_orders o ON o.id=i.order_id JOIN platform_users u ON u.id=o.user_id WHERE i.status IN ('queued','oauth_pending') AND i.available_at<=now() AND NOT o.cancel_requested AND u.status='active' ORDER BY o.last_scheduled_at NULLS FIRST,o.created_at,i.position LIMIT 1",
+      "SELECT i.*,o.template,o.need_oauth,o.attempt_limit,o.timeout_minutes,o.created_at AS order_created_at,o.user_id FROM platform_items i JOIN platform_orders o ON o.id=i.order_id JOIN platform_users u ON u.id=o.user_id WHERE i.status IN ('queued','oauth_pending') AND i.available_at<=now() AND NOT o.cancel_requested AND u.status='active' ORDER BY o.last_scheduled_at NULLS FIRST,o.created_at,i.position LIMIT 1",
     );
     if (!candidate) return;
     // Each customer receives one account per turn. Durable run IDs are written
@@ -139,7 +141,11 @@ class OrderWorker {
           stage,
           stage === "register" ? 1 : 0,
           stage === "oauth" ? 1 : 0,
-          stage === "oauth" ? "正在完成 OAuth 授权" : "正在注册账号",
+          stage === "oauth"
+            ? "正在补充 OAuth 授权"
+            : candidate.need_oauth
+              ? "正在注册并完成 OAuth 授权"
+              : "正在注册账号",
         ],
       );
       await q.query(
@@ -155,12 +161,13 @@ class OrderWorker {
     if (!claimed) return;
     const plan = {
       ...candidate.template,
+      schemaVersion: 2,
       taskKind: stage === "oauth" ? "oauth" : "register_session",
       mailCount: 1,
       workerConcurrency: 1,
       aliasEnabled: false,
       mailRentalWatch: false,
-      postRegistrationOAuth: false,
+      postRegistrationOAuth: stage === "register" && candidate.need_oauth,
       security: { setPassword: true, enrollTotp: true },
       ...(stage === "oauth"
         ? {
@@ -178,6 +185,8 @@ class OrderWorker {
         [runId],
       );
     } catch (e) {
+      const failure = executionFailure(e);
+      await this.recordFailure(runId, failure);
       let persisted;
       try {
         persisted = this.manager.load(runId);
@@ -194,10 +203,74 @@ class OrderWorker {
         "SELECT i.*,o.attempt_limit,o.cancel_requested FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.id=$1",
         [candidate.id],
       );
-      await this.retryOrFinish(
-        fresh,
-        "资源预检未通过，请联系管理员检查邮箱和代理配置",
+      if (failure.wait && !fresh.cancel_requested) {
+        await this.db.query(
+          "UPDATE platform_attempts SET status='finished',finished_at=now() WHERE run_id=$1",
+          [runId],
+        );
+        // Resource waits never consume a registration/OAuth execution attempt.
+        // Bound the wait by this item's first claim, excluding time in the queue.
+        const first = await this.db.one(
+          "SELECT min(created_at) AS started FROM platform_attempts WHERE item_id=$1",
+          [fresh.id],
+        );
+        const remaining =
+          candidate.timeout_minutes * 60 -
+          (Date.now() - new Date(first.started).getTime()) / 1000;
+        if (remaining <= 0) {
+          await this.orders.finish(
+            fresh.id,
+            null,
+            "资源等待超时，未交付部分积分已退回",
+          );
+          return;
+        }
+        await this.db.query(
+          "UPDATE platform_items SET attempts=attempts-$2,oauth_attempts=oauth_attempts-$3 WHERE id=$1",
+          [fresh.id, stage === "register" ? 1 : 0, stage === "oauth" ? 1 : 0],
+        );
+        await this.queueNext(
+          fresh,
+          fresh.asset_id ? "oauth_pending" : "queued",
+          `${failure.detail}，稍后自动继续`,
+          Math.min(failure.delay, Math.ceil(remaining)),
+        );
+        return;
+      }
+      await this.retryOrFinish(fresh, failure.detail);
+    }
+  }
+  async recordFailure(runId, failure) {
+    await this.db.query(
+      "UPDATE platform_attempts SET error_code=$2,error_category=$3,error_detail=$4 WHERE run_id=$1",
+      [runId, failure.code, failure.category, failure.detail],
+    );
+  }
+  async syncSold(assetId = null) {
+    const rows = (
+      await this.db.query(
+        "SELECT id,asset_id FROM platform_accounts WHERE engine_sold_at IS NULL AND engine_sold_retry_at<=now() AND ($1::text IS NULL OR asset_id=$1) ORDER BY engine_sold_retry_at,id LIMIT 100",
+        [assetId],
+      )
+    ).rows;
+    for (const row of rows) {
+      await this.db.query(
+        "UPDATE platform_accounts SET engine_sold_retry_at=now()+interval '30 seconds' WHERE id=$1",
+        [row.id],
       );
+      try {
+        const store = this.manager.sessionAssets();
+        if (typeof store.markLifecycle !== "function") continue;
+        const result = store.markLifecycle([row.asset_id], "sold");
+        if (result?.missing?.length) continue;
+        await this.db.query(
+          "UPDATE platform_accounts SET engine_sold_at=now() WHERE id=$1",
+          [row.id],
+        );
+      } catch {
+        // Delivery is already committed. Retry this durable marker next cycle,
+        // including after restart, without charging or delivering again.
+      }
     }
   }
   async retryOrFinish(item, message) {
@@ -320,7 +393,6 @@ class OrderWorker {
     if (result) {
       try {
         await this.orders.finish(item.id, result);
-        this.manager.sessionAssets().markLifecycle?.([asset.id], "sold");
       } catch (e) {
         if (e.code === "23505") {
           await this.review(item, "账号已关联其他交付记录，需要管理员核实");
@@ -328,8 +400,14 @@ class OrderWorker {
         }
         throw e;
       }
+      await this.syncSold(asset.id);
       return;
     }
+    const failure = executionFailure(
+      jobs.find((job) => job.error)?.error || {},
+      "ENGINE_EXECUTION_FAILED",
+    );
+    await this.recordFailure(item.run_id, failure);
     if (asset) {
       // A registered account is never replaced just because OAuth failed.
       await this.db.query("UPDATE platform_items SET asset_id=$2 WHERE id=$1", [

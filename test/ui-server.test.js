@@ -1368,6 +1368,7 @@ test('pure OAuth preflight does not require SMS credentials before a phone chall
     if (previous === undefined) delete process.env.GPT_RE_TEST_MISSING_SMS_KEY;
     else process.env.GPT_RE_TEST_MISSING_SMS_KEY = previous;
   });
+  fs.writeFileSync(path.join(cwd, 'proxy-pool.txt'), 'http://127.0.0.1:4001\n');
   const app = buildApp({ cwd });
   t.after(() => app.close());
   const store = app.services.runManager.sessionAssets();
@@ -1822,8 +1823,10 @@ test('login-state asset API lists summaries, reveals details, exports credential
   assert.equal(coolingList.statusCode, 200, coolingList.body);
   assert.deepEqual(coolingList.json().assets.map((item) => item.id), [asset.id]);
   assert.equal(coolingList.json().assets[0].oauthCooldown.failureCount, 21);
+  const localProxy = app.services.proxyService.import({ content: 'http://127.0.0.1:4001', mode: 'replace' }).local.proxies[0];
   const coolingPlan = normalizeRunPlan({
     taskKind: 'oauth', workerConcurrency: 1,
+    proxyAssignments: [{ workerSlot: 1, kind: 'local', localProxyId: localProxy.id }],
     oauthSource: { kind: 'session_assets', assetIds: [asset.id] },
   }, config);
   const coolingPreflight = await app.inject({
@@ -2142,6 +2145,7 @@ test('resume API exposes and restarts a failed OAuth task stopped on a legacy MF
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
   const plan = normalizeRunPlan({
     taskKind: 'oauth', workerConcurrency: 1,
+    proxyAssignments: [{ workerSlot: 1, kind: 'local', localProxyId: 'saved-proxy' }],
     oauthSource: { kind: 'session_assets', assetIds: ['asset-mfa-resume'] },
   }, new ConfigService({ cwd }).normalized());
   const applied = applyRunPlan(new ConfigService({ cwd }).normalized(), plan);
@@ -3529,9 +3533,12 @@ test('CPA artifact API converts selected Codex files to sub2api only when downlo
   assert.equal(afterBatch.every((artifact) => typeof artifact.sub2ApiExportedAt === 'string'), true);
 
   fs.appendFileSync(fixtures[0].filePath, ' ');
+  // Direct fixture writes bypass the engine's synchronous cache invalidation.
+  app.services.runManager.invalidateCpaArtifactScan();
   const afterReplacement = (await app.inject({ url: '/api/v1/artifacts/cpa' })).json().artifacts;
-  assert.equal(afterReplacement[0].jobId, fixtures[0].jobId);
-  assert.equal(afterReplacement[0].sub2ApiExportedAt, undefined);
+  const replaced = afterReplacement.find((artifact) => artifact.jobId === fixtures[0].jobId);
+  assert.ok(replaced);
+  assert.equal(replaced.sub2ApiExportedAt, undefined);
   await app.close();
 });
 

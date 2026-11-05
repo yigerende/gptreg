@@ -1,3 +1,5 @@
+import type { ProxyAssignment } from './types';
+import { OAuthProxyDialog } from './OAuthProxyDialog';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -769,12 +771,11 @@ export function SessionAssetsPage() {
   const allMatchedSelected = total > 0 && selected.size >= total && rows.every((asset) => selected.has(asset.id));
 
   const workerCount = Math.max(1, Math.min(actionIds.length || 1, refreshConcurrency, MAX_WORKER_CONCURRENCY));
-  // Everything launched from this page works on accounts that already exist, so
-  // it goes through the configured local forwarder instead of drawing from the
-  // country pools. Registration tasks are started from the task page and keep
-  // their pool exit for the whole job, OAuth leg included.
+  // Session/security refresh retains its maintenance lane. Independent OAuth
+  // receives explicit pool/fixed assignments from the selection dialog.
   const proxyAssignments = maintenanceProxyAssignments(workerCount);
-  const oauthPlanFor = (ids: string[]): RunPlan => {
+  const [oauthDialogIds, setOAuthDialogIds] = useState<string[] | null>(null);
+  const oauthPlanFor = (ids: string[], chosenProxies: ProxyAssignment[]): RunPlan => {
     const count = ids.length;
     const concurrency = Math.max(1, Math.min(count || 1, refreshConcurrency, MAX_WORKER_CONCURRENCY));
     return {
@@ -787,7 +788,7 @@ export function SessionAssetsPage() {
       aliasMaxAttempts: 1,
       aliasRunTag: String(config.data?.config.aliases?.runTag || 'gptre'),
       totalAccounts: count,
-      proxyAssignments: maintenanceProxyAssignments(concurrency),
+      proxyAssignments: chosenProxies.slice(0, concurrency),
       oauthSource: { kind: 'session_assets', assetIds: ids },
       postRegistrationOAuth: false,
       security: { setPassword: false, enrollTotp: false },
@@ -843,7 +844,7 @@ export function SessionAssetsPage() {
     onError: (error) => setNotice({ tone: 'danger', text: errorMessage(error) }),
   });
   const oauth = useMutation({
-    mutationFn: (ids: string[]) => endpoints.startRun(oauthPlanFor(ids)),
+    mutationFn: ({ ids, proxies }: { ids: string[]; proxies: ProxyAssignment[] }) => endpoints.startRun(oauthPlanFor(ids, proxies)),
     onSuccess: (run) => { client.invalidateQueries({ queryKey: ['runs'] }); navigate(`/run/${run.runId}`); },
     onError: (error) => setNotice({ tone: 'danger', text: errorMessage(error) }),
   });
@@ -966,7 +967,7 @@ export function SessionAssetsPage() {
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-  const launchOAuth = () => oauth.mutate(actionIds);
+  const launchOAuth = () => setOAuthDialogIds(actionIds);
   const rebindRows = useMemo(() => rows.filter((asset) => actionIds.includes(asset.id) && isIcloudAssetRow(asset)), [rows, actionIds]);
   const goRebind = () => {
     if (!rebindRows.length) return;
@@ -975,7 +976,7 @@ export function SessionAssetsPage() {
   };
   const probingIds = useMemo(() => new Set(probe.isPending ? (probe.variables || []) : []), [probe.isPending, probe.variables]);
   const trialCheckingIds = useMemo(() => new Set(trialCheck.isPending ? (trialCheck.variables || []) : []), [trialCheck.isPending, trialCheck.variables]);
-  const oauthingIds = useMemo(() => new Set(oauth.isPending ? (oauth.variables || []) : []), [oauth.isPending, oauth.variables]);
+  const oauthingIds = useMemo(() => new Set(oauth.isPending ? (oauth.variables?.ids || []) : []), [oauth.isPending, oauth.variables]);
   const refreshingSecurity = refresh.isPending && refresh.variables === true;
   const refreshingSession = refresh.isPending && refresh.variables !== true;
   const oauthLabel = selected.size > 1 ? `批量 OAuth (${selected.size})` : '发起 OAuth';
@@ -987,6 +988,7 @@ export function SessionAssetsPage() {
   const facetGroups = useMemo(() => groupFacets(counts?.facets || {}, facets), [counts?.facets, facets]);
 
   return <div className="sessions-page">
+    <OAuthProxyDialog open={oauthDialogIds !== null} onOpenChange={(open) => { if (!open) setOAuthDialogIds(null); }} workers={Math.max(1, Math.min(oauthDialogIds?.length || 1, refreshConcurrency, MAX_WORKER_CONCURRENCY))} busy={oauth.isPending} error={oauth.error ? errorMessage(oauth.error) : ''} onConfirm={(proxies) => oauth.mutate({ ids: oauthDialogIds || [], proxies })} />
     <PageHeader title="登录态资产" description="AT 快速测活统一经本机 7890；与完整登录态刷新相互独立" actions={<div className="session-page-actions">
       <Button icon={refreshingSession ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} onClick={() => refresh.mutate(false)} disabled={!refreshReady || refresh.isPending}>{refreshingSession ? '启动中' : `登录态刷新${actionIds.length ? ` (${actionIds.length})` : ''}`}</Button>
       <Button title={securityRecoveryNeeded ? '补全未配置的密码与 TOTP' : '所选账号的密码与 TOTP 已配置'} icon={refreshingSecurity ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />} onClick={() => refresh.mutate(true)} disabled={!refreshReady || !securityRecoveryNeeded || refresh.isPending}>{refreshingSecurity ? '启动中' : `OTP/PW 恢复${actionIds.length > 1 ? ` (${actionIds.length})` : ''}`}</Button>
@@ -1086,7 +1088,7 @@ export function SessionAssetsPage() {
             <StatusBadge status={oauthSucceeded(asset) ? 'complete' : 'unknown'} label={oauthSucceeded(asset) ? '已成功' : '未 OAuth'} />
             <StatusBadge status={health?.status || 'unknown'} label={healthLabel(health)} />
             <time title={`AT 测活于 ${formatTime(health?.checkedAt)}`}>{formatTime(asset.updatedAt)}</time>
-            <span className="session-row-action" onClick={(event) => event.stopPropagation()}><IconButton label={`AT 测活 ${asset.email}`} onClick={() => probe.mutate([asset.id])} disabled={sessionCheckBusy}>{probingIds.has(asset.id) ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</IconButton><IconButton label={`优惠检测 ${asset.email}`} onClick={() => trialCheck.mutate([asset.id])} disabled={sessionCheckBusy}>{trialCheckingIds.has(asset.id) ? <LoaderCircle className="spin" size={15} /> : <Gift size={15} />}</IconButton><IconButton label={asset.oauthCooldown?.active ? `OAuth 冷却中 ${asset.email}` : `OAuth ${asset.email}`} onClick={() => oauth.mutate([asset.id])} disabled={oauth.isPending || asset.oauthCooldown?.active === true}>{oauthingIds.has(asset.id) ? <LoaderCircle className="spin" size={15} /> : <KeyRound size={15} />}</IconButton></span>
+            <span className="session-row-action" onClick={(event) => event.stopPropagation()}><IconButton label={`AT 测活 ${asset.email}`} onClick={() => probe.mutate([asset.id])} disabled={sessionCheckBusy}>{probingIds.has(asset.id) ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}</IconButton><IconButton label={`优惠检测 ${asset.email}`} onClick={() => trialCheck.mutate([asset.id])} disabled={sessionCheckBusy}>{trialCheckingIds.has(asset.id) ? <LoaderCircle className="spin" size={15} /> : <Gift size={15} />}</IconButton><IconButton label={asset.oauthCooldown?.active ? `OAuth 冷却中 ${asset.email}` : `OAuth ${asset.email}`} onClick={() => setOAuthDialogIds([asset.id])} disabled={oauth.isPending || asset.oauthCooldown?.active === true}>{oauthingIds.has(asset.id) ? <LoaderCircle className="spin" size={15} /> : <KeyRound size={15} />}</IconButton></span>
           </div>;
            })}</div> : <EmptyState icon={<KeyRound size={25} />} title={page.isLoading ? '读取登录态' : '没有匹配的登录态'} detail={page.isLoading ? '正在按当前筛选取回。' : '放宽库存、待办或属性筛选，或清除搜索。'} />}
         </div>
@@ -1098,7 +1100,7 @@ export function SessionAssetsPage() {
         </div>}
       </section>
       <aside className="session-inspector">
-        {detail.isLoading ? <div className="loading-line"><LoaderCircle className="spin" />读取登录态详情</div> : detail.data ? <SessionAssetInspector asset={detail.data} latestRunId={latestAssetRunId} onCopy={copy} onTotp={() => revealTotp.mutate(detail.data!.id)} onProbe={() => probe.mutate([detail.data!.id])} onTrialCheck={() => trialCheck.mutate([detail.data!.id])} onOAuth={() => oauth.mutate([detail.data!.id])} onClearOAuthCooldown={() => clearOAuthCooldown.mutate(detail.data!.id)} clearingOAuthCooldown={clearOAuthCooldown.isPending && clearOAuthCooldown.variables === detail.data.id} probing={probingIds.has(detail.data.id)} trialChecking={trialCheckingIds.has(detail.data.id)} checkBusy={sessionCheckBusy} oauthing={oauthingIds.has(detail.data.id)} /> : <EmptyState icon={<UserRoundCheck size={25} />} title="选择一个登录态" detail="右侧会显示完整会话与可执行操作。" />}
+        {detail.isLoading ? <div className="loading-line"><LoaderCircle className="spin" />读取登录态详情</div> : detail.data ? <SessionAssetInspector asset={detail.data} latestRunId={latestAssetRunId} onCopy={copy} onTotp={() => revealTotp.mutate(detail.data!.id)} onProbe={() => probe.mutate([detail.data!.id])} onTrialCheck={() => trialCheck.mutate([detail.data!.id])} onOAuth={() => setOAuthDialogIds([detail.data!.id])} onClearOAuthCooldown={() => clearOAuthCooldown.mutate(detail.data!.id)} clearingOAuthCooldown={clearOAuthCooldown.isPending && clearOAuthCooldown.variables === detail.data.id} probing={probingIds.has(detail.data.id)} trialChecking={trialCheckingIds.has(detail.data.id)} checkBusy={sessionCheckBusy} oauthing={oauthingIds.has(detail.data.id)} /> : <EmptyState icon={<UserRoundCheck size={25} />} title="选择一个登录态" detail="右侧会显示完整会话与可执行操作。" />}
       </aside>
     </div>
   </div>;

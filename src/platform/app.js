@@ -7,6 +7,7 @@ const { registerApi } = require("./api");
 const { openapi } = require("./openapi");
 const { fail } = require("./security");
 const { siteIcon } = require("./branding");
+const { requestFeature } = require("./site-controls");
 function buildPlatform({
   db,
   orders,
@@ -22,7 +23,13 @@ function buildPlatform({
     trustProxy: ["127.0.0.1", "::1"],
   });
   app.addHook("onRequest", async (r, reply) => {
-    const pathname = new URL(r.url, "http://local").pathname;
+    // Check the decoded path used by routing, including encoded asset names.
+    let pathname;
+    try {
+      pathname = decodeURIComponent(new URL(r.url, "http://local").pathname);
+    } catch {
+      fail(false, "请求路径无效", 400);
+    }
     reply
       .header("Cache-Control", "no-store")
       .header("X-Content-Type-Options", "nosniff")
@@ -46,9 +53,11 @@ function buildPlatform({
       );
     }
     const admin =
+      /^\/admin(?:\/|$)/.test(pathname) ||
+      /^\/admin-assets(?:\/|$)/.test(pathname) ||
       pathname.startsWith("/api/admin/") ||
       pathname.startsWith("/api/v1/") ||
-      /^\/assets\/(AdminConsole|AdminPlatform)[-.]/.test(pathname);
+      /^\/assets\/Admin[^/]*\.(?:js|css)(?:\.map)?$/.test(pathname);
     if (
       admin ||
       pathname.startsWith("/api/user/") ||
@@ -57,13 +66,33 @@ function buildPlatform({
       const api = pathname.startsWith("/open/v1/");
       await authenticate(db, r, api);
       if (admin) fail(r.user.role === "admin", "需要管理员权限", 403);
+      const settings = await db.settings();
+      const feature = requestFeature(pathname, r.method);
+      if (!admin && r.user.role !== "admin") {
+        fail(
+          !feature || settings.features[feature] !== false,
+          "此功能暂未开放",
+          403,
+        );
+        if (api)
+          fail(settings.features.keys !== false, "开发接入暂未开放", 403);
+      }
       if (api) {
-        fail((await db.settings()).api_enabled, "API 暂未开放", 503);
+        fail(settings.api_enabled, "API 暂未开放", 503);
         if (!(await db.limit(`api:${r.user.id}`, 120))) {
           reply.header("Retry-After", "60");
           fail(false, "请求过于频繁，请稍后重试", 429);
         }
       }
+    }
+    if (
+      ["/docs", "/openapi.json"].includes(pathname) &&
+      (await db.settings()).features.docs === false
+    ) {
+      try {
+        await authenticate(db, r, false);
+      } catch {}
+      fail(r.user?.role === "admin", "接口文档暂未开放", 403);
     }
   });
   app.setErrorHandler((e, r, reply) => {
@@ -83,9 +112,15 @@ function buildPlatform({
   registerApi(app, db, orders, crypt);
   for (const route of ["/site-icon", "/favicon.ico", "/site-icon/default"]) {
     app.get(route, async (r, reply) => {
-      const icon = siteIcon(route.endsWith("/default") ? {} : (await db.settings()).brand);
-      return reply.type(icon.mime).header("Content-Security-Policy", "default-src 'none'; sandbox")
-        .header("Cache-Control", "no-cache").header("ETag", `"${icon.hash}"`).send(icon.bytes);
+      const icon = siteIcon(
+        route.endsWith("/default") ? {} : (await db.settings()).brand,
+      );
+      return reply
+        .type(icon.mime)
+        .header("Content-Security-Policy", "default-src 'none'; sandbox")
+        .header("Cache-Control", "no-cache")
+        .header("ETag", `"${icon.hash}"`)
+        .send(icon.bytes);
     });
   }
   app.get("/healthz", async () => ({ ok: true }));
@@ -112,7 +147,7 @@ function buildPlatform({
       },
     });
   const root = path.join(cwd, "web", "dist");
-  app.get("/assets/*", async (r, reply) => {
+  const serveAsset = (directory) => async (r, reply) => {
     const rel = r.params["*"];
     fail(
       /^[a-zA-Z0-9._/-]+$/.test(rel) &&
@@ -121,7 +156,7 @@ function buildPlatform({
       "文件不存在",
       404,
     );
-    const file = path.join(root, "assets", rel);
+    const file = path.join(root, directory, rel);
     fail(fs.existsSync(file) && fs.statSync(file).isFile(), "文件不存在", 404);
     reply.type(
       {
@@ -133,7 +168,9 @@ function buildPlatform({
       }[path.extname(file)] || "application/octet-stream",
     );
     return fs.createReadStream(file);
-  });
+  };
+  app.get("/assets/*", serveAsset("assets"));
+  app.get("/admin-assets/*", serveAsset("admin-assets"));
   app.setNotFoundHandler((r, reply) => {
     if (
       r.method !== "GET" ||

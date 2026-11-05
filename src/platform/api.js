@@ -1,15 +1,37 @@
 "use strict";
-const { id, token, digest, fail, integer } = require("./security");
+const {
+  id,
+  token,
+  digest,
+  fail,
+  integer,
+  passwordHash,
+} = require("./security");
 const { audit } = require("./db");
 const { validateBrand } = require("./branding");
-const { ledger, publicOrder } = require("./orders");
+const { ledger } = require("./orders");
 const { userView } = require("./auth");
 const { totpCode } = require("../chatgpt-session-runner");
+const {
+  registerReports,
+  listOrders,
+  listAccounts,
+  listLedger,
+  search,
+  option,
+} = require("./reports");
 const paging = (r) => ({
   limit: integer(Number(r.query.limit || 50), 1, 100, "limit"),
   offset: integer(Number(r.query.offset || 0), 0, 1000000, "offset"),
 });
+const { validateControls, visibleMenus } = require("./site-controls");
+const { registerMail } = require("./mail");
 function registerApi(app, db, orders, crypt) {
+  registerMail(app, db, crypt);
+  app.get("/api/user/v1/navigation", async (r) => ({
+    items: visibleMenus(await db.settings(), r.user.role),
+  }));
+  registerReports(app, db);
   const scope = (r, s) => {
     if (r.user.scopes)
       fail(r.user.scopes.includes(s), `API Key 缺少 ${s} 权限`, 403);
@@ -43,8 +65,7 @@ function registerApi(app, db, orders, crypt) {
     });
     app.get(`${prefix}/registration-orders`, async (r) => {
       scope(r, "orders:read");
-      const p = paging(r);
-      return { items: await orders.list(r.user.id, p.limit, p.offset), ...p };
+      return listOrders(db, r.user.id, r.query);
     });
     app.get(`${prefix}/registration-orders/:id`, async (r) => {
       scope(r, "orders:read");
@@ -56,16 +77,7 @@ function registerApi(app, db, orders, crypt) {
     });
     app.get(`${prefix}/accounts`, async (r) => {
       scope(r, "accounts:read");
-      const p = paging(r);
-      return {
-        items: (
-          await db.query(
-            "SELECT id,email,order_id,need_oauth,created_at FROM platform_accounts WHERE user_id=$1 AND ($4::text IS NULL OR order_id=$4) ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            [r.user.id, p.limit, p.offset, r.query.order_id || null],
-          )
-        ).rows,
-        ...p,
-      };
+      return listAccounts(db, r.user.id, r.query);
     });
     app.get(`${prefix}/accounts/:id/credentials`, async (r) => {
       scope(r, "credentials:read");
@@ -102,31 +114,29 @@ function registerApi(app, db, orders, crypt) {
         404,
       );
       const values = rows.map((x) => crypt.decrypt(x.credentials));
-      const csvCell = value => '"' + String(value).replace(/"/g, '""') + '"';
+      const csvCell = (value) => '"' + String(value).replace(/"/g, '""') + '"';
       await audit(db, r.user.id, "accounts.export", "", String(rows.length));
       return {
         filename: `gptreg-accounts.${v.format || "txt"}`,
         content:
           v.format === "json"
             ? JSON.stringify(values, null, 2)
-            : v.format === 'csv'
-              ? '\uFEFFemail,password,totp_secret\r\n' + values.map(c => [c.email,c.password,c.totp_secret].map(csvCell).join(',')).join('\r\n') + '\r\n'
-            : values
-                .map((c) => `${c.email}----${c.password}----${c.totp_secret}`)
-                .join("\n") + "\n",
+            : v.format === "csv"
+              ? "\uFEFFemail,password,totp_secret\r\n" +
+                values
+                  .map((c) =>
+                    [c.email, c.password, c.totp_secret].map(csvCell).join(","),
+                  )
+                  .join("\r\n") +
+                "\r\n"
+              : values
+                  .map((c) => `${c.email}----${c.password}----${c.totp_secret}`)
+                  .join("\n") + "\n",
       };
     });
   }
   app.get("/api/user/v1/ledger", async (r) => {
-    const p = paging(r);
-    return {
-      items: (
-        await db.query(
-          "SELECT id,kind,points_delta,frozen_delta,note,created_at FROM platform_ledger WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-          [r.user.id, p.limit, p.offset],
-        )
-      ).rows,
-    };
+    return listLedger(db, r.user.id, r.query);
   });
   app.post("/api/user/v1/redeem", async (r) => {
     fail(await db.limit(`redeem:${r.user.id}`, 10), "兑换尝试过多", 429);
@@ -219,13 +229,6 @@ function registerApi(app, db, orders, crypt) {
     );
     return { ok: true };
   });
-  app.get("/api/admin/v1/overview", async () => ({
-    users: (await db.one("SELECT count(*)::int AS n FROM platform_users")).n,
-    orders: (await db.one("SELECT count(*)::int AS n FROM platform_orders")).n,
-    accounts: (await db.one("SELECT count(*)::int AS n FROM platform_accounts"))
-      .n,
-    worker: await db.one("SELECT * FROM platform_worker WHERE id=1"),
-  }));
   app.get("/api/admin/v1/settings", async () => {
     const s = await db.settings();
     return {
@@ -243,6 +246,9 @@ function registerApi(app, db, orders, crypt) {
         "site_name",
         "brand",
         "announcement",
+        "announcements",
+        "custom_menus",
+        "features",
         "registration_open",
         "email_verify_enabled",
         "email_domains",
@@ -269,6 +275,9 @@ function registerApi(app, db, orders, crypt) {
           )
         ).rows[0].value,
         s = { ...old, ...v };
+      s.custom_menus ??= [];
+      s.announcements ??= [];
+      validateControls(s);
       s.brand = validateBrand({ ...old.brand, ...v.brand });
       for (const k of [
         "registration_open",
@@ -369,15 +378,89 @@ function registerApi(app, db, orders, crypt) {
       return { ok: true };
     });
   });
+  app.post("/api/admin/v1/users", async (r) => {
+    const v = r.body || {},
+      email = String(v.email || "")
+        .trim()
+        .toLowerCase(),
+      name = String(v.name || "").trim();
+    fail(
+      email.length <= 254 &&
+        /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) &&
+        name.length >= 1 &&
+        name.length <= 80,
+      "请填写有效邮箱和用户名",
+    );
+    fail(
+      typeof v.password === "string" &&
+        v.password.length >= 10 &&
+        v.password.length <= 72,
+      "密码须为 10～72 位",
+    );
+    fail(await db.limit(`admincreate:${r.user.id}`, 10), "创建过于频繁", 429);
+    const hash = await passwordHash(v.password),
+      uid = id();
+    await db.tx(async (q) => {
+      await q.query(
+        "INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)",
+        [uid, email, name, hash],
+      );
+      await audit(q, r.user.id, "user.create", uid, email);
+    });
+    return { ok: true, id: uid };
+  });
+  app.post("/api/admin/v1/redeem-codes/batch", async (r) => {
+    const { ids, action } = r.body || {};
+    fail(
+      Array.isArray(ids) &&
+        ids.length > 0 &&
+        ids.length <= 100 &&
+        ids.every((x) => typeof x === "string" && x.length <= 80),
+      "请选择 1～100 条记录",
+    );
+    fail(["enable", "disable", "delete"].includes(action), "批量操作无效");
+    return db.tx(async (q) => {
+      const result =
+        action === "delete"
+          ? await q.query(
+              "DELETE FROM platform_redeem_codes WHERE id=ANY($1::text[]) AND redeemed_by IS NULL RETURNING id",
+              [ids],
+            )
+          : await q.query(
+              "UPDATE platform_redeem_codes SET disabled=$2 WHERE id=ANY($1::text[]) AND redeemed_by IS NULL RETURNING id",
+              [ids, action === "disable"],
+            );
+      await audit(
+        q,
+        r.user.id,
+        `redeem.${action}`,
+        "",
+        `${result.rowCount} 条记录`,
+      );
+      return {
+        ok: true,
+        changed: result.rowCount,
+        skipped: ids.length - result.rowCount,
+      };
+    });
+  });
   app.get("/api/admin/v1/users", async (r) => {
     const p = paging(r);
+    const values = [
+      search(r.query.q),
+      option(r.query.status, ["active", "disabled"]),
+    ];
+    const where =
+      "FROM platform_users u WHERE (u.email ILIKE $1 OR u.name ILIKE $1) AND ($2='' OR u.status=$2)";
     return {
       items: (
         await db.query(
-          "SELECT id,email,name,role,status,points,frozen,created_at FROM platform_users ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-          [p.limit, p.offset],
+          `SELECT u.id,u.email,u.name,u.role,u.status,u.points,u.frozen,u.created_at,(SELECT count(*)::int FROM platform_orders o WHERE o.user_id=u.id) AS orders,(SELECT coalesce(sum(charged),0)::float8 FROM platform_orders o WHERE o.user_id=u.id) AS spent ${where} ORDER BY u.created_at DESC,u.id DESC LIMIT $3 OFFSET $4`,
+          [...values, p.limit, p.offset],
         )
       ).rows,
+      total: (await db.one(`SELECT count(*)::int AS n ${where}`, values)).n,
+      ...p,
     };
   });
   app.patch("/api/admin/v1/users/:id", async (r) => {
@@ -444,19 +527,7 @@ function registerApi(app, db, orders, crypt) {
     return { ok: true };
   });
   app.get("/api/admin/v1/orders", async (r) => {
-    const p = paging(r);
-    return {
-      items: (
-        await db.query(
-          "SELECT o.*,u.email FROM platform_orders o JOIN platform_users u ON u.id=o.user_id ORDER BY o.created_at DESC LIMIT $1 OFFSET $2",
-          [p.limit, p.offset],
-        )
-      ).rows.map((o) => ({
-        ...publicOrder(o),
-        user_id: o.user_id,
-        email: o.email,
-      })),
-    };
+    return listOrders(db, null, r.query);
   });
   app.get("/api/admin/v1/orders/:id", async (r) => {
     const o = await db.one("SELECT user_id FROM platform_orders WHERE id=$1", [
@@ -482,14 +553,20 @@ function registerApi(app, db, orders, crypt) {
   });
   app.get("/api/admin/v1/redeem-codes", async (r) => {
     const p = paging(r);
-    return {
-      items: (
-        await db.query(
-          "SELECT id,prefix,points,redeemed_by,disabled,created_at,redeemed_at FROM platform_redeem_codes ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-          [p.limit, p.offset],
-        )
-      ).rows,
-    };
+    const values = [
+      search(r.query.q),
+      option(r.query.status, ["used", "available", "disabled"]),
+    ];
+    const from =
+      "FROM platform_redeem_codes c LEFT JOIN platform_users u ON u.id=c.redeemed_by WHERE (c.prefix ILIKE $1 OR u.email ILIKE $1) AND ($2='' OR ($2='used' AND c.redeemed_by IS NOT NULL) OR ($2='available' AND c.redeemed_by IS NULL AND NOT c.disabled) OR ($2='disabled' AND c.redeemed_by IS NULL AND c.disabled))";
+    const [items, count] = await Promise.all([
+      db.query(
+        `SELECT c.id,c.prefix,c.points,c.redeemed_by,c.disabled,c.created_at,c.redeemed_at,u.email AS redeemed_email ${from} ORDER BY c.created_at DESC,c.id DESC LIMIT $3 OFFSET $4`,
+        [...values, p.limit, p.offset],
+      ),
+      db.one(`SELECT count(*)::int AS total ${from}`, values),
+    ]);
+    return { items: items.rows, total: count.total, ...p };
   });
   app.post("/api/admin/v1/redeem-codes", async (r) => {
     const points = integer(r.body?.points, 1, 1000000, "积分"),
@@ -518,14 +595,17 @@ function registerApi(app, db, orders, crypt) {
   });
   app.get("/api/admin/v1/audit", async (r) => {
     const p = paging(r);
-    return {
-      items: (
-        await db.query(
-          "SELECT * FROM platform_audit ORDER BY id DESC LIMIT $1 OFFSET $2",
-          [p.limit, p.offset],
-        )
-      ).rows,
-    };
+    const value = [search(r.query.q)];
+    const from =
+      "FROM platform_audit a LEFT JOIN platform_users u ON a.actor_id=u.id WHERE (a.action ILIKE $1 OR a.detail ILIKE $1 OR a.target ILIKE $1 OR u.email ILIKE $1)";
+    const [items, count] = await Promise.all([
+      db.query(
+        `SELECT a.*,u.email AS actor_email ${from} ORDER BY a.id DESC LIMIT $2 OFFSET $3`,
+        [...value, p.limit, p.offset],
+      ),
+      db.one(`SELECT count(*)::int AS total ${from}`, value),
+    ]);
+    return { items: items.rows, total: count.total, ...p };
   });
 }
 module.exports = { registerApi };

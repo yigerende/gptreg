@@ -326,6 +326,7 @@ export type ConfigSnapshot = {
     mailPasswordConfigured: boolean;
     mailcomAdminTokenConfigured?: boolean;
     smsApiKeyConfigured: boolean;
+    heroSmsApiKeyConfigured?: boolean;
     firefoxCredentialsConfigured?: boolean;
   };
 };

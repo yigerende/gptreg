@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, ShieldCheck, LoaderCircle } from "lucide-react";
 import { call, type Row } from "./client";
+import ServiceFeatures from "./ServiceFeatures";
 export default function Auth({
   pub,
   onLogin,
@@ -94,6 +95,7 @@ export default function Auth({
             <br />
             在自己的工作台，管理订单、积分与账号。
           </p>
+          <ServiceFeatures compact />
           <div className="p-story-steps">
             <span>01 选择数量与模式</span>
             <span>02 跟踪注册进度</span>
@@ -104,7 +106,9 @@ export default function Auth({
       </section>
       <section className="p-auth-panel">
         <form onSubmit={submit}>
-          <span className="p-eyebrow">WELCOME TO {pub.brand.english_name || pub.site_name}</span>
+          <span className="p-eyebrow">
+            WELCOME TO {pub.brand.english_name || pub.site_name}
+          </span>
           <h2>
             {mode === "login"
               ? "欢迎回来"
@@ -277,12 +281,27 @@ export default function Auth({
               ? "重置后原登录会话和 API 密钥将失效"
               : "仅在你自己的账户空间查看业务资料"}
           </div>
-          <a className="p-doc-link" href="/docs">
-            查看开放 API 文档 ↗
-          </a>
+          {pub.features?.docs !== false && (
+            <a className="p-doc-link" href="/docs">
+              查看开放 API 文档 ↗
+            </a>
+          )}
           <div className="p-service-info">
-            {pub.brand.support_url && <a href={pub.brand.support_url} target="_blank" rel="noopener noreferrer">联系客服 ↗</a>}
-            {pub.brand.terms && <details><summary>服务约定</summary><p>{pub.brand.terms}</p></details>}
+            {pub.brand.support_url && (
+              <a
+                href={pub.brand.support_url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                联系客服 ↗
+              </a>
+            )}
+            {pub.brand.terms && (
+              <details>
+                <summary>服务约定</summary>
+                <p>{pub.brand.terms}</p>
+              </details>
+            )}
           </div>
         </form>
       </section>

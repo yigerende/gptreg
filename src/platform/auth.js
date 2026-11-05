@@ -1,6 +1,7 @@
 "use strict";
 const crypto = require("node:crypto");
-const nodemailer = require("nodemailer");
+const { sendMail } = require("./mail");
+const { activeAnnouncements } = require("./site-controls");
 const {
   id,
   token,
@@ -79,6 +80,8 @@ function registerAuth(app, db, crypt) {
       site_name: s.site_name,
       brand: publicBrand(s.brand),
       announcement: s.announcement,
+      announcements: activeAnnouncements(s),
+      features: s.features,
       registration_open: s.registration_open,
       email_verify_enabled: s.email_verify_enabled,
       email_domains: s.email_domains,
@@ -160,36 +163,22 @@ function registerAuth(app, db, crypt) {
       [email, "active"],
     );
     if (purpose === "register" || exists) {
-      const smtp = s.smtp;
-      const transport = nodemailer.createTransport({
-        host: smtp.host,
-        port: smtp.port,
-        secure: smtp.secure,
-        requireTLS: !smtp.secure,
-        auth: smtp.user
-          ? {
-              user: smtp.user,
-              pass: smtp.password ? crypt.decrypt(smtp.password) : "",
-            }
-          : undefined,
-        connectionTimeout: 10000,
-        socketTimeout: 15000,
-      });
       try {
-        await transport.sendMail({
-          from: smtp.from,
-          to: email,
-          subject: `${s.site_name} 邮箱验证码`,
-          text: `您的验证码：${code}，15 分钟内有效。请勿分享给他人。`,
-        });
+        await sendMail(
+          db,
+          crypt,
+          s,
+          email,
+          purpose,
+          `${s.site_name} 邮箱验证码`,
+          `您的验证码：${code}，15 分钟内有效。请勿分享给他人。`,
+        );
       } catch {
         await db.query(
           "DELETE FROM platform_email_codes WHERE email=$1 AND purpose=$2 AND hash=$3",
           [email, purpose, digest(`${email}:${purpose}:${code}`)],
         );
         fail(false, "邮件发送失败，请联系管理员检查邮件服务", 503);
-      } finally {
-        transport.close();
       }
     }
     return {

@@ -88,20 +88,23 @@ function smsMarketConfig(configService, provider, options = {}) {
   const raw = configService.readRaw();
   const normalized = configService.normalized();
   const rawSms = raw.sms || {};
+  if (provider === 'hero-sms') return require('../sms-settings').effectiveSmsConfig(rawSms, provider);
   const sms = { ...(normalized.sms || {}), provider };
   if (provider === 'smsbower') {
+    const bower = normalized.sms?.smsbower || normalized.sms || {};
     const storedBaseUrl = String(rawSms.baseUrl || '');
     sms.baseUrl = storedBaseUrl && !/firefox\.fun/i.test(storedBaseUrl)
       ? storedBaseUrl
       : DEFAULT_SMSBOWER_BASE_URL;
-    sms.apiKey = rawSms.apiKey || normalized.sms?.apiKey || '';
+    sms.apiKey = rawSms.apiKey || bower.apiKey || '';
+    sms.apiKeyEnv = rawSms.apiKeyEnv || 'SMSBOWER_API_KEY';
     sms.service = rawSms.service || { code: 'dr' };
-    sms.country = rawSms.country || normalized.sms?.country || { id: 151, name: 'Chile' };
+    sms.country = rawSms.country || bower.country || { id: 151, name: 'Chile' };
     sms.countries = Array.isArray(rawSms.countries) && rawSms.countries.length
       ? rawSms.countries
-      : (normalized.sms?.countries || [sms.country]);
+      : (bower.countries || [sms.country]);
     if (options.includeCatalog === true) sms.countries = SMSBOWER_COUNTRY_CATALOG;
-    sms.maxPrice = rawSms.maxPrice ?? normalized.sms?.maxPrice;
+    sms.maxPrice = rawSms.maxPrice ?? bower.maxPrice;
   } else {
     sms.firefox = { ...(normalized.sms?.firefox || {}), ...(rawSms.firefox || {}) };
   }
@@ -231,6 +234,7 @@ function buildApp(options = {}) {
       sms.baseUrl || '',
       sms.apiKey || '',
       sms.firefox?.baseUrl || '',
+      sms.firefox?.token || '',
       sms.firefox?.maxPrice ?? null,
       sms.firefox?.countries || [],
     ]);
@@ -262,13 +266,13 @@ function buildApp(options = {}) {
   app.get('/api/v1/services', async (request, reply) => {
     const storedConfig = configService.readRaw();
     const requestedSmsProvider = String(request.query?.smsProvider || '').trim().toLowerCase();
-    const config = ['smsbower', 'firefox'].includes(requestedSmsProvider)
+    const config = ['smsbower', 'firefox', 'hero-sms'].includes(requestedSmsProvider)
       ? { ...storedConfig, sms: { ...(storedConfig.sms || {}), provider: requestedSmsProvider } }
       : storedConfig;
     reply.header('Cache-Control', 'no-store');
     const [mail, sms] = await Promise.all([
       checkService('mail', config.mail?.baseUrl || 'http://127.0.0.1:8000'),
-      smsStatus(config),
+      smsStatus({ ...config, sms: require('../sms-settings').effectiveSmsConfig(config.sms, config.sms?.provider) }),
     ]);
     return {
       services: [mail],
@@ -293,9 +297,28 @@ function buildApp(options = {}) {
 
   app.get('/api/v1/sms/market', async (request, reply) => {
     const provider = String(request.query?.provider || configService.readRaw().sms?.provider || 'smsbower').trim().toLowerCase();
-    if (!['smsbower', 'firefox'].includes(provider)) throw new HttpError(400, 'Unsupported SMS provider');
+    if (!['smsbower', 'firefox', 'hero-sms'].includes(provider)) throw new HttpError(400, 'Unsupported SMS provider');
     reply.header('Cache-Control', 'no-store');
     return smsMarketReader(smsMarketConfig(configService, provider, { includeCatalog: provider === 'smsbower' }));
+  });
+
+  const { SmsSettingsService } = require('./sms-settings-service');
+  const smsSettings = new SmsSettingsService(configService, { fetch: options.smsSettingsFetch });
+  app.get('/api/v1/sms/settings/:provider', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return smsSettings.read(request.params.provider);
+  });
+  app.post('/api/v1/sms/settings/:provider/test', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return smsSettings.test(request.params.provider, request.body || {});
+  });
+  app.put('/api/v1/sms/settings/:provider', async (request, reply) => {
+    // Legacy live runs do not have a private SMS config snapshot yet.
+    if (runManager.starting || runManager.auxiliaryStarting || runManager.activeRuns().some((r) => !r.state.smsConfig)) throw new HttpError(409, '请等待正在启动或旧版任务结束后保存短信配置');
+    const result = smsSettings.save(request.params.provider, request.body || {});
+    smsStatusCache = null;
+    reply.header('Cache-Control', 'no-store');
+    return result;
   });
 
   app.post('/api/v1/config/validate', async (request) => configService.validate(request.body?.config || request.body || {}));

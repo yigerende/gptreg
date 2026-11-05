@@ -20,6 +20,13 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       sourcemap: false,
+      rollupOptions: {
+        output: {
+          chunkFileNames: (chunk) => /^Admin/.test(chunk.name)
+            ? 'admin-assets/[name]-[hash].js'
+            : 'assets/[name]-[hash].js',
+        },
+      },
     },
   };
 });

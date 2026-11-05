@@ -309,8 +309,10 @@ function validateV2Config(input = {}, options = {}) {
   const provider = requestedProvider === 'firefox-fun' || requestedProvider === 'firefox.fun'
     ? 'firefox'
     : requestedProvider;
-  if (provider !== 'smsbower' && provider !== 'firefox' && provider !== 'mock') throw new Error(`Unsupported SMS provider: ${provider}`);
-  const smsBowerMaxPrice = asNonNegativeNumber(sms.maxPrice, provider === 'smsbower' ? undefined : 0, 'sms.maxPrice');
+  if (!['smsbower', 'firefox', 'hero-sms', 'mock'].includes(provider)) throw new Error(`Unsupported SMS provider: ${provider}`);
+  const bower = sms.smsbower || sms;
+  const hero = (sms.hero || provider === 'hero-sms') ? require('./sms-settings').normalizeHero(sms.hero) : null;
+  const smsBowerMaxPrice = asNonNegativeNumber(bower.maxPrice, provider === 'smsbower' ? undefined : 0, 'sms.maxPrice');
   if (provider === 'smsbower' && smsBowerMaxPrice <= 0) throw new Error('sms.maxPrice must be greater than zero for SMSBower');
   if (provider === 'smsbower' && smsBowerMaxPrice > MAX_SMSBOWER_PRICE_USD) {
     throw new Error(`sms.maxPrice must not exceed ${MAX_SMSBOWER_PRICE_USD} USD for SMSBower`);
@@ -331,7 +333,7 @@ function validateV2Config(input = {}, options = {}) {
   const firefoxCountries = normalizeFirefoxCountries(firefox.countries);
   const firefoxBaseUrl = DEFAULT_FIREFOX_FUN_URL;
   const firefoxSettings = { ...firefox };
-  for (const key of ['token', 'apiName', 'password', 'apiReturn']) {
+  for (const key of ['apiName', 'password', 'apiReturn']) {
     delete firefoxSettings[key];
   }
   const activeMaxPrice = provider === 'firefox' ? firefoxMaxPrice : smsBowerMaxPrice;
@@ -431,7 +433,7 @@ function validateV2Config(input = {}, options = {}) {
       service: String(mail.service || 'dr').trim(),
       domain: mailDomain,
       maxPrice: mailMaxPrice,
-      apiKey: optionalSecret(mail.apiKey, 'mail.apiKey') || optionalSecret(sms.apiKey, 'sms.apiKey'),
+      apiKey: optionalSecret(mail.apiKey, 'mail.apiKey') || optionalSecret(bower.apiKey, 'sms.apiKey'),
       apiKeyEnv: mail.apiKeyEnv || 'SMSBOWER_API_KEY',
     },
     aliases: {
@@ -652,6 +654,13 @@ function validateV2Config(input = {}, options = {}) {
   };
 
   requiredString(normalized.mail.baseUrl, 'mail.baseUrl');
+  if (hero) normalized.sms.hero = hero;
+  if (provider === 'hero-sms') {
+    // Preserve SMSBower's own settings when normalization runs again (resume,
+    // validation and preflight all normalize). Hero's key never becomes a mail key.
+    normalized.sms.smsbower = sms.smsbower || Object.fromEntries(['baseUrl', 'apiKey', 'apiKeyEnv', 'service', 'country', 'countries', 'maxPrice'].map((k) => [k, sms[k]]));
+    Object.assign(normalized.sms, hero, { provider: 'hero-sms', hero });
+  }
   return normalized;
 }
 

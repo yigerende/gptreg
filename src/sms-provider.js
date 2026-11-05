@@ -1093,6 +1093,10 @@ function createSmsProvider(config = {}) {
   const provider = String(config.provider || config.type || 'mock').toLowerCase();
   if (provider === 'mock') return new MockSmsProvider(config);
   if (provider === 'smsbower' || provider === 'sms-bower') return new SmsBowerProvider(config);
+  if (['hero-sms', 'hero_sms', 'herosms'].includes(provider)) {
+    const { HeroSmsProvider } = require('./hero-sms-provider');
+    return new HeroSmsProvider({ ...config, ...(config.hero || {}) });
+  }
   if (provider === 'firefox' || provider === 'firefox-fun' || provider === 'firefox.fun') {
     // Lazy-load to keep the shared phone-normalization helper free of a module
     // cycle: firefox-fun-provider imports it from this file.

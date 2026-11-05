@@ -277,7 +277,7 @@ export const TASK_SLOT_LABELS: Record<TaskSlot, string> = {
 
 export const TASK_SLOT_PURPOSE: Record<TaskSlot, string> = {
   main: '注册类任务。消耗邮箱、手机号和住宅代理，同一时间只允许一个。',
-  auxiliary: '对已有账号的维护类任务（OAuth、登录态刷新）。走本机转发，不争抢注册资源，可并行多个。',
+  auxiliary: '已有账号的 OAuth、登录态刷新等任务，可并行多个。独立 OAuth 使用所选国家池或固定代理，每个出口独占绑定。',
 };
 
 export function runTaskSlotLabel(run: Pick<RunSummary, 'taskSlot' | 'taskKind' | 'plan'>) {

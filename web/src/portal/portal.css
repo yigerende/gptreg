@@ -468,6 +468,14 @@
   border-left: 1px solid var(--p-line);
   padding-left: 15px;
 }
+.p-topbar-actions { margin-left: auto; }
+.p-topbar-wallet { display: flex; align-items: center; gap: 13px; }
+.p-topbar .p-admin-entry { min-height: 36px; padding: 8px 14px; border: 1px solid var(--p-line); white-space: nowrap; }
+@media (max-width: 640px) {
+  .portal .p-topbar-admin { height: auto; min-height: 60px; padding: 12px 18px; flex-wrap: wrap; gap: 10px; }
+  .p-topbar-admin > .p-topbar-actions { width: 100%; justify-content: space-between; }
+  .p-topbar-wallet { gap: 8px; }
+}
 .p-main {
   padding: 35px 38px;
   max-width: 1550px;

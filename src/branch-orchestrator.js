@@ -1491,7 +1491,7 @@ function makeContext(har, state, config, options = {}) {
     // recipient boundary and OTP poll.
     emailBoundaryCache: new Map(),
     emailBoundaryFlights: new Map(),
-    usedProxyIds: new Set(state.workers.map((worker) => worker.proxyId).filter(Boolean)),
+    usedProxyIds: options.usedProxyIds || new Set(state.workers.map((worker) => worker.proxyId).filter(Boolean)),
     proxyPoolRefreshFlight: null,
     proxyPoolRefreshAt: 0,
     fatalAbortController: new AbortController(),
@@ -4315,12 +4315,14 @@ function isMaintenanceProxyId(id) {
 }
 
 function isMaintenanceProxyDescriptor(entry = {}) {
+  if (entry?.resourceKind && entry.resourceKind !== 'maintenance') return false;
   return isMaintenanceProxyEntry(entry)
     || isLegacyMaintenanceProxyUrl(entry?.url || entry?.endpoint)
     || isMaintenanceProxyId(entry?.id);
 }
 
 function sharedProxyEntry(entry, context) {
+  if (entry?.resourceKind && entry.resourceKind !== 'maintenance') return false;
   if (isMaintenanceProxyEntry(entry)) return true;
   // Older OAuth checkpoints persisted the URL but not resourceKind. Recover
   // those snapshots from the run's configured forwarder so a resume does not

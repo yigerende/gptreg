@@ -4,7 +4,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { id, passwordHash } = require("./security");
 const { brandDefaults } = require("./branding");
+const { features } = require("./site-controls");
 const defaults = {
+  features,
+  custom_menus: [],
+  announcements: [],
   site_name: "GPT Register",
   brand: brandDefaults,
   announcement: "",
@@ -82,11 +86,14 @@ class Database {
     });
   }
   async settings() {
-    const value = (await this.one("SELECT value FROM platform_settings WHERE id=1")).value;
+    const value = (
+      await this.one("SELECT value FROM platform_settings WHERE id=1")
+    ).value;
     return {
       ...defaults,
       ...value,
       brand: { ...brandDefaults, ...value.brand },
+      features: { ...features, ...value.features },
     };
   }
   async limit(key, max, seconds = 60) {

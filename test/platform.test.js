@@ -99,6 +99,42 @@ test(
           bob = (
             await request("GET", "/api/user/v1/me", undefined, bobCookie)
           ).json();
+          for (const route of [
+            "/admin",
+            "/admin/engine",
+            "/admin/engine/proxies",
+            "/admin?view=engine",
+            "/admin-assets/AdminEntry-test.js",
+            "/admin-assets/AdminConsole-test.js",
+            "/admin-assets/%41dminConsole-test.js",
+            "/%61dmin-assets/AdminConsole-test.js",
+            "/assets/%41dminConsole-test.js",
+            "/assets/AdminEntry-test.js",
+            "/api/admin/v1/settings",
+            "/api/v1/health",
+          ]) {
+            for (const method of ["GET", "HEAD"]) {
+              assert.equal(
+                (await request(method, route)).statusCode,
+                401,
+                `${method} anonymous ${route}`,
+              );
+              assert.equal(
+                (
+                  await request(
+                    method,
+                    route,
+                    undefined,
+                    aliceCookie,
+                    undefined,
+                    { "x-role": "admin" },
+                  )
+                ).statusCode,
+                403,
+                `${method} member ${route}`,
+              );
+            }
+          }
           assert.equal(
             (
               await request(
@@ -146,38 +182,126 @@ test(
           );
         },
       );
-      await t.test("brand settings are backward compatible, public and reject active content", async () => {
-        const before = await store.settings();
-        await store.query("UPDATE platform_settings SET value=value-'brand' WHERE id=1");
-        const initial = (await request("GET", "/api/public")).json();
-        assert.equal(initial.brand.english_name, "GPTREG");
-        assert.equal(initial.brand.icon, undefined);
-        const icon = await request("GET", initial.brand.icon_url);
-        assert.equal(icon.statusCode, 200);
-        assert.match(icon.headers["content-type"], /image\/svg\+xml/);
-        const svg = fs.readFileSync("src/platform/assets/gptreg-icon.svg");
-        const data = `data:image/svg+xml;base64,${svg.toString("base64")}`;
-        const saved = await request("PATCH", "/api/admin/v1/settings", { brand: { tagline: "品牌测试", support_url: "https://example.test/help", icon: data } }, adminCookie);
-        assert.equal(saved.statusCode, 200, saved.body);
-        const published = (await request("GET", "/api/public")).json();
-        assert.equal(published.brand.tagline, "品牌测试");
-        assert.equal(published.brand.icon, undefined);
-        assert.equal((await request("GET", published.brand.icon_url)).statusCode, 200);
-        const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGMQzw39TwlmGDVg1IBRA4aLAQCsI9gQg7zMRQAAAABJRU5ErkJggg==";
-        assert.equal((await request("PATCH", "/api/admin/v1/settings", { brand: { icon: png } }, adminCookie)).statusCode, 200);
-        assert.match((await request("GET", "/favicon.ico")).headers["content-type"], /image\/png/);
-        assert.equal((await request("PATCH", "/api/admin/v1/settings", { brand: { icon: "" } }, adminCookie)).statusCode, 200);
-        assert.equal((await request("GET", "/api/public")).json().brand.icon_url, initial.brand.icon_url);
-        for (const svg of ['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>', '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>', '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://example.test/a"/></svg>', '<svg xmlns="http://www.w3.org/2000/svg"><path fill="url(https://example.test/a)"/></svg>']) {
-          assert.equal((await request("PATCH", "/api/admin/v1/settings", { brand: { icon: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}` } }, adminCookie)).statusCode, 400);
-        }
-        assert.equal((await request("PATCH", "/api/admin/v1/settings", { brand: { support_url: "javascript:alert(1)" } }, adminCookie)).statusCode, 400);
-        assert.equal((await request("PATCH", "/api/admin/v1/settings", { brand: { icon: "data:image/png;base64,aW52YWxpZA==" } }, adminCookie)).statusCode, 400);
-        const after = await store.settings();
-        assert.deepEqual(after.template, before.template);
-        assert.equal(after.price_standard, before.price_standard);
-        await store.query("UPDATE platform_settings SET value=$1 WHERE id=1", [before]);
-      });
+      await t.test(
+        "brand settings are backward compatible, public and reject active content",
+        async () => {
+          const before = await store.settings();
+          await store.query(
+            "UPDATE platform_settings SET value=value-'brand' WHERE id=1",
+          );
+          const initial = (await request("GET", "/api/public")).json();
+          assert.equal(initial.brand.english_name, "GPTREG");
+          assert.equal(initial.brand.icon, undefined);
+          const icon = await request("GET", initial.brand.icon_url);
+          assert.equal(icon.statusCode, 200);
+          assert.match(icon.headers["content-type"], /image\/svg\+xml/);
+          const svg = fs.readFileSync("src/platform/assets/gptreg-icon.svg");
+          const data = `data:image/svg+xml;base64,${svg.toString("base64")}`;
+          const saved = await request(
+            "PATCH",
+            "/api/admin/v1/settings",
+            {
+              brand: {
+                tagline: "品牌测试",
+                support_url: "https://example.test/help",
+                icon: data,
+              },
+            },
+            adminCookie,
+          );
+          assert.equal(saved.statusCode, 200, saved.body);
+          const published = (await request("GET", "/api/public")).json();
+          assert.equal(published.brand.tagline, "品牌测试");
+          assert.equal(published.brand.icon, undefined);
+          assert.equal(
+            (await request("GET", published.brand.icon_url)).statusCode,
+            200,
+          );
+          const png =
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR4nGMQzw39TwlmGDVg1IBRA4aLAQCsI9gQg7zMRQAAAABJRU5ErkJggg==";
+          assert.equal(
+            (
+              await request(
+                "PATCH",
+                "/api/admin/v1/settings",
+                { brand: { icon: png } },
+                adminCookie,
+              )
+            ).statusCode,
+            200,
+          );
+          assert.match(
+            (await request("GET", "/favicon.ico")).headers["content-type"],
+            /image\/png/,
+          );
+          assert.equal(
+            (
+              await request(
+                "PATCH",
+                "/api/admin/v1/settings",
+                { brand: { icon: "" } },
+                adminCookie,
+              )
+            ).statusCode,
+            200,
+          );
+          assert.equal(
+            (await request("GET", "/api/public")).json().brand.icon_url,
+            initial.brand.icon_url,
+          );
+          for (const svg of [
+            '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://example.test/a"/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><path fill="url(https://example.test/a)"/></svg>',
+          ]) {
+            assert.equal(
+              (
+                await request(
+                  "PATCH",
+                  "/api/admin/v1/settings",
+                  {
+                    brand: {
+                      icon: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+                    },
+                  },
+                  adminCookie,
+                )
+              ).statusCode,
+              400,
+            );
+          }
+          assert.equal(
+            (
+              await request(
+                "PATCH",
+                "/api/admin/v1/settings",
+                { brand: { support_url: "javascript:alert(1)" } },
+                adminCookie,
+              )
+            ).statusCode,
+            400,
+          );
+          assert.equal(
+            (
+              await request(
+                "PATCH",
+                "/api/admin/v1/settings",
+                { brand: { icon: "data:image/png;base64,aW52YWxpZA==" } },
+                adminCookie,
+              )
+            ).statusCode,
+            400,
+          );
+          const after = await store.settings();
+          assert.deepEqual(after.template, before.template);
+          assert.equal(after.price_standard, before.price_standard);
+          await store.query(
+            "UPDATE platform_settings SET value=$1 WHERE id=1",
+            [before],
+          );
+        },
+      );
       await t.test(
         "administrator-configurable prices default to 50 and 100; adjustments are idempotent",
         async () => {
@@ -380,6 +504,335 @@ test(
         },
       );
       await t.test(
+        "reports isolate tenants, paginate filters and count settled charges once",
+        async () => {
+          const get = async (route, cookie = aliceCookie) => {
+            const r = await request("GET", route, undefined, cookie);
+            assert.equal(r.statusCode, 200, r.body);
+            return r.json();
+          };
+          const a = await get("/api/user/v1/overview"),
+            b = await get("/api/user/v1/overview", bobCookie);
+          assert.equal(a.stats.spent, 50);
+          assert.equal(a.stats.delivered, 1);
+          assert.equal(b.stats.spent, 0);
+          assert.equal(b.recent_orders.length, 0);
+          assert.equal(a.daily.length, 7);
+          assert.equal(
+            a.daily.reduce((n, d) => n + d.charged, 0),
+            50,
+          );
+          const filtered = await get(
+            "/api/user/v1/registration-orders?status=partial&mode=standard&limit=1",
+          );
+          assert.equal(filtered.total, 1);
+          assert.equal(filtered.items[0].id, order.id);
+          assert.equal(
+            (
+              await get(
+                "/api/user/v1/registration-orders?status=partial&limit=1&offset=1",
+              )
+            ).items.length,
+            0,
+          );
+          assert.equal(
+            (await get("/api/user/v1/registration-orders?q=alice", bobCookie))
+              .total,
+            0,
+          );
+          assert.equal(
+            (await get("/api/user/v1/registration-orders?q=%25")).total,
+            0,
+          );
+          assert.equal((await get("/api/user/v1/accounts")).total, 1);
+          assert.equal(
+            (await get("/api/user/v1/accounts", bobCookie)).total,
+            0,
+          );
+          const overview = await get("/api/admin/v1/overview", adminCookie);
+          assert.equal(overview.stats.customers, 2);
+          assert.equal(overview.stats.charged, 50);
+          const finance = await get(
+            "/api/admin/v1/finance?kind=charge&days=7",
+            adminCookie,
+          );
+          assert.equal(finance.stats.charged, 50);
+          assert.equal(finance.total, 1);
+          assert.equal(finance.items[0].kind, "charge");
+          const customer = await get(
+            `/api/admin/v1/users/${alice.id}`,
+            adminCookie,
+          );
+          assert.equal(customer.stats.spent, 50);
+          assert.equal(customer.user.password_hash, undefined);
+          const accounts = await get("/api/admin/v1/accounts", adminCookie);
+          assert.equal(accounts.items[0].credentials, undefined);
+          assert.equal(accounts.items[0].owner_email, alice.email);
+          for (const route of [
+            "/api/admin/v1/overview",
+            "/api/admin/v1/finance",
+            "/api/admin/v1/accounts",
+            `/api/admin/v1/users/${alice.id}`,
+            "/api/admin/v1/mail/logs",
+          ])
+            assert.equal(
+              (await request("GET", route, undefined, bobCookie)).statusCode,
+              403,
+            );
+          assert.equal(
+            (
+              await request(
+                "GET",
+                "/api/user/v1/registration-orders?status=unknown",
+                undefined,
+                aliceCookie,
+              )
+            ).statusCode,
+            400,
+          );
+        },
+      );
+      await t.test(
+        "mail records show accepted/failed results without leaking SMTP secrets or message bodies",
+        async () => {
+          const nodemailer = require("nodemailer"),
+            original = nodemailer.createTransport;
+          const { sendMail } = require("../src/platform/mail");
+          const settings = {
+            ...(await store.settings()),
+            smtp: {
+              host: "smtp.example.test",
+              port: 465,
+              secure: true,
+              user: "test",
+              password: crypt.encrypt("SMTP_SECRET"),
+              from: "test@example.test",
+            },
+          };
+          try {
+            nodemailer.createTransport = () => ({
+              sendMail: async () => ({ accepted: ["receiver@example.test"] }),
+              close() {},
+            });
+            await sendMail(
+              store,
+              crypt,
+              settings,
+              "receiver@example.test",
+              "test",
+              "Test",
+              "PRIVATE_BODY_123456",
+            );
+            nodemailer.createTransport = () => ({
+              sendMail: async () => {
+                const e = new Error("SMTP_SECRET private server message");
+                e.code = "EAUTH";
+                throw e;
+              },
+              close() {},
+            });
+            await assert.rejects(
+              () =>
+                sendMail(
+                  store,
+                  crypt,
+                  settings,
+                  "receiver@example.test",
+                  "test",
+                  "Test",
+                  "PRIVATE_BODY_123456",
+                ),
+              /邮件发送失败/,
+            );
+            const logs = (
+              await request(
+                "GET",
+                "/api/admin/v1/mail/logs",
+                undefined,
+                adminCookie,
+              )
+            ).json();
+            assert.equal(logs.total, 2);
+            assert.equal(logs.items[0].status, "failed");
+            assert.equal(logs.items[1].status, "sent");
+            assert.ok(logs.items[0].detail.includes("EAUTH"));
+            assert.ok(!JSON.stringify(logs).includes("SMTP_SECRET"));
+            assert.ok(!JSON.stringify(logs).includes("PRIVATE_BODY"));
+          } finally {
+            nodemailer.createTransport = original;
+          }
+        },
+      );
+      await t.test(
+        "site controls enforce feature access and keep private menus out of customer responses",
+        async () => {
+          const patch = async (body) =>
+            request("PATCH", "/api/admin/v1/settings", body, adminCookie);
+          const menu = (name, visibility) => ({
+            id: name,
+            label: name,
+            url: `https://example.test/${name}`,
+            visibility,
+            enabled: true,
+            open_new_tab: true,
+            hide_open_button: false,
+            icon: "",
+          });
+          const notices = [
+            {
+              id: "now",
+              title: "Current",
+              body: "Visible notice",
+              enabled: true,
+              starts_at: "",
+              ends_at: "",
+            },
+            {
+              id: "future",
+              title: "Future secret",
+              body: "Not yet",
+              enabled: true,
+              starts_at: "2099-01-01T00:00:00Z",
+              ends_at: "",
+            },
+            {
+              id: "expired",
+              title: "Expired",
+              body: "Old",
+              enabled: true,
+              starts_at: "",
+              ends_at: "2000-01-01T00:00:00Z",
+            },
+          ];
+          const saved = await patch({
+            custom_menus: [
+              menu("private-ops", "admin"),
+              menu("member-help", "user"),
+              menu("shared", "all"),
+            ],
+            announcements: notices,
+          });
+          assert.equal(saved.statusCode, 200, saved.body);
+          const pub = (await request("GET", "/api/public")).json();
+          assert.equal(pub.custom_menus, undefined);
+          assert.deepEqual(
+            pub.announcements.map((a) => a.id),
+            ["now"],
+          );
+          const memberMenus = (
+            await request(
+              "GET",
+              "/api/user/v1/navigation",
+              undefined,
+              aliceCookie,
+            )
+          ).json();
+          assert.deepEqual(
+            memberMenus.items.map((m) => m.id),
+            ["member-help", "shared"],
+          );
+          assert.ok(!JSON.stringify(memberMenus).includes("private-ops"));
+          const adminMenus = (
+            await request(
+              "GET",
+              "/api/user/v1/navigation",
+              undefined,
+              adminCookie,
+            )
+          ).json();
+          assert.deepEqual(
+            adminMenus.items.map((m) => m.id),
+            ["private-ops", "shared"],
+          );
+          assert.equal(
+            (
+              await patch({
+                custom_menus: [
+                  { ...menu("invalid", "all"), url: "javascript:alert(1)" },
+                ],
+              })
+            ).statusCode,
+            400,
+          );
+          assert.equal(
+            (
+              await patch({
+                custom_menus: [
+                  {
+                    ...menu("icon", "all"),
+                    icon:
+                      "data:image/svg+xml;base64," +
+                      Buffer.from(
+                        '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+                      ).toString("base64"),
+                  },
+                ],
+              })
+            ).statusCode,
+            400,
+          );
+          const disabled = await patch({
+            features: { accounts: false, docs: false },
+          });
+          assert.equal(disabled.statusCode, 200, disabled.body);
+          assert.equal(
+            (
+              await request(
+                "GET",
+                "/api/user/v1/accounts",
+                undefined,
+                aliceCookie,
+              )
+            ).statusCode,
+            403,
+          );
+          assert.equal(
+            (
+              await request(
+                "GET",
+                "/api/user/v1/accounts",
+                undefined,
+                adminCookie,
+              )
+            ).statusCode,
+            200,
+          );
+          assert.equal((await request("GET", "/openapi.json")).statusCode, 403);
+          assert.equal(
+            (
+              await patch({
+                features: { accounts: true, docs: true },
+                custom_menus: [],
+                announcements: [],
+              })
+            ).statusCode,
+            200,
+          );
+          assert.equal(
+            (
+              await request(
+                "POST",
+                "/api/admin/v1/mail/test",
+                { email: "bad" },
+                adminCookie,
+              )
+            ).statusCode,
+            400,
+          );
+          assert.equal(
+            (
+              await request(
+                "POST",
+                "/api/admin/v1/mail/test",
+                { email: "nobody@example.test" },
+                adminCookie,
+              )
+            ).statusCode,
+            503,
+          );
+        },
+      );
+      await t.test(
         "API scopes, Bearer-only access, revocation and public docs",
         async () => {
           const key = (
@@ -492,6 +945,73 @@ test(
         },
       );
       await t.test(
+        "operations can create members and bulk edit only unused redemption codes",
+        async () => {
+          const created = await request(
+            "POST",
+            "/api/admin/v1/users",
+            {
+              email: "created@example.test",
+              name: "Created",
+              password: "CreatedPassword123!",
+              role: "admin",
+            },
+            adminCookie,
+          );
+          assert.equal(created.statusCode, 200, created.body);
+          const user = await store.one(
+            "SELECT role,points FROM platform_users WHERE id=$1",
+            [created.json().id],
+          );
+          assert.deepEqual(user, { role: "member", points: 0 });
+          const generated = (
+            await request(
+              "POST",
+              "/api/admin/v1/redeem-codes",
+              { points: 10, count: 2 },
+              adminCookie,
+            )
+          ).json();
+          assert.equal(generated.codes.length, 2);
+          const list = (
+            await request(
+              "GET",
+              "/api/admin/v1/redeem-codes",
+              undefined,
+              adminCookie,
+            )
+          ).json();
+          assert.equal(list.total, 3);
+          const used = list.items.find((c) => c.redeemed_by);
+          assert.ok(used);
+          const result = await request(
+            "POST",
+            "/api/admin/v1/redeem-codes/batch",
+            { ids: list.items.map((c) => c.id), action: "delete" },
+            adminCookie,
+          );
+          assert.equal(result.statusCode, 200, result.body);
+          assert.equal(result.json().changed, 2);
+          assert.equal(result.json().skipped, 1);
+          assert.ok(
+            await store.one(
+              "SELECT id FROM platform_redeem_codes WHERE id=$1",
+              [used.id],
+            ),
+          );
+          const audit = (
+            await request(
+              "GET",
+              "/api/admin/v1/audit?q=redeem.delete",
+              undefined,
+              adminCookie,
+            )
+          ).json();
+          assert.equal(audit.total, 1);
+          assert.equal(audit.items[0].actor_email, "admin");
+        },
+      );
+      await t.test(
         "OAuth only retries the existing account and settles at the OAuth price",
         async () => {
           const created = (
@@ -527,7 +1047,7 @@ test(
             [created.id],
           );
           assert.equal(calls[0].taskKind, "register_session");
-          assert.equal(calls[0].postRegistrationOAuth, false);
+          assert.equal(calls[0].postRegistrationOAuth, true);
           const asset = {
             id: id(),
             email: "oauth-account@example.test",

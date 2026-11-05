@@ -13,6 +13,7 @@ function encryption() {
   return cachedCipher;
 }
 const sensitive = new Set([
+  "smsConfig",
   "password",
   "totpSecret",
   "totp_secret",

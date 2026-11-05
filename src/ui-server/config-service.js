@@ -42,6 +42,8 @@ function withoutSecrets(input) {
   }
   if (config.sms) {
     delete config.sms.apiKey;
+    if (config.sms.hero) delete config.sms.hero.apiKey;
+    if (config.sms.smsbower) delete config.sms.smsbower.apiKey;
     if (config.sms.firefox && typeof config.sms.firefox === 'object') {
       delete config.sms.firefox.token;
       delete config.sms.firefox.apiName;
@@ -106,9 +108,10 @@ class ConfigService {
         mailcomAdminTokenConfigured: Boolean(String(input.mail?.adminToken || '').trim())
           || Boolean(adminTokenEnv && process.env[adminTokenEnv]),
         smsApiKeyConfigured: Boolean(input.sms?.apiKey),
+        heroSmsApiKeyConfigured: Boolean(input.sms?.hero?.apiKey || process.env.HERO_SMS_API_KEY),
         nvtokensApiKeyConfigured: Boolean(String(input.nvtokens?.apiKey || '').trim())
           || Boolean(nvtokensApiKeyEnv && process.env[nvtokensApiKeyEnv]),
-        firefoxCredentialsConfigured: Boolean(firefoxCredentials.token),
+        firefoxCredentialsConfigured: Boolean(input.sms?.firefox?.token || firefoxCredentials.token),
       },
     };
   }
@@ -135,6 +138,8 @@ class ConfigService {
     if (Object.hasOwn(secretPatch, 'mailPassword')) next.mail.password = String(secretPatch.mailPassword || '');
     if (Object.hasOwn(secretPatch, 'mailcomAdminToken')) next.mail.adminToken = String(secretPatch.mailcomAdminToken || '');
     if (Object.hasOwn(secretPatch, 'smsApiKey')) next.sms.apiKey = String(secretPatch.smsApiKey || '');
+    if (Object.hasOwn(secretPatch, 'heroSmsApiKey')) next.sms.hero = { ...(next.sms.hero || {}), apiKey: String(secretPatch.heroSmsApiKey || '') };
+    if (Object.hasOwn(secretPatch, 'firefoxToken')) next.sms.firefox = { ...(next.sms.firefox || {}), token: String(secretPatch.firefoxToken || '') };
     if (Object.hasOwn(secretPatch, 'nvtokensApiKey')) next.nvtokens.apiKey = String(secretPatch.nvtokensApiKey || '');
     for (const secret of payload.clearSecrets || []) {
       if (secret === 'mailApiKey') delete next.mail.apiKey;
