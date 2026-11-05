@@ -1092,6 +1092,8 @@ export type CountryProxyPool = {
   total: number;
   protocols: Record<string, number>;
   entries: DynamicProxyEntry[];
+  /** Cached identities retained by compact/paged catalogs for allocation checks. */
+  entryIds?: string[];
   manualCount: number;
   sources: ProxyApiSource[];
 };

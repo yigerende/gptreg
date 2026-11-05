@@ -60,6 +60,28 @@ afterEach(() => {
 });
 
 describe('console shell', () => {
+  it('preflights and enables launch for a compact country pool without loading address pages', async () => {
+    let checked = false;
+    vi.stubGlobal('fetch',vi.fn(async (input:RequestInfo|URL, init?:RequestInit) => {
+      const url=new URL(String(input),'http://localhost');
+      let payload=payloads[url.pathname]||{};
+      if(url.pathname==='/api/v1/proxies') {
+        expect(url.searchParams.get('compact')).toBe('1');
+        payload={total:500,local:{total:0,proxies:[],errors:[]},proxies:[],errors:[],dynamic:{total:500,countryPools:[{countryCode:'PH',total:500,entries:[],entryIds:Array.from({length:500},(_,i)=>`ph-${i}`),protocols:{http:500},sources:[],manualCount:0}]}};
+      }
+      if(url.pathname==='/api/v1/preflight') {
+        expect(JSON.parse(String(init?.body)).plan.proxyAssignments).toEqual([{workerSlot:1,kind:'countryPool',countryCode:'PH'}]);
+        checked=true;
+      }
+      return new Response(JSON.stringify(payload),{status:200,headers:{'Content-Type':'application/json'}});
+    }));
+    const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
+    render(<QueryClientProvider client={client}><Tooltip.Provider><Router><App/></Router></Tooltip.Provider></QueryClientProvider>);
+    await waitFor(()=>expect(checked).toBe(true));
+    expect(await screen.findByRole('button',{name:'仅注册'})).toBeEnabled();
+    expect(screen.queryByText(/Worker 代理分配无效/)).not.toBeInTheDocument();
+  });
+
   it('shows the running task badge for an auxiliary run and a progress strip for running robots', async () => {
     window.history.replaceState(null, '', '/');
     vi.useFakeTimers({

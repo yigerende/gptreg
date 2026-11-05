@@ -1166,7 +1166,11 @@ function buildApp(options = {}) {
   app.get('/api/v1/proxies', async (request) => {
     const snapshot = await proxyService.list();
     if (request.query?.compact !== '1' && request.query?.paged !== '1') return snapshot;
-    const dynamic = { ...snapshot.dynamic, countryPools: (snapshot.dynamic?.countryPools || []).map(pool => ({ ...pool, entries: [] })) };
+    // Launch/OAuth assignment checks need exact cached identities for capacity
+    // and overlap checks even when the address rows are loaded by page.
+    const dynamic = { ...snapshot.dynamic, countryPools: (snapshot.dynamic?.countryPools || []).map(pool => ({
+      ...pool, entryIds: [...new Set((pool.entries || []).map(entry => entry.id))], entries: [],
+    })) };
     if (request.query?.paged !== '1') return { ...snapshot, dynamic };
     const { items, ...page } = pageRows(snapshot.local?.proxies || snapshot.proxies || [], request.query);
     return { ...snapshot, ...page, proxies: items, local: { ...snapshot.local, proxies: items }, dynamic };

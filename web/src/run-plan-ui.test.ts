@@ -67,6 +67,23 @@ describe('defaultProxyAssignments', () => {
 });
 
 describe('resizeProxyAssignments', () => {
+  it('uses compact cached identities without treating an unloaded page as an empty pool', () => {
+    const compact = catalog({ locals: 1, pools: [['PH', 500], ['JP', 500]] });
+    compact.dynamic.countryPools[0].entryIds = ['ph-1', 'ph-2', 'proxy-local-1'];
+    compact.dynamic.countryPools[1].entryIds = ['jp-1'];
+    const lanes = (count: number) => Array.from({length:count}, (_,i) => ({workerSlot:i+1,kind:'countryPool' as const,countryCode:'PH'}));
+    expect(proxyAssignmentsAreReady(lanes(3),compact)).toBe(true);
+    expect(proxyAssignmentsAreReady(lanes(4),compact)).toBe(false);
+    expect(proxyAssignmentsAreReady([...lanes(2),{workerSlot:3,kind:'local',localProxyId:'proxy-local-1'}],compact)).toBe(true);
+    expect(proxyAssignmentsAreReady([...lanes(3),{workerSlot:4,kind:'local',localProxyId:'proxy-local-1'}],compact)).toBe(false);
+    const mixed = [...lanes(1),{workerSlot:2,kind:'countryPool' as const,countryCode:'JP'}];
+    expect(proxyAssignmentsAreReady(mixed,compact)).toBe(true);
+    compact.dynamic.countryPools[1].entryIds=['ph-1'];
+    expect(proxyAssignmentsAreReady(mixed,compact)).toBe(false);
+    compact.dynamic.countryPools[0].entryIds=[];
+    expect(proxyAssignmentsAreReady(lanes(1),compact)).toBe(false);
+  });
+
   const resizeCatalog = {
     local: { proxies: [] },
     dynamic: { countryPools: [

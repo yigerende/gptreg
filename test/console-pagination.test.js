@@ -46,6 +46,7 @@ test('engine lists send disjoint pages and keep full internal snapshots', async 
   assert.deepEqual(live.runs.map(row => row.runId), ['run-0', 'run-1', 'run-2', 'run-3', 'run-100']);
   const compact = (await app.inject('/api/v1/proxies?compact=1')).json();
   assert.equal(compact.dynamic.countryPools[0].entries.length, 0);
+  assert.deepEqual(compact.dynamic.countryPools[0].entryIds, rows.map(row => row.id));
   assert.equal((await app.inject('/api/v1/proxies')).json().dynamic.countryPools[0].entries.length, 123);
   assert.equal((await app.inject('/api/v1/robots?compact=1')).json().robots[0].runs.length, 0);
   assert.equal(robot.runs.length, 123);

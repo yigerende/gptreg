@@ -121,15 +121,16 @@ export function proxyAssignmentsAreReady(assignments: ProxyAssignment[], catalog
   const countryClaims = new Map<string, string>();
   let countryPoolOverlap = false;
   const poolCapacity = new Map((catalog.dynamic?.countryPools || []).map((pool) => {
-    const entries = (pool.entries || []).filter((entry) => !selectedLocalIds.has(entry.id));
+    const ids = [...new Set(pool.entryIds ?? (pool.entries || []).map(entry => entry.id))]
+      .filter(id => !selectedLocalIds.has(id));
     if (selectedPoolCountries.has(pool.countryCode)) {
-      for (const entry of entries) {
-        const previousCountry = countryClaims.get(entry.id);
+      for (const id of ids) {
+        const previousCountry = countryClaims.get(id);
         if (previousCountry && previousCountry !== pool.countryCode) countryPoolOverlap = true;
-        countryClaims.set(entry.id, pool.countryCode);
+        countryClaims.set(id, pool.countryCode);
       }
     }
-    return [pool.countryCode, entries.length];
+    return [pool.countryCode, ids.length];
   }));
   const poolDemand = assignments.reduce((counts, assignment) => {
     if (assignment.kind === 'countryPool') counts.set(assignment.countryCode, Number(counts.get(assignment.countryCode) || 0) + 1);
