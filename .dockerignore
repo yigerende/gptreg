@@ -1,0 +1,17 @@
+**/node_modules
+.git
+.gpt-re-state
+.gpt-re-network.local*
+.runtime
+.local
+gpt-re.config.json
+dynamic-proxy-pools.json
+proxy-pool.txt
+web/dist
+**/*.log
+**/*.har
+**/*.tsbuildinfo
+.env*
+tmp
+scratch
+dist-zip

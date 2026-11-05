@@ -1,0 +1,512 @@
+'use strict';
+
+const crypto = require('node:crypto');
+
+const { normalizeProtocol, parseProxyLine, stableProxyId } = require('./proxy-pool');
+
+const CATALOG_SCHEMA_VERSION = 1;
+const GLOBAL_COUNTRY_CODE = 'GLOBAL';
+const MAX_711_COUNT = 900;
+const MAX_B2PROXY_COUNT = 900;
+const DEFAULT_PROXY_API_COUNT = 600;
+const B2PROXY_DEFAULT_COUNT = DEFAULT_PROXY_API_COUNT;
+const B2PROXY_SESSION_MINUTES = 60;
+const MAX_1024_SESSION_MINUTES = 120;
+const MIN_1024_REFRESH_MINUTES = 20;
+const DEFAULT_711_API_TEMPLATE = `http://global.rotgbapi.711proxy.com:8089/gen?zone=custom&ptype=1&count=${DEFAULT_PROXY_API_COUNT}&proto=http&stype=text&split=%5Cr%5Cn&sessType=sticky&sessTime=180&sessAuto=0`;
+const DEFAULT_B2PROXY_API_TEMPLATE = `http://global.rrp.bestgo.work:8089/gen?zone=custom&ptype=1&region=US&count=${B2PROXY_DEFAULT_COUNT}&proto=socks5&stype=txt&split=%5Cr%5Cn&sessType=sticky&sessTime=${B2PROXY_SESSION_MINUTES}&sessAuto=1`;
+const DEFAULT_1024_API_TEMPLATE = `https://white.1024proxy.com/white/api?region=US&num=${DEFAULT_PROXY_API_COUNT}&time=${MAX_1024_SESSION_MINUTES}&format=1&type=txt`;
+const DEFAULT_CLIPROXY_API_TEMPLATE = `https://api.cliproxy.io/white/api?region=US&num=${DEFAULT_PROXY_API_COUNT}&time=15&format=n&type=txt`;
+const PROXY_API_TEMPLATES = Object.freeze({
+  '711proxy': DEFAULT_711_API_TEMPLATE,
+  b2proxy: DEFAULT_B2PROXY_API_TEMPLATE,
+  '1024proxy': DEFAULT_1024_API_TEMPLATE,
+  cliproxy: DEFAULT_CLIPROXY_API_TEMPLATE,
+});
+const PROXY_API_LABELS = Object.freeze({
+  '711proxy': '711Proxy',
+  b2proxy: 'B2Proxy',
+  '1024proxy': '1024 Proxy',
+  cliproxy: 'CLI Proxy',
+});
+const DEFAULT_PROXY_API_PROTOCOLS = Object.freeze({
+  '711proxy': 'http',
+  b2proxy: 'socks5',
+  // 1024Proxy returns bare host:port entries. The proxy service used by this
+  // project only works reliably when those entries are interpreted as SOCKS5.
+  '1024proxy': 'socks5',
+  cliproxy: 'http',
+});
+
+function stableId(prefix, value) {
+  return `${prefix}-${crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 16)}`;
+}
+
+/**
+ * The identity of an API source: who serves it, for which country, over which
+ * protocol.
+ *
+ * Deliberately not the URL. The URL carries `num` (how many proxies to ask
+ * for) and `time` (session minutes), so hashing it made the *quantity* part of
+ * the identity: changing a pool's count produced a new id, `importDynamic`
+ * failed to match the existing source, and a second source was appended to the
+ * same country pool. Both were then refreshed forever — double the HTTP calls
+ * and double the catalog.
+ *
+ * Protocol is excluded too. These whitelist APIs return bare host:port and do
+ * not encode a protocol, so http and socks5 are two readings of one upstream
+ * source; switching between them replaces the cached entries rather than
+ * standing up a second source alongside the first.
+ */
+function proxyApiSourceId(source = {}) {
+  let host = '';
+  try { host = new URL(String(source.url || '')).host.toLowerCase(); } catch { host = ''; }
+  const provider = String(source.provider || '').toLowerCase();
+  const countryCode = normalizeCountryCode(source.countryCode);
+  return stableId('source', `${provider}|${countryCode}|${host}`);
+}
+
+function normalizeCountryCode(value, fallback = GLOBAL_COUNTRY_CODE) {
+  const code = String(value || fallback).trim().toUpperCase();
+  if (code === GLOBAL_COUNTRY_CODE) return code;
+  if (!/^[A-Z]{2}$/.test(code)) throw new Error('Country code must be GLOBAL or a two-letter ISO code');
+  return code;
+}
+
+function normalize711Count(value, fallback = DEFAULT_PROXY_API_COUNT) {
+  const count = value === undefined || value === null || value === '' ? Number(fallback) : Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > MAX_711_COUNT) {
+    throw new Error(`711Proxy count must be an integer between 1 and ${MAX_711_COUNT}`);
+  }
+  return count;
+}
+
+function normalizeB2ProxyCount(value, fallback = B2PROXY_DEFAULT_COUNT) {
+  const count = value === undefined || value === null || value === '' ? Number(fallback) : Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > MAX_B2PROXY_COUNT) {
+    throw new Error(`B2Proxy count must be an integer between 1 and ${MAX_B2PROXY_COUNT}`);
+  }
+  return count;
+}
+
+function normalizeProxyApiCount(value, fallback = DEFAULT_PROXY_API_COUNT, provider = '') {
+  const count = value === undefined || value === null || value === '' ? Number(fallback) : Number(value);
+  if (!Number.isSafeInteger(count) || count < 1) {
+    const label = PROXY_API_LABELS[provider] || 'Proxy API';
+    throw new Error(`${label} count must be a positive safe integer`);
+  }
+  return count;
+}
+
+function normalize1024PullTime(value, fallback = MAX_1024_SESSION_MINUTES) {
+  const time = Number(value);
+  return Number.isInteger(time) && time >= MIN_1024_REFRESH_MINUTES && time <= MAX_1024_SESSION_MINUTES
+    ? time
+    : fallback;
+}
+
+function next1024PullTime(value) {
+  const current = normalize1024PullTime(value);
+  return current <= MIN_1024_REFRESH_MINUTES ? MAX_1024_SESSION_MINUTES : current - 1;
+}
+
+function parseUrl(value) {
+  try {
+    return new URL(String(value).trim());
+  } catch {
+    throw new Error('Invalid URL');
+  }
+}
+
+function is711ApiUrl(value) {
+  try {
+    const url = parseUrl(value);
+    return ['http:', 'https:'].includes(url.protocol)
+      && /(^|\.)rotgbapi\.711proxy\.com$/i.test(url.hostname)
+      && url.port === '8089'
+      && url.pathname.replace(/\/+$/, '') === '/gen';
+  } catch {
+    return false;
+  }
+}
+
+function isB2ProxyApiUrl(value) {
+  try {
+    const url = parseUrl(value);
+    return ['http:', 'https:'].includes(url.protocol)
+      && url.hostname.toLowerCase() === 'global.rrp.bestgo.work'
+      && url.port === '8089'
+      && url.pathname.replace(/\/+$/, '') === '/gen';
+  } catch {
+    return false;
+  }
+}
+
+function is1024ApiUrl(value) {
+  try {
+    const url = parseUrl(value);
+    return url.protocol === 'https:'
+      && url.hostname.toLowerCase() === 'white.1024proxy.com'
+      && url.pathname.replace(/\/+$/, '') === '/white/api';
+  } catch {
+    return false;
+  }
+}
+
+function isCliProxyApiUrl(value) {
+  try {
+    const url = parseUrl(value);
+    return url.protocol === 'https:'
+      && url.hostname.toLowerCase() === 'api.cliproxy.io'
+      && url.pathname.replace(/\/+$/, '') === '/white/api';
+  } catch {
+    return false;
+  }
+}
+
+function proxyApiProviderFromHost(value) {
+  try {
+    const hostname = parseUrl(value).hostname.toLowerCase();
+    if (/(^|\.)rotgbapi\.711proxy\.com$/i.test(hostname)) return '711proxy';
+    if (hostname === 'global.rrp.bestgo.work') return 'b2proxy';
+    if (hostname === 'white.1024proxy.com') return '1024proxy';
+    if (hostname === 'api.cliproxy.io') return 'cliproxy';
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+function isProxyApiHost(value) {
+  return Boolean(proxyApiProviderFromHost(value));
+}
+
+function countryFromProxyEntry(entry) {
+  const username = String(entry?.username || '');
+  const match = username.match(/(?:^|-)region-([a-z]{2})(?:-|$)/i);
+  return match ? normalizeCountryCode(match[1]) : GLOBAL_COUNTRY_CODE;
+}
+
+function normalize711ApiUrl(value, options = {}) {
+  const url = parseUrl(value);
+  if (!is711ApiUrl(url.toString())) throw new Error('Only 711Proxy rotating GB API URLs are supported');
+  const countryCode = normalizeCountryCode(options.countryCode || url.searchParams.get('region') || GLOBAL_COUNTRY_CODE);
+  const count = normalize711Count(options.count, url.searchParams.get('count') || DEFAULT_PROXY_API_COUNT);
+  const protocol = normalizeProtocol(options.protocol || url.searchParams.get('proto') || 'http');
+
+  url.searchParams.set('zone', url.searchParams.get('zone') || 'custom');
+  url.searchParams.set('ptype', url.searchParams.get('ptype') || '1');
+  if (countryCode === GLOBAL_COUNTRY_CODE) url.searchParams.delete('region');
+  else url.searchParams.set('region', countryCode);
+  url.searchParams.set('count', String(count));
+  url.searchParams.set('proto', protocol);
+  url.searchParams.set('stype', 'text');
+  url.searchParams.set('split', '\\r\\n');
+  url.searchParams.set('sessType', 'sticky');
+  url.searchParams.set('sessTime', '180');
+  url.searchParams.set('sessAuto', '0');
+
+  return {
+    url: url.toString(),
+    countryCode,
+    count,
+    protocol,
+    sessionType: 'sticky',
+    sessionMinutes: 180,
+    earlyRotation: false,
+  };
+}
+
+function normalizeB2ProxyApiUrl(value, options = {}) {
+  const url = parseUrl(value);
+  if (!isB2ProxyApiUrl(url.toString())) throw new Error('Only B2Proxy rotating GB API URLs are supported');
+  const countryCode = normalizeCountryCode(options.countryCode || url.searchParams.get('region') || 'US');
+  if (countryCode === GLOBAL_COUNTRY_CODE) throw new Error('B2Proxy requires a two-letter country code');
+  const count = normalizeB2ProxyCount(options.count, url.searchParams.get('count') || B2PROXY_DEFAULT_COUNT);
+  const protocol = normalizeProtocol(options.protocol || url.searchParams.get('proto') || DEFAULT_PROXY_API_PROTOCOLS.b2proxy);
+
+  url.searchParams.set('zone', url.searchParams.get('zone') || 'custom');
+  url.searchParams.set('ptype', url.searchParams.get('ptype') || '1');
+  url.searchParams.set('region', countryCode);
+  url.searchParams.set('count', String(count));
+  url.searchParams.set('proto', protocol);
+  url.searchParams.set('stype', 'txt');
+  url.searchParams.set('split', '\\r\\n');
+  url.searchParams.set('sessType', 'sticky');
+  url.searchParams.set('sessTime', String(B2PROXY_SESSION_MINUTES));
+  url.searchParams.set('sessAuto', '1');
+
+  return {
+    provider: 'b2proxy',
+    url: url.toString(),
+    countryCode,
+    count,
+    protocol,
+    sessionType: 'sticky',
+    sessionMinutes: B2PROXY_SESSION_MINUTES,
+    earlyRotation: false,
+  };
+}
+
+function normalizeRegionalProxyApiUrl(value, options = {}, provider) {
+  const url = parseUrl(value);
+  const label = PROXY_API_LABELS[provider];
+  const valid = provider === '1024proxy' ? is1024ApiUrl(url.toString()) : isCliProxyApiUrl(url.toString());
+  if (!valid) throw new Error(`Only ${label} whitelist API URLs are supported`);
+  const countryCode = normalizeCountryCode(options.countryCode || url.searchParams.get('region') || 'US');
+  if (countryCode === GLOBAL_COUNTRY_CODE) throw new Error(`${label} requires a two-letter country code`);
+  const count = normalizeProxyApiCount(options.count, url.searchParams.get('num') || DEFAULT_PROXY_API_COUNT, provider);
+  // These whitelist APIs return host:port pairs and do not encode the proxy
+  // protocol in the URL. Keep it as source metadata so the same API can back
+  // either an HTTP or SOCKS5 endpoint.
+  const protocol = normalizeProtocol(
+    options.protocol
+      || (provider === '1024proxy'
+        ? DEFAULT_PROXY_API_PROTOCOLS[provider]
+        : options.defaultProtocol || DEFAULT_PROXY_API_PROTOCOLS[provider]),
+  );
+  const sessionMinutes = provider === '1024proxy' ? MAX_1024_SESSION_MINUTES : 15;
+
+  url.searchParams.set('region', countryCode);
+  url.searchParams.set('num', String(count));
+  url.searchParams.set('time', String(sessionMinutes));
+  url.searchParams.set('format', provider === '1024proxy' ? '1' : 'n');
+  url.searchParams.set('type', 'txt');
+
+  return {
+    provider,
+    url: url.toString(),
+    countryCode,
+    count,
+    protocol,
+    sessionType: 'sticky',
+    sessionMinutes,
+    earlyRotation: false,
+  };
+}
+
+function normalizeProxyApiUrl(value, options = {}) {
+  const detected = proxyApiProviderFromHost(value);
+  const provider = String(options.provider || detected || '').toLowerCase();
+  if (provider === '711proxy') return { provider, ...normalize711ApiUrl(value, options) };
+  if (provider === 'b2proxy') {
+    if (detected && detected !== provider) throw new Error('Proxy API provider does not match the URL host');
+    return normalizeB2ProxyApiUrl(value, options);
+  }
+  if (provider === '1024proxy' || provider === 'cliproxy') {
+    if (detected && detected !== provider) throw new Error('Proxy API provider does not match the URL host');
+    return normalizeRegionalProxyApiUrl(value, options, provider);
+  }
+  throw new Error('Unsupported dynamic proxy API URL');
+}
+
+function buildProxyApiUrl(provider, options = {}) {
+  const normalizedProvider = String(provider || '').toLowerCase();
+  const template = PROXY_API_TEMPLATES[normalizedProvider];
+  if (!template) throw new Error(`Unsupported dynamic proxy API provider: ${provider}`);
+  return normalizeProxyApiUrl(template, { ...options, provider: normalizedProvider });
+}
+
+function emptyProxyCatalog() {
+  return { schemaVersion: CATALOG_SCHEMA_VERSION, countryPools: {} };
+}
+
+function normalizeCachedEntry(entry, countryCode, sourceId) {
+  const parsed = parseProxyLine(entry.url || entry, { defaultProtocol: entry.protocol || 'http' });
+  if (!parsed) throw new Error('Dynamic proxy entry is empty');
+  return {
+    id: stableProxyId(parsed.url),
+    url: parsed.url,
+    protocol: parsed.protocol,
+    countryCode,
+    sourceId: sourceId || entry.sourceId || 'manual',
+  };
+}
+
+function normalizeRetiredEntries(entries = []) {
+  const out = [];
+  const seen = new Set();
+  for (const rawEntry of Array.isArray(entries) ? entries : []) {
+    const value = rawEntry && typeof rawEntry === 'object' ? rawEntry : { id: rawEntry };
+    let id = String(value.id || '').trim();
+    if (!id && value.url) {
+      try { id = stableProxyId(parseProxyLine(value.url).url); } catch { id = ''; }
+    }
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({
+      id,
+      retiredAt: String(value.retiredAt || ''),
+      reason: String(value.reason || '').slice(0, 300),
+    });
+  }
+  return out;
+}
+
+function normalizeProxyCatalog(input = {}) {
+  if (Number(input.schemaVersion || CATALOG_SCHEMA_VERSION) !== CATALOG_SCHEMA_VERSION) {
+    throw new Error(`Unsupported proxy catalog schemaVersion: ${input.schemaVersion}`);
+  }
+  const catalog = emptyProxyCatalog();
+  for (const [rawCode, rawPool] of Object.entries(input.countryPools || {})) {
+    const countryCode = normalizeCountryCode(rawCode);
+    const retiredEntries = normalizeRetiredEntries(rawPool?.retiredEntries);
+    const retiredIds = new Set(retiredEntries.map((entry) => entry.id));
+    const manualSeen = new Set();
+    const manualEntries = [];
+    for (const rawEntry of rawPool?.manualEntries || []) {
+      const entry = normalizeCachedEntry(rawEntry, countryCode, 'manual');
+      if (retiredIds.has(entry.id)) continue;
+      if (manualSeen.has(entry.url)) continue;
+      manualSeen.add(entry.url);
+      manualEntries.push(entry);
+    }
+    const sources = [];
+    const sourceIds = new Set();
+    for (const rawSource of rawPool?.sources || []) {
+      const normalized = normalizeProxyApiUrl(rawSource.url, {
+        provider: rawSource.provider,
+        countryCode,
+        count: rawSource.count,
+        protocol: rawSource.protocol,
+      });
+      // Recomputed rather than trusted, so catalogs written under the old
+      // URL-derived scheme collapse their duplicate sources on the next read.
+      const id = proxyApiSourceId(normalized);
+      const entrySeen = new Set();
+      const entries = [];
+      for (const rawEntry of rawSource.entries || []) {
+        const entry = normalizeCachedEntry(rawEntry, countryCode, id);
+        if (retiredIds.has(entry.id)) continue;
+        if (entrySeen.has(entry.url)) continue;
+        entrySeen.add(entry.url);
+        entries.push(entry);
+      }
+      const previous = sourceIds.has(id) ? sources.find((source) => source.id === id) : null;
+      const defaultNextPullTime = normalized.provider === '1024proxy'
+        ? (rawSource.lastPulledAt ? next1024PullTime(normalized.sessionMinutes) : normalized.sessionMinutes)
+        : undefined;
+      const nextPullTime = normalized.provider === '1024proxy'
+        ? normalize1024PullTime(rawSource.nextPullTime, defaultNextPullTime)
+        : undefined;
+      if (previous) {
+        // Two records for one source: keep the fresher pull and union the
+        // cached proxies rather than dropping whichever came second.
+        const merged = new Set(previous.entries.map((entry) => entry.url));
+        for (const entry of entries) {
+          if (merged.has(entry.url)) continue;
+          merged.add(entry.url);
+          previous.entries.push(entry);
+        }
+        if (String(rawSource.lastPulledAt || '') > String(previous.lastPulledAt || '')) {
+          previous.lastPulledAt = String(rawSource.lastPulledAt || '');
+          previous.lastPullCount = Number(rawSource.lastPullCount || previous.entries.length);
+          previous.lastError = String(rawSource.lastError || '');
+          if (normalized.provider === '1024proxy') previous.nextPullTime = nextPullTime;
+        }
+        previous.count = Math.max(Number(previous.count || 0), Number(normalized.count || 0));
+        continue;
+      }
+      sourceIds.add(id);
+      sources.push({
+        id,
+        ...normalized,
+        entries,
+        lastPulledAt: rawSource.lastPulledAt || '',
+        lastPullCount: Number(rawSource.lastPullCount || entries.length),
+        lastError: String(rawSource.lastError || ''),
+        ...(normalized.provider === '1024proxy' ? { nextPullTime } : {}),
+      });
+    }
+    if (manualEntries.length || sources.length || retiredEntries.length) {
+      catalog.countryPools[countryCode] = {
+        countryCode,
+        manualEntries,
+        sources,
+        ...(retiredEntries.length ? { retiredEntries } : {}),
+      };
+    }
+  }
+  return catalog;
+}
+
+function overridesByLine(options = {}) {
+  return new Map((options.overrides || []).map((item) => [Number(item.line), item]));
+}
+
+function parseDynamicContent(content, options = {}) {
+  const items = [];
+  const errors = [];
+  const duplicates = [];
+  const seen = new Set();
+  const overrides = overridesByLine(options);
+  String(content || '').split(/\r?\n/).forEach((rawLine, index) => {
+    const line = index + 1;
+    const text = rawLine.trim();
+    if (!text || text.startsWith('#')) return;
+    const override = overrides.get(line) || {};
+    try {
+      let item;
+      if (isProxyApiHost(text)) {
+        const source = normalizeProxyApiUrl(text, {
+          ...override,
+          // Provider defaults are more reliable than the generic dynamic
+          // import default for API responses that contain only host:port.
+          defaultProtocol: options.defaultProtocol,
+        });
+        item = { kind: 'api', line, ...source };
+      } else {
+        const entry = parseProxyLine(text, { defaultProtocol: override.protocol || options.defaultProtocol || 'http' });
+        const countryCode = normalizeCountryCode(override.countryCode || countryFromProxyEntry(entry));
+        item = {
+          kind: 'proxy',
+          line,
+          countryCode,
+          protocol: entry.protocol,
+          url: entry.url,
+          id: stableProxyId(entry.url),
+        };
+      }
+      const duplicateKey = item.kind === 'api' ? `api:${item.url}` : `proxy:${item.countryCode}:${item.url}`;
+      if (seen.has(duplicateKey)) {
+        duplicates.push({ line, kind: item.kind, value: item.url });
+        return;
+      }
+      seen.add(duplicateKey);
+      items.push(item);
+    } catch (error) {
+      errors.push({ line, message: error.message });
+    }
+  });
+  return { items, errors, duplicates };
+}
+
+function flattenedPoolEntries(pool) {
+  const entries = [];
+  const seen = new Set();
+  for (const entry of [
+    ...(pool?.manualEntries || []),
+    ...(pool?.sources || []).flatMap((source) => source.entries || []),
+  ]) {
+    if (seen.has(entry.url)) continue;
+    seen.add(entry.url);
+    entries.push({ ...entry });
+  }
+  return entries;
+}
+
+module.exports = {
+  proxyApiSourceId,
+  PROXY_API_LABELS,
+  buildProxyApiUrl,
+  emptyProxyCatalog,
+  flattenedPoolEntries,
+  normalizeB2ProxyApiUrl,
+  normalize711ApiUrl,
+  next1024PullTime,
+  normalizeProxyApiUrl,
+  normalize1024PullTime,
+  normalizeProxyCatalog,
+  parseDynamicContent,
+  stableId,
+};

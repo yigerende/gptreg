@@ -1,0 +1,5 @@
+# 每行一个代理，支持：
+# host:port:user:pass
+# user:pass@host:port
+# http://user:pass@host:port
+# socks5://user:pass@host:port

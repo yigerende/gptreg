@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "countryPools": {
+    "US": {
+      "countryCode": "US",
+      "manualEntries": [
+        {
+          "id": "proxy-manual-us-1",
+          "url": "http://user:password@proxy-us-01.example.com:8080",
+          "protocol": "http",
+          "countryCode": "US"
+        }
+      ],
+      "sources": []
+    }
+  }
+}

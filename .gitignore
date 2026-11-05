@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# State and logs
+.gpt-re-state/
+*.log
+*.err
+*.out
+npm-debug.log*
+
+# Personal and runtime files
+*.har
+.env
+.env.local
+.env.*.local
+.DS_Store
+Thumbs.db
+
+# Build outputs (Note: web/dist is included in pre-built delivery, but local builds shouldn't commit temporary files)
+dist-zip/
+tmp/
+scratch/
+
+# Machine credentials, business configuration and container data
+gpt-re.config.json
+dynamic-proxy-pools.json
+proxy-pool.txt
+.gpt-re-network.local*
+.runtime/
+.local/
+web/dist/
+*.tsbuildinfo
+*.bak

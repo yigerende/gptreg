@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 2,
+  "runId": "run-live-example",
+  "mail": {
+    "provider": "smsbower",
+    "service": "dr",
+    "maxPrice": 0.05,
+    "baseUrl": "https://smsbower.page/stubs/handler_api.php",
+    "origin": "https://smsbower.page",
+    "password": "YOUR_MAIL_PASSWORD",
+    "count": 1,
+    "folders": [
+      "inbox",
+      "junkemail"
+    ],
+    "keyword": "openai",
+    "maxResults": 100,
+    "timeoutMs": 120000,
+    "pollIntervalMs": 5000,
+    "aliasBatchSize": 9,
+    "adminToken": "YOUR_ADMIN_TOKEN",
+    "xiaopingguoBaseUrl": "http://127.0.0.1:8000",
+    "mailcomBaseUrl": "http://127.0.0.1:8001",
+    "fastmailBaseUrl": "http://127.0.0.1:8001",
+    "icloudBaseUrl": "http://127.0.0.1:8001",
+    "aliasDomains": [],
+    "aliasDomainMode": "random",
+    "providerEnabled": {
+      "smsbower": true,
+      "mailcom": true,
+      "fastmail": true,
+      "icloud": true,
+      "xiaopingguo": false
+    }
+  },
+  "aliases": {
+    "strategy": "root",
+    "count": 1,
+    "maxAttempts": 1,
+    "runTag": "worker",
+    "plusAddressingEnabled": false
+  },
+  "sms": {
+    "provider": "smsbower",
+    "baseUrl": "https://smsbower.page/stubs/handler_api.php",
+    "apiKey": "YOUR_SMS_API_KEY",
+    "service": {
+      "code": "dr"
+    },
+    "country": {
+      "id": 151,
+      "name": "Chile"
+    },
+    "countries": [
+      {
+        "id": 151,
+        "name": "Chile"
+      },
+      {
+        "id": 33,
+        "name": "Colombia"
+      },
+      {
+        "id": 6,
+        "name": "Indonesia"
+      },
+      {
+        "id": 43,
+        "name": "Germany"
+      },
+      {
+        "id": 4,
+        "name": "Philippines"
+      },
+      {
+        "id": 73,
+        "name": "Brazil"
+      }
+    ],
+    "maxPrice": 0.055,
+    "replacementBudget": 20,
+    "maxPendingCancellations": 2,
+    "fraudGuardThreshold": 5,
+    "fraudGuardCooldownMs": 900000,
+    "codeTimeoutMs": 120000,
+    "pollIntervalMs": 5000,
+    "inventoryWaitMs": 600000,
+    "firefox": {
+      "baseUrl": "https://firefox.fun/yhapi.ashx",
+      "iid": "1096",
+      "countryMode": "cheapest",
+      "countries": [
+        {
+          "code": "usa",
+          "name": "United States",
+          "dialingCode": "1"
+        }
+      ],
+      "maxPrice": "0.7"
+    }
+  },
+  "proxyPool": {
+    "path": "proxy-pool.txt",
+    "catalogPath": "dynamic-proxy-pools.json",
+    "defaultProtocol": "http",
+    "apiRequestProxy": "",
+    "maintenanceProxy": "",
+    "selection": "random",
+    "required": true,
+    "maxRotationsBeforeBootstrap": 1,
+    "healthCheck": {
+      "enabled": true,
+      "probeUrl": "https://auth.openai.com/",
+      "timeoutMs": 8000
+    }
+  },
+  "workers": {
+    "maxConcurrency": 1,
+    "lockMode": "parent_mailbox"
+  },
+  "registration": {
+    "exchangeToken": true,
+    "dynamicSentinel": true,
+    "prewarmSentinelSdk": true,
+    "protocolTemplates": "live",
+    "clientProfilePool": true,
+    "browserHeaders": "firefox",
+    "name": "alex",
+    "birthdate": "2001-01-01",
+    "oauthSessionTtlMs": 300000,
+    "authRequestTimeoutMs": 30000,
+    "maxRuntimeMs": 900000
+  },
+  "output": {
+    "stateDir": ".gpt-re-state/v2",
+    "cpaDir": ".gpt-re-state/v2/output"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "name": "gpt-register",
+  "version": "1.0.0",
+  "private": true,
+  "description": "High-performance automated ChatGPT registration and OAuth authentication suite.",
+  "main": "index.js",
+  "bin": {
+    "gpt-register": "./bin/gpt-register.js",
+    "gpt-re": "./bin/gpt-re.js"
+  },
+  "scripts": {
+    "start": "node src/ui-server/index.js",
+    "register": "node bin/gpt-re.js registration-run",
+    "register:one": "node scripts/register-one.js",
+    "oauth": "node bin/gpt-re.js oauth-login-run",
+    "oauth:login": "node scripts/oauth-login.js",
+    "batch": "node bin/gpt-re.js orchestrator-run --config gpt-re.config.json",
+    "token:exchange": "node bin/gpt-re.js oauth-token-exchange",
+    "cpa:export": "node bin/gpt-re.js cpa-export",
+    "test": "node scripts/run-tests.js quick",
+    "test:quick": "node scripts/run-tests.js quick",
+    "ui:build": "npm --prefix web run build"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0",
+    "parse5": "^7.3.0",
+    "playwright": "^1.62.1",
+    "tough-cookie": "^5.1.2"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "ISC",
+  "optionalDependencies": {
+    "impit": "^0.14.3"
+  }
+}

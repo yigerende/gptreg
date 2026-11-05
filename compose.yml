@@ -1,0 +1,31 @@
+name: gptreg
+services:
+  app:
+    image: gptreg:${GPTREG_VERSION:-local}
+    build:
+      context: .
+      args:
+        VCS_REF: ${GPTREG_VERSION:-unknown}
+    container_name: gptreg-app
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8963:3210"
+    volumes:
+      - ./.runtime:/app/.runtime
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 256
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
