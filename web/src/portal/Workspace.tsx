@@ -214,7 +214,7 @@ export function OrderDetail({
               <AdminOrderActions data={data} />
             </Suspense>
           )}
-          {["queued", "running", "review"].includes(data.status) && (
+          {admin && ["queued", "running", "review"].includes(data.status) && (
             <button
               className="p-button secondary"
               disabled={a.busy || data.cancel_requested}
@@ -523,7 +523,7 @@ export default function Workspace({
             <div className="p-checks">
               {Object.entries({
                 "orders:read": "查看订单",
-                "orders:write": "创建和取消订单",
+                "orders:write": "创建订单",
                 "accounts:read": "查看账号列表",
                 "credentials:read": "读取及导出凭据",
               }).map(([k, v]) => (

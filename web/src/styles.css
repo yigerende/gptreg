@@ -2443,3 +2443,51 @@ html { scroll-behavior: smooth; }
   .rebind-card-heading strong { min-width: 0; }
   .rebind-modal { max-height: calc(100dvh - 24px); }
 }
+
+/* The document owns vertical scrolling. Panels keep bounded scroll regions only
+   for virtual rows and logs; a short viewport must never clip page controls. */
+.app-shell .content { height: auto; min-height: calc(100dvh - 56px); overflow: visible; }
+.app-shell .content .route-view,
+.app-shell .launch-page, .app-shell .run-page, .app-shell .proxy-page,
+.app-shell .sessions-page, .app-shell .chains-page, .app-shell .robots-page,
+.app-shell .rebind-page { height: auto; overflow: visible; }
+.app-shell .launch-workspace, .app-shell .run-workspace-grid,
+.app-shell .proxy-split-workspace, .app-shell .sessions-workspace,
+.app-shell .chain-workspace, .app-shell .robots-content-grid,
+.app-shell .rebind-workspace { flex: none; height: auto; overflow: visible; }
+.app-shell .launch-config-column, .app-shell .run-primary-column,
+.app-shell .run-observer-column, .app-shell .proxy-pane,
+.app-shell .session-list-panel, .app-shell .session-inspector,
+.app-shell .chain-ledger-band, .app-shell .chain-jobs-band,
+.app-shell .robots-history-column, .app-shell .rebind-panel {
+  height: auto; max-height: none; overflow: visible;
+}
+.app-shell .launch-tab-content { overflow: visible; }
+.app-shell .run-log-band { height: auto; }
+.app-shell .run-log-view { height: min(65dvh, 720px); min-height: 260px; }
+.app-shell .session-list-scroll { height: min(65dvh, 700px); min-height: 280px; }
+.app-shell .proxy-pane-scroll, .app-shell .chain-ledger-scroll,
+.app-shell .chain-jobs-scroll, .app-shell .rebind-cards,
+.app-shell .rebind-results { max-height: 70dvh; min-height: 160px; overflow: auto; overscroll-behavior: auto; }
+.app-shell .sidebar { overflow-y: auto; }
+.run-task-switcher { flex: 0 0 auto; }
+.run-task-switcher-options { max-height: min(35dvh, 260px); overflow-y: auto; overscroll-behavior: auto; }
+.run-task-switcher-options[hidden] { display: none; }
+.console-pagination { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.console-pagination > div { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 1000px) {
+  .app-shell .sessions-workspace, .app-shell .chain-workspace, .app-shell .proxy-split-workspace { grid-template-columns: minmax(0, 1fr); }
+}
+
+.run-task-switcher-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.run-task-switcher-heading strong { display: inline-flex; align-items: center; gap: 8px; }
+.run-task-switcher-heading strong em { font-style: normal; padding: 2px 8px; border-radius: 12px; background: var(--info-soft); color: var(--info); }
+.run-task-switcher-heading > span { flex: 1; min-width: 160px; }
+.run-log-band > .section-heading { flex-wrap: wrap; }
+.run-log-band > .section-heading > div:first-child { flex: 1 0 100%; }
+.run-log-band .log-heading-actions { justify-content: flex-start; flex-wrap: wrap; }
+
+.run-task-switcher { grid-template-columns: minmax(0, 1fr); }
+
+.app-shell .sessions-workspace { grid-template-rows: auto; align-items: start; }
+.app-shell .session-list-panel { grid-template-rows: auto; }

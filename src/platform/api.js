@@ -85,7 +85,7 @@ function registerApi(app, db, orders, crypt) {
     });
     app.post(`${prefix}/registration-orders/:id/cancel`, async (r) => {
       scope(r, "orders:write");
-      return orders.cancel(r.user.id, r.params.id);
+      fail(false, "用户不可取消订单，请等待执行和自动结算", 403);
     });
     app.get(`${prefix}/accounts`, async (r) => {
       scope(r, "accounts:read");

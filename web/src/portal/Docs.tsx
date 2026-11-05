@@ -33,7 +33,7 @@ const guide = [
   ["billing", "交付模式与积分"],
   ["inputs", "参数从哪里来"],
   ["workflow", "订单到交付"],
-  ["states", "状态与取消"],
+  ["states", "状态与结算"],
   ["pagination", "分页与筛选"],
   ["retries", "幂等与重试"],
 ];
@@ -775,7 +775,7 @@ export default function Docs({
                 />
               </details>
             </Section>
-            <Section id="states" title="状态与取消">
+            <Section id="states" title="状态与结算">
               <p>
                 HTTP
                 状态表示请求结果，订单状态表示交付进度。标准账号注册完成即可交付；OAuth
@@ -802,10 +802,8 @@ export default function Docs({
                 </table>
               </div>
               <p>
-                <a href="#cancel_order">取消订单</a>
-                会阻止未执行部分继续处理，运行中部分须确认结果后结算。
-                <code>cancel_requested=true</code>{" "}
-                不代表全部子项立刻结束。请持续查看订单及 items，直到结算完成。
+                订单提交后，用户和 API 均不支持取消（包括尚未执行的部分）。请持续查看订单及 items，直到自动结算完成。最终未交付部分退回预留积分。
+                历史记录或管理员处理的订单仍可能显示 cancelled / cancel_requested。
               </p>
               <details className="d-details">
                 <summary>订单子项 items[].status</summary>

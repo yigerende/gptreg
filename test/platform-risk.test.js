@@ -447,12 +447,12 @@ test(
           ).statusCode,
           200,
         );
-        await ok(
+        assert.equal((await req(
           "POST",
           `/api/user/v1/registration-orders/${order.id}/cancel`,
           {},
           alice,
-        );
+        )).statusCode, 403);
         await db.query(
           "UPDATE platform_risk_controls SET paused_until=now()-interval '1 second' WHERE user_id=$1",
           [alice],

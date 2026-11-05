@@ -2006,6 +2006,8 @@ describe('console shell', () => {
     render(<QueryClientProvider client={client}><Tooltip.Provider><Router><App /></Router></Tooltip.Provider></QueryClientProvider>);
 
     expect(await screen.findByRole('navigation', { name: '并行任务切换' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /附属任务.*登录态刷新/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '展开任务' }));
     const auxiliaryLink = screen.getByRole('link', { name: /附属任务.*登录态刷新/ });
     expect(screen.getByRole('link', { name: /主任务.*登录态注册/ })).toHaveAttribute('aria-current', 'page');
     fireEvent.click(auxiliaryLink);
@@ -2214,7 +2216,7 @@ describe('console shell', () => {
       if (url.pathname === '/api/v1/runs') payload = { activeRunId: '', runs: [run] };
       if (url.pathname === '/api/v1/artifacts/cpa') {
         cpaSearches.push(url.search);
-        if (url.search === '?reveal=1') await lockedGate;
+        if (url.search === '?reveal=1&paged=1&offset=0&limit=50&lifecycle=all&type=all') await lockedGate;
         payload = { artifacts: [artifact] };
       }
       return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -2223,7 +2225,7 @@ describe('console shell', () => {
     render(<QueryClientProvider client={client}><Tooltip.Provider><Router><App /></Router></Tooltip.Provider></QueryClientProvider>);
 
     expect(await screen.findByText('query.cpa.json')).toBeInTheDocument();
-    expect(cpaSearches).toEqual(['?reveal=1&locked=0']);
+    expect(cpaSearches).toEqual(['?reveal=1&locked=0&paged=1&offset=0&limit=50&lifecycle=fresh&type=all']);
 
     fireEvent.click(screen.getAllByRole('tab')[0]);
     await waitFor(() => expect(document.querySelector('.artifact-panel')).toHaveClass('artifact-panel-refreshing'));
@@ -2231,8 +2233,8 @@ describe('console shell', () => {
     expect(screen.getByRole('status', { name: '正在刷新 CPA 文件' })).toBeInTheDocument();
     expect(screen.getByText('query.cpa.json')).toBeInTheDocument();
     releaseLocked();
-    await waitFor(() => expect(cpaSearches).toContain('?reveal=1'));
-    expect(cpaSearches).toEqual(['?reveal=1&locked=0', '?reveal=1']);
+    await waitFor(() => expect(cpaSearches).toContain('?reveal=1&paged=1&offset=0&limit=50&lifecycle=all&type=all'));
+    expect(cpaSearches).toEqual(['?reveal=1&locked=0&paged=1&offset=0&limit=50&lifecycle=fresh&type=all', '?reveal=1&paged=1&offset=0&limit=50&lifecycle=all&type=all']);
     await waitFor(() => expect(document.querySelector('.artifact-panel')).not.toHaveClass('artifact-panel-refreshing'));
     expect(document.querySelector('.artifact-panel')).toHaveAttribute('aria-busy', 'false');
   });
@@ -2661,9 +2663,9 @@ describe('console shell', () => {
     fireEvent.click(screen.getByRole('tab', { name: /^全部/ }));
     await waitFor(() => expect(Array.from(document.querySelectorAll('.artifact-card-head strong'), (node) => node.textContent)).toEqual(['mine.cpa.json', 'planned.cpa.json', 'sold.cpa.json', 'stock.cpa.json', 'shipped.cpa.json']));
     fireEvent.click(screen.getByLabelText('选择 planned.cpa.json'));
-    expect(screen.getByLabelText('全选（1）')).not.toBeChecked();
-    fireEvent.click(screen.getByLabelText('全选（1）'));
-    expect(screen.getByLabelText('全选')).toBeChecked();
+    expect(screen.getByLabelText('全选本页（1）')).not.toBeChecked();
+    fireEvent.click(screen.getByLabelText('全选本页（1）'));
+    expect(screen.getByLabelText('全选本页')).toBeChecked();
   });
 
   it('separates self-use and sold artifacts by their latest delivery time', async () => {
@@ -2720,7 +2722,7 @@ describe('console shell', () => {
     expect(batchCheckboxes).toHaveLength(3);
     fireEvent.click(batchCheckboxes[2]);
     expect(batchCheckboxes[2]).toBeChecked();
-    expect(screen.getByLabelText('全选（2）')).not.toBeChecked();
+    expect(screen.getByLabelText('全选本页（2）')).not.toBeChecked();
     const oldBatchToggle = document.querySelectorAll('.artifact-delivery-toggle')[2] as HTMLButtonElement;
     expect(oldBatchToggle).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(oldBatchToggle);
@@ -2852,16 +2854,16 @@ describe('console shell', () => {
       render(<QueryClientProvider client={client}><Tooltip.Provider><Router><App /></Router></Tooltip.Provider></QueryClientProvider>);
       // 最新 holds the one unshelved, unexported file.
       expect(await screen.findByText('stock.cpa.json')).toBeInTheDocument();
-      expect(await screen.findByRole('button', { name: '导出未导出 (1)' })).toBeEnabled();
+      expect(await screen.findByRole('button', { name: '导出本页未导出 (1)' })).toBeEnabled();
       // Standing on 计划卖出 the button follows the tab: the shelf's unexported
       // file, and not the 在库 one sitting outside the filter.
       fireEvent.click(screen.getByRole('tab', { name: /^计划卖出/ }));
       expect(await screen.findByText('planned.cpa.json')).toBeInTheDocument();
-      fireEvent.click(await screen.findByRole('button', { name: '导出未导出 (1)' }));
+      fireEvent.click(await screen.findByRole('button', { name: '导出本页未导出 (1)' }));
       await waitFor(() => expect(requests).toEqual([{ items: [{ runId: run.runId, jobId: 'job-planned' }] }]));
       // 全部 offers both unexported files and still leaves the exported one out.
       fireEvent.click(screen.getByRole('tab', { name: /^全部/ }));
-      await waitFor(() => expect(screen.getByRole('button', { name: /^导出未导出/ })).toHaveTextContent('导出未导出 (2)'));
+      await waitFor(() => expect(screen.getByRole('button', { name: /^导出本页未导出/ })).toHaveTextContent('导出本页未导出 (2)'));
     } finally {
       clickSpy.mockRestore();
     }
@@ -3389,7 +3391,7 @@ describe('console shell', () => {
     fireEvent.click(await screen.findByRole('tab', { name: /^自用/ }));
     fireEvent.click(screen.getByRole('button', { name: '展开批次 未导出' }));
     await screen.findByText('mine-0.cpa.json');
-    fireEvent.click(screen.getByLabelText('全选'));
+    fireEvent.click(screen.getByLabelText('全选本页'));
     fireEvent.click(screen.getByRole('button', { name: '发送到 sub2api (30)' }));
     fireEvent.click(await screen.findByRole('button', { name: '确认发送' }));
 
@@ -3431,7 +3433,7 @@ describe('console shell', () => {
     await waitFor(() => expect(freshTab.textContent).toBe('最新0'));
     // Nothing is left to export either: a pushed artifact has been delivered,
     // so the header button stops offering to send the same files again.
-    await waitFor(() => expect(screen.getByRole('button', { name: /^导出未导出/ })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^导出本页未导出/ })).toBeDisabled());
   });
 
   it('states the outcome when the gateway answers too fast for a progress bar', async () => {
@@ -3478,7 +3480,7 @@ describe('console shell', () => {
     fireEvent.click(await screen.findByRole('tab', { name: /^自用/ }));
     fireEvent.click(screen.getByRole('button', { name: '展开批次 未导出' }));
     await screen.findByText('fast-0.cpa.json');
-    fireEvent.click(screen.getByLabelText('全选'));
+    fireEvent.click(screen.getByLabelText('全选本页'));
     fireEvent.click(screen.getByRole('button', { name: '发送到 sub2api (2)' }));
     fireEvent.click(await screen.findByRole('button', { name: '确认发送' }));
 
@@ -3635,4 +3637,35 @@ describe('console shell', () => {
     expect(await screen.findByText('任务已重新启动，正在处理上次未完成的步骤')).toBeInTheDocument();
     expect(await screen.findByText('后台执行中')).toBeInTheDocument();
   });
+  it('requests separate CPA pages and resets pagination when the shelf changes', async () => {
+    window.history.replaceState(null, '', '/history');
+    const requested: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      let payload: unknown = payloads[url.pathname] || {};
+      if (url.pathname === '/api/v1/artifacts/cpa') {
+        requested.push(url.search);
+        const offset = Number(url.searchParams.get('offset') || 0);
+        const shelf = url.searchParams.get('lifecycle') || 'fresh';
+        payload = { total: 123, offset, limit: 50, artifacts: Array.from({ length: Math.min(50, 123 - offset) }, (_, i) => ({ key: `${shelf}-${offset + i}`, runId: 'paged', jobId: `job-${offset+i}`, fileName: `${shelf}-${offset+i}.json`, email: `${offset+i}@example.test`, modifiedAt: '2026-11-05T00:00:00Z', lifecycle: shelf === 'sold' ? 'sold' : 'active', size: 1 })) };
+      }
+      return new Response(JSON.stringify(payload));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><Tooltip.Provider><Router><App /></Router></Tooltip.Provider></QueryClientProvider>);
+    await screen.findByText('fresh-0.json');
+    const pager = screen.getByRole('navigation', { name: 'CPA 文件分页' });
+    fireEvent.click(within(pager).getByRole('button', { name: '下一页' }));
+    await screen.findByText('fresh-50.json');
+    expect(screen.queryByText('fresh-0.json')).not.toBeInTheDocument();
+    expect(requested.some(search => search.includes('offset=50'))).toBe(true);
+    fireEvent.click(screen.getByRole('tab', { name: /^已卖出/ }));
+    await waitFor(() => expect(requested.at(-1)).toContain('offset=0&limit=50&lifecycle=sold'));
+    await waitFor(() => expect(pager).toHaveAttribute('aria-busy', 'false'));
+    expect(screen.queryByText('fresh-50.json')).not.toBeInTheDocument();
+    expect(within(pager).getByRole('button', { name: '上一页' })).toBeDisabled();
+    expect(requested.at(-1)).toContain('offset=0');
+    client.clear();
+  });
+
 });

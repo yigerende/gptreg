@@ -1,3 +1,4 @@
+import type { PageInfo } from './components/Pagination';
 import type { CpaCredentialPreflight, ChainPaymentSettings, LinkOpsProxyPool, ChainDispatchResult, LinkOpsStatus, LinkOpsJobPage, LinkOpsJobDeleteResult, ChainCountryRule, ChainExtractPlan, ChainTokenHealth, ChainImportResult, ChainRecord, ChainSnapshot, ConfigSnapshot, CpaArtifact, LogRecord, MailboxOption, MailcomAliasDomains, MailcomImportProgress, MailcomStatus, MailRentalConfigureBody, PreflightSnapshot, ProxyAssignment, ProxyCatalogSnapshot, RobotRecord, RobotSnapshot, RunListSnapshot, RunPlan, RunSummary, ServiceStatus, SessionAsset, SessionAssetPage, SessionAssetProbeBatch, SessionAssetQuery, SessionAssetResolveResult, SessionAssetTrialBatch, SettableSessionAssetLifecycle, SmsMarketSnapshot, Sub2ApiDeleteResult, Sub2ApiDocument, Sub2ApiFailedAccounts, Sub2ApiPushResult, NvtokensPushResult, TaskCapacitySnapshot, CpaArtifactSelectionItem, CpaExportSelection, RebindProviders, RebindPreflight, RebindStatus, RebindStartBody, RebindStartResult, RebindQueue, RebindQueueAddResult } from './types';
 
 
@@ -99,7 +100,9 @@ export const endpoints = {
   preflight: (plan?: RunPlan) => api<PreflightSnapshot>('/preflight', { method: 'POST', body: JSON.stringify(plan ? { plan } : {}) }),
   // The console polls this endpoint continuously. History details are fetched
   // only after opening a run, so keep the polling payload to its live summary.
-  runs: () => api<RunListSnapshot>('/runs?compact=1'),
+  runs: () => api<RunListSnapshot>('/runs?compact=1&view=live'),
+  runsPage: (offset = 0, limit = 50) => api<RunListSnapshot & PageInfo>(`/runs?compact=1&paged=1&offset=${offset}&limit=${limit}`),
+  runPage: (id: string, offset: number) => api<RunSummary>(`/runs/${encodeURIComponent(id)}?reveal=1&paged=1&offset=${offset}&limit=50`),
   run: (id: string, reveal = false) => api<RunSummary>(`/runs/${encodeURIComponent(id)}${reveal ? '?reveal=1' : ''}`),
   reconcileBalance: (id: string) => api<RunSummary>(`/runs/${encodeURIComponent(id)}/balance-reconciliation`, { method: 'POST' }),
   startRun: (plan: RunPlan) => api<RunSummary>('/runs', { method: 'POST', body: JSON.stringify({ plan }) }),
@@ -116,7 +119,7 @@ export const endpoints = {
   // Revealed, like the run detail and the log stream: the alias address is the
   // only thing that says which account a CPA file belongs to, and this console
   // is loopback-only.
-  cpaArtifacts: (options: { includeLocked?: boolean } = {}) => api<{ artifacts: CpaArtifact[] }>(`/artifacts/cpa?reveal=1${options.includeLocked === false ? '&locked=0' : ''}`),
+  cpaArtifacts: (options: { includeLocked?: boolean; offset?: number; limit?: number; lifecycle?: string; type?: string } = {}) => api<{ artifacts: CpaArtifact[] } & Partial<PageInfo> & { typeCounts?: Record<string, number>; lifecycleCounts?: Record<string, number> }>(`/artifacts/cpa?reveal=1${options.includeLocked === false ? '&locked=0' : ''}${options.offset === undefined ? '' : `&paged=1&offset=${options.offset}&limit=${options.limit || 50}&lifecycle=${options.lifecycle || 'all'}&type=${options.type || 'all'}`}`),
   lockCpaBatch: (items: CpaArtifactSelectionItem[], batchKey?: string) => api<{ requested: number; locked: CpaArtifactSelectionItem[]; alreadyLocked: CpaArtifactSelectionItem[]; batchKey: string }>('/artifacts/cpa/lock', { method: 'POST', body: JSON.stringify({ items, ...(batchKey ? { batchKey } : {}) }) }),
   unlockCpaBatch: (items: CpaArtifactSelectionItem[]) => api<{ requested: number; unlocked: CpaArtifactSelectionItem[]; alreadyUnlocked: CpaArtifactSelectionItem[]; restored?: string[] }>('/artifacts/cpa/unlock', { method: 'POST', body: JSON.stringify({ items }) }),
   exportCpa: (selection: CpaExportSelection) => api<unknown[]>('/artifacts/cpa/export', { method: 'POST', body: JSON.stringify(selection) }),
@@ -156,6 +159,7 @@ export const endpoints = {
   removeSessionAssets: (assetIds: string[], cascadeCpa = false) => api<{ requested: number; removed: string[]; missing: string[]; skipped: string[]; cpaRemoved: boolean }>('/session-assets', { method: 'DELETE', body: JSON.stringify({ assetIds, cascadeCpa }) }),
   linkopsStatus: () => api<LinkOpsStatus>('/linkops/status'),
   startLinkops: () => api<{ ok: boolean; output: string; status: LinkOpsStatus }>('/linkops/start', { method: 'POST', body: '{}' }),
+  linkopsJobsPage: (offset: number, domain: string, filter: string, provider: string) => api<LinkOpsJobPage & PageInfo & { counts: Record<string, number>; providers: string[]; recentLimit: number }>(`/linkops/jobs?paged=1&offset=${offset}&limit=50&domain=${domain}&filter=${filter}&provider=${encodeURIComponent(provider)}`),
   linkopsJobs: (query: { domain?: string; provider?: string; status?: string; limit?: number } = {}) => {
     const params = new URLSearchParams();
     if (query.domain) params.set('domain', query.domain);
@@ -179,6 +183,7 @@ export const endpoints = {
   refreshLinkopsProxyPool: (provider: string, country: string, role = 'checkout') => api<LinkOpsProxyPool>(`/linkops/proxy-pools/${encodeURIComponent(provider)}/${encodeURIComponent(country)}/refresh?role=${encodeURIComponent(role)}`, { method: 'POST', body: '{}' }),
   preflightLinkopsProxyPool: (provider: string, country: string, role = 'checkout') => api<{ ok: boolean; result?: Record<string, unknown> }>(`/linkops/proxy-pools/${encodeURIComponent(provider)}/${encodeURIComponent(country)}/preflight?role=${encodeURIComponent(role)}`, { method: 'POST', body: JSON.stringify({ index: -1 }) }),
   clearLinkopsProxyPool: (provider: string, country: string, role = 'checkout') => api<{ ok: boolean }>(`/linkops/proxy-pools/${encodeURIComponent(provider)}/${encodeURIComponent(country)}?role=${encodeURIComponent(role)}`, { method: 'DELETE' }),
+  chainsPage: (offset: number, domain: string) => api<ChainSnapshot & PageInfo>(`/chains?paged=1&offset=${offset}&limit=50&domain=${domain}`),
   chains: () => api<ChainSnapshot>('/chains'),
   importChainTokens: (body: { content: string; provider?: string; routeKey?: string }) => api<ChainImportResult>('/chains/import', { method: 'POST', body: JSON.stringify(body) }),
   chain: (id: string) => api<ChainRecord>(`/chains/${encodeURIComponent(id)}`),
@@ -187,7 +192,8 @@ export const endpoints = {
   probeChainTokens: (ids: string[]) => api<{ checked: number; alive: number; dead: number; results: Array<ChainTokenHealth & { id: string; email: string }> }>('/chains/probe', { method: 'POST', body: JSON.stringify({ ids }) }),
   markChainPayment: (ids: string[], status: 'pending' | 'success' | 'failed') => api<{ requested: number; status: string; changed: string[]; missing: string[] }>('/chains/payment-status', { method: 'POST', body: JSON.stringify({ ids, status }) }),
   saveChainRules: (rules: Record<string, ChainCountryRule>) => api<{ countryRules: Record<string, ChainCountryRule> }>('/chains/rules', { method: 'PUT', body: JSON.stringify({ rules }) }),
-  robots: () => api<RobotSnapshot>('/robots'),
+  robotRuns: (offset: number) => api<PageInfo & { items: Array<{ robot: RobotRecord; run: import('./types').RobotRun }> }>(`/robots/runs?offset=${offset}&limit=50`),
+  robots: () => api<RobotSnapshot>('/robots?compact=1'),
   updateRobot: (id: string, patch: { intervalMs?: number; enabled?: boolean; config?: Record<string, unknown> }) => api<RobotRecord>(`/robots/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   startRobot: (id: string) => api<RobotRecord>(`/robots/${encodeURIComponent(id)}/start`, { method: 'POST' }),
   stopRobot: (id: string) => api<RobotRecord>(`/robots/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
@@ -196,11 +202,14 @@ export const endpoints = {
   removeChains: (ids: string[]) => api<{ requested: number; removed: string[]; missing: string[]; accountsRemoved: string[]; accountsMissing: string[]; accountsRetained: string[] }>('/chains', { method: 'DELETE', body: JSON.stringify({ ids }) }),
   mailboxes: () => api<{ mailboxes: MailboxOption[] }>('/mailboxes'),
   clearLogs: (id: string) => api<{ runId: string; removed: number }>(`/runs/${encodeURIComponent(id)}/logs`, { method: 'DELETE' }),
+  logPage: (id: string, before = '') => api<{ logs: LogRecord[]; cursor: string }>(`/runs/${encodeURIComponent(id)}/logs?paged=1&reveal=1&limit=200${before ? `&before=${encodeURIComponent(before)}` : ''}`),
   logs: (id: string, reveal = false, limit = 10000) => api<{ logs: LogRecord[] }>(`/runs/${encodeURIComponent(id)}/logs?limit=${limit}&reveal=${reveal ? '1' : '0'}`),
   smsbowerMailConfig: () => api<SmsbowerMailSettings>('/mail/smsbower/config'),
   saveSmsbowerMailConfig: (body: SmsbowerMailInput) => api<SmsbowerMailSettings>('/mail/smsbower/config', { method: 'PUT', body: JSON.stringify(body) }),
   testSmsbowerMailConfig: (body: SmsbowerMailInput) => api<SmsbowerMailTest>('/mail/smsbower/test', { method: 'POST', body: JSON.stringify(body) }),
-  proxies: () => api<ProxyCatalogSnapshot>('/proxies'),
+  proxiesPage: (offset: number) => api<ProxyCatalogSnapshot & PageInfo>(`/proxies?paged=1&offset=${offset}&limit=50`),
+  proxyEntries: (country: string, offset: number) => api<PageInfo & { items: Array<{ id: string; url: string }> }>(`/proxies/pools/${encodeURIComponent(country)}/entries?offset=${offset}&limit=50`),
+  proxies: () => api<ProxyCatalogSnapshot>('/proxies?compact=1'),
   previewProxies: (body: unknown) => api<any>('/proxies/preview', { method: 'POST', body: JSON.stringify(body) }),
   importProxies: (body: unknown) => api<any>('/proxies/import', { method: 'POST', body: JSON.stringify(body) }),
   buildAndPullProxyApi: (body: { provider: string; countryCode: string; count: number; protocol: string }) => api<ProxyCatalogSnapshot>('/proxies/api/build-pull', { method: 'POST', body: JSON.stringify(body) }),
@@ -211,9 +220,12 @@ export const endpoints = {
   clearProxies: (scope: 'local' | 'dynamic' = 'local') => api<ProxyCatalogSnapshot>(`/proxies?scope=${scope}`, { method: 'DELETE' }),
   rebindProviders: () => api<RebindProviders>('/rebind/providers'),
   rebindPreflight: (body: { provider: string; workerConcurrency: number; count: number; proxyAssignments: ProxyAssignment[]; probe?: boolean }) => api<RebindPreflight>('/rebind/preflight', { method: 'POST', body: JSON.stringify(body) }),
+  rebindStatusPage: (offset: number) => api<RebindStatus & { resultsPage: PageInfo }>(`/rebind/status?paged=1&offset=${offset}&limit=50`),
   rebindStatus: () => api<RebindStatus>('/rebind/status'),
   startRebind: (body: RebindStartBody) => api<RebindStartResult>('/rebind/start', { method: 'POST', body: JSON.stringify(body) }),
   stopRebind: () => api<{ ok: boolean; running: boolean; stopRequested?: boolean }>('/rebind/stop', { method: 'POST', body: '{}' }),
+  rebindQueueIds: () => api<{ ids: string[] }>('/rebind/queue/ids'),
+  rebindQueuePage: (offset: number) => api<RebindQueue & PageInfo>(`/rebind/queue?paged=1&offset=${offset}&limit=50`),
   rebindQueue: () => api<RebindQueue>('/rebind/queue'),
   rebindQueueAdd: (assetIds: string[]) => api<RebindQueueAddResult>('/rebind/queue/add', { method: 'POST', body: JSON.stringify({ assetIds }) }),
   rebindQueueRemove: (assetIds: string[]) => api<RebindQueue>('/rebind/queue/remove', { method: 'POST', body: JSON.stringify({ assetIds }) }),

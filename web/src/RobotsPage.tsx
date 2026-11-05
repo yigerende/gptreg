@@ -1,3 +1,4 @@
+import { Pagination } from './components/Pagination';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Dialog, Switch } from 'radix-ui';
@@ -10,7 +11,6 @@ import { jobResultLabel } from './task-labels';
 import type { RegistrationRobotConfig, RegistrationSchedule, RegistrationTemplate, RobotRecord, RobotRun, RobotSnapshot } from './types';
 import { Link } from './router';
 
-const MAX_VISIBLE_ROBOT_RUNS = 60;
 type RobotCountryPool = { countryCode: string; total: number };
 const REGISTRATION_MAIL_OPTIONS = [
   { value: 'xiaopingguo', label: 'Xiaopingguo' },
@@ -756,8 +756,10 @@ function RobotRunDetailsDialog({
   </Dialog.Root>;
 }
 
-function RobotHistory({ robots, onNotice }: { robots: RobotRecord[]; onNotice: (notice: { tone: string; text: string }) => void }) {
+function RobotHistory({ onNotice }: { onNotice: (notice: { tone: string; text: string }) => void }) {
   const client = useQueryClient();
+  const [offset, setOffset] = useState(0);
+  const history = useQuery({ queryKey: ['robots', 'history', offset], queryFn: () => endpoints.robotRuns(offset), refetchInterval: 5000 });
   const [selectedRun, setSelectedRun] = useState<{ robot: RobotRecord; run: RobotRun } | null>(null);
   const clear = useMutation({
     mutationFn: endpoints.clearRobotRuns,
@@ -770,27 +772,11 @@ function RobotHistory({ robots, onNotice }: { robots: RobotRecord[]; onNotice: (
     },
     onError: (error) => onNotice({ tone: 'danger', text: errorMessage(error) }),
   });
-  const runs = robots
-    .flatMap((robot) => {
-      const history = Array.isArray(robot.runs) ? robot.runs : [];
-      const liveRun = robot.lastRun && !history.some((run) => run.id === robot.lastRun?.id)
-        ? [robot.lastRun]
-        : [];
-      return [...liveRun, ...history].map((run) => ({ robot, run }));
-    })
-    .sort((left, right) => {
-      const leftTime = Date.parse(left.run.startedAt);
-      const rightTime = Date.parse(right.run.startedAt);
-      return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
-    })
-    .slice(0, MAX_VISIBLE_ROBOT_RUNS);
-  const totalRuns = robots.reduce((total, robot) => {
-    const history = Array.isArray(robot.runs) ? robot.runs : [];
-    const hasUnlistedLiveRun = Boolean(robot.lastRun && !history.some((run) => run.id === robot.lastRun?.id));
-    return total + history.length + (hasUnlistedLiveRun ? 1 : 0);
-  }, 0);
+  const runs = history.data?.items || [];
+  const totalRuns = history.data?.total || 0;
   return <>
   <section className="workspace-band robot-history-panel">
+    {history.error && <Notice tone="danger">{errorMessage(history.error)} <Button onClick={() => history.refetch()}>重试</Button></Notice>}
     <div className="section-heading"><div><h2>运行日志</h2><p>{runs.length ? `最近 ${runs.length} 条` : '暂无记录'}</p></div><div className="robot-history-heading-actions"><ConfirmDialog trigger={<IconButton label="清空运行日志" disabled={!totalRuns || clear.isPending}><Trash2 size={16} /></IconButton>} title="清空运行日志" description={`将清空所有机器人的 ${totalRuns} 条运行记录，同时重置最近结果；不会停止正在运行的任务。`} danger confirmLabel="清空" onConfirm={() => clear.mutate()} /><TimerReset size={17} className="robot-history-icon" /></div></div>
     {runs.length ? <div className="robot-history-scroll">
       <div className="robot-history-head"><span>时间</span><span>机器人 / 结果</span><span>耗时</span><span aria-hidden="true" /></div>
@@ -801,6 +787,7 @@ function RobotHistory({ robots, onNotice }: { robots: RobotRecord[]; onNotice: (
         <div className="robot-history-action"><IconButton label="查看运行详情" onClick={() => setSelectedRun({ robot, run })}><FileJson size={15} /></IconButton></div>
       </div>)}
     </div> : <EmptyState icon={<TimerReset size={24} />} title="暂无运行日志" detail="执行一次命令后，结果会保留在这里。" />}
+    <Pagination label="机器人日志分页" total={totalRuns} offset={offset} busy={history.isFetching} onChange={setOffset} />
   </section>
   <RobotRunDetailsDialog selection={selectedRun} onOpenChange={setSelectedRun} />
   </>;
@@ -835,7 +822,7 @@ export function RobotsPage() {
         </section>
       </main>
       <aside className="robots-history-column">
-        <RobotHistory robots={robotRows} onNotice={setNotice} />
+        <RobotHistory onNotice={setNotice} />
       </aside>
     </div>
   </div>;

@@ -167,7 +167,7 @@ const schemas = {
     unit_price: num("该模式完整单价，单位积分；OAuth 价格无需再加标准价"),
   }),
   Order: obj({
-    id: str("订单 ID；用于查进度、取消和筛选交付账号"),
+    id: str("订单 ID；用于查进度和筛选交付账号"),
     quantity: num("期望交付数量", { minimum: 1 }),
     need_oauth: bool("本单是否包含 OAuth 数据"),
     registration_region: { type: ["string", "null"], description: "下单选择的注册地区；random 为每个账号随机选择，历史订单为 null。不是实际出口 IP 的地理检测结果。" },
@@ -178,7 +178,7 @@ const schemas = {
     delivered: num("已经完整交付的账号数量"),
     charged: num("实际完成交付累计扣除的积分"),
     released: num("未交付部分累计退回的积分"),
-    cancel_requested: bool("是否已请求取消；true 不代表运行中子项已立即结束"),
+    cancel_requested: bool("是否由管理员请求取消；用户和 API 不支持取消，true 不代表运行中子项已立即结束"),
     source: str("订单创建渠道", { enum: ["web", "api"] }),
     created_at: stamp("创建时间"),
     updated_at: stamp("最后更新时间"),
@@ -555,35 +555,6 @@ operation(
   },
 );
 operation(
-  "/open/v1/registration-orders/{id}/cancel",
-  "post",
-  "cancel_order",
-  "取消未执行部分",
-  "注册订单",
-  "orders:write",
-  "不需要请求正文。取消等待执行或等待授权的部分，并退回对应预留积分。运行中部分按执行结果结算，恢复中的未交付部分自动结束退款；可重复取消，已结束订单保持原状态。响应含完整订单及子项。",
-  {
-    parameters: [identifier("order")],
-    result: ref("OrderDetail"),
-    example: {
-      ...exampleOrder,
-      status: "cancelled",
-      released: 100,
-      cancel_requested: true,
-      items: [
-        {
-          ...exampleItem,
-          status: "cancelled",
-          attempts: 0,
-          oauth_attempts: 0,
-          message: "已取消未执行部分",
-        },
-      ],
-    },
-    responseDescription: "取消请求已处理；请按订单和子项状态确认结算结果",
-  },
-);
-operation(
   "/open/v1/accounts",
   "get",
   "list_accounts",
@@ -812,14 +783,14 @@ const openapi = {
   openapi: "3.1.0",
   info: {
     title: "GPT Register 开放 API",
-    version: "1.5.0",
+    version: "1.6.0",
     description:
       "通过服务端 API 创建标准或含 OAuth 的注册订单，查询进度并领取交付凭据。下单预留积分，按实际交付结算；失败/取消未交付部分释放。所有示例为虚构演示资料，实际价格与上限以接口返回为准。",
   },
   servers: [{ url: "/" }],
   tags: [
     { name: "账户与服务", description: "查看用户积分和注册服务价格" },
-    { name: "注册订单", description: "创建、筛选、查询和取消自己的订单" },
+    { name: "注册订单", description: "创建、筛选和查询自己的订单；用户及 API 不支持取消" },
     { name: "账号交付", description: "领取及导出已交付账号" },
   ],
   paths,
@@ -827,7 +798,7 @@ const openapi = {
   "x-item-states": itemStates,
   "x-scopes": {
     "orders:read": "查询订单列表与进度",
-    "orders:write": "创建订单和取消未执行部分",
+    "orders:write": "创建订单",
     "accounts:read": "查询已交付账号列表",
     "credentials:read": "读取密码、2FA、OAuth 与批量导出",
   },
@@ -870,7 +841,7 @@ const openapi = {
     {
       field: "订单 id / order_id",
       source: "创建响应 id 或订单列表 items[].id",
-      usage: "查详情、取消订单或筛选交付账号",
+      usage: "查详情或筛选交付账号",
       operation: "create_order",
     },
     {

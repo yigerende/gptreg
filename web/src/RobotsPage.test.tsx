@@ -77,7 +77,7 @@ describe('robots page', () => {
       const url = new URL(String(input), 'http://localhost');
       const payload = url.pathname === '/api/v1/robots'
         ? { schemaVersion: 1, taskBusy: true, activeRunId: '', robots: [registration] }
-        : registration;
+        : url.pathname === '/api/v1/robots/runs' ? { items: [{ robot: registration, run: registration.lastRun }], total: 1, offset: 0, limit: 50 } : registration;
       return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
@@ -209,7 +209,7 @@ describe('robots page', () => {
       requestedUrls.push(url.toString());
       const payload = url.pathname === '/api/v1/robots'
         ? { schemaVersion: 1, taskBusy: false, activeRunId: '', robots: [detailRobot] }
-        : url.pathname === '/api/v1/runs/run-detail' ? runDetail : detailRobot;
+        : url.pathname === '/api/v1/runs/run-detail' ? runDetail : url.pathname === '/api/v1/robots/runs' ? { items: detailRobot.runs.map(run => ({ robot: detailRobot, run })), total: 1, offset: 0, limit: 50 } : detailRobot;
       return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });

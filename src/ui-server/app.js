@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const Fastify = require('fastify');
+const { pagination, pageRows, artifactPage } = require('./pagination');
 const { ConfigService, withoutSecrets } = require('./config-service');
 const { SmsbowerMailService } = require('./smsbower-mail-service');
 const { LogStore } = require('./log-store');
@@ -402,12 +403,27 @@ function buildApp(options = {}) {
 
   app.post('/api/v1/preflight', async (request) => runManager.preflight(request.body?.plan || {}));
 
-  app.get('/api/v1/runs', async (request) => ({
-    activeRunId: typeof runManager.primaryActiveRunId === 'function' ? runManager.primaryActiveRunId() : (runManager.active?.state.runId || ''),
-    activeRunIds: typeof runManager.activeRunIds === 'function' ? runManager.activeRunIds() : [],
-    taskCapacity: typeof runManager.taskCapacitySnapshot === 'function' ? runManager.taskCapacitySnapshot() : null,
-    runs: runManager.list({ compact: request.query?.compact === '1' }),
-  }));
+  app.get('/api/v1/runs', async (request) => {
+    const runs = runManager.list({ compact: request.query?.compact === '1' });
+    const activeRunIds = typeof runManager.activeRunIds === 'function' ? runManager.activeRunIds() : [];
+    const active = new Set(activeRunIds);
+    const meta = {
+      activeRunId: typeof runManager.primaryActiveRunId === 'function' ? runManager.primaryActiveRunId() : (runManager.active?.state.runId || ''),
+      activeRunIds,
+      taskCapacity: typeof runManager.taskCapacitySnapshot === 'function' ? runManager.taskCapacitySnapshot() : null,
+    };
+    if (request.query?.view === 'live') {
+      const recent = new Set(runs.slice(0, 4).map(row => row.runId));
+      return { ...meta, total: runs.length, runs: runs.filter(row => recent.has(row.runId) || active.has(row.runId) || !['complete', 'partial', 'cancelled', 'failed', 'corrupt'].includes(row.status)).map(({ jobs, workers, mailboxes, ...summary }) => summary) };
+    }
+    if (request.query?.paged === '1') {
+      const { items, ...page } = pageRows(runs, request.query);
+      const retained = new Set((runManager.cpaArtifactRecords?.() || []).map(row => row.runId));
+      const mark = row => ({ ...row, hasRetainedCpa: retained.has(row.runId) });
+      return { ...meta, ...page, runs: items.map(mark), latestRun: runs[0] ? mark(runs[0]) : null };
+    }
+    return { ...meta, runs };
+  });
   app.post('/api/v1/runs', async (request, reply) => {
     const result = await runManager.start(request.body?.plan || {});
     reply.code(202);
@@ -418,7 +434,15 @@ function buildApp(options = {}) {
   }));
   app.get('/api/v1/runs/:runId', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    return runManager.get(safeRunId(request.params.runId), { reveal: request.query?.reveal === '1' });
+    const run = await runManager.get(safeRunId(request.params.runId), { reveal: request.query?.reveal === '1' });
+    if (request.query?.paged !== '1') return run;
+    const jobs = run.jobs || [];
+    const jobsPage = pageRows(jobs, request.query);
+    const assigned = new Set((run.workers || []).flatMap(worker => [worker.jobId, worker.currentJobId]));
+    // Keep only the context used by worker lanes and recovery actions outside
+    // the page. Counts and billing are computed over the complete run above.
+    return { ...run, jobsPage, jobs: jobs.filter(job => assigned.has(job.id) || job.error || job.phase === 'waiting_sms_acquisition_reconcile') };
+
   });
   app.post('/api/v1/runs/:runId/balance-reconciliation', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -503,6 +527,11 @@ function buildApp(options = {}) {
     // signature holds. Setting the content type ourselves stops Fastify from
     // stringifying an already-JSON string a second time.
     reply.header('Content-Type', 'application/json; charset=utf-8');
+    if (request.query?.paged === '1') {
+      const options = { reveal: request.query?.reveal === '1', includeLocked: request.query?.locked !== '0' };
+      const rows = typeof runManager.cpaArtifacts === 'function' ? runManager.cpaArtifacts(options) : JSON.parse(runManager.cpaArtifactsJson(options)).artifacts;
+      return artifactPage(rows, request.query);
+    }
     return runManager.cpaArtifactsJson({
       reveal: request.query?.reveal === '1',
       includeLocked: request.query?.locked !== '0',
@@ -856,6 +885,22 @@ function buildApp(options = {}) {
   });
   app.get('/api/v1/linkops/jobs', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
+    if (request.query?.paged === '1') {
+      // LinkOps exposes a bounded recent-jobs feed, not a cursor contract.
+      // Page that feed here and state its scope instead of inventing a total
+      // for older records the external service cannot enumerate.
+      pagination(request.query);
+      const snapshot = await linkops.jobs({ domain: String(request.query?.domain || ''), limit: 200 });
+      const rows = snapshot.jobs || [], live = new Set(['queued', 'running', 'awaiting_input']);
+      const counts = { all: rows.length, live: 0, done: 0, bad: 0 };
+      for (const row of rows) counts[live.has(row.status) ? 'live' : row.status === 'completed' ? 'done' : 'bad']++;
+      const filter = request.query?.filter || 'all';
+      if (!['all', 'live', 'done', 'bad'].includes(filter)) throw new HttpError(400, 'Invalid job filter');
+      const filtered = rows.filter(row => (!request.query?.provider || request.query.provider === 'all' || row.provider === request.query.provider)
+        && (filter === 'all' || (filter === 'live' ? live.has(row.status) : filter === 'done' ? row.status === 'completed' : !live.has(row.status) && row.status !== 'completed')));
+      const { items, ...page } = pageRows(filtered, request.query);
+      return { jobs: items, ...page, counts, providers: [...new Set(rows.map(row => row.provider))].sort(), recentLimit: 200 };
+    }
     return linkops.jobs({
       domain: String(request.query?.domain || ''),
       provider: String(request.query?.provider || ''),
@@ -917,17 +962,31 @@ function buildApp(options = {}) {
     reply.header('Cache-Control', 'no-store');
     return linkops.extractedLinks(Number(request.query?.limit || 200));
   });
-  app.get('/api/v1/chains', async (_request, reply) => {
+  app.get('/api/v1/chains', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    return chainService.snapshot();
+    const snapshot = chainService.snapshot();
+    if (request.query?.paged !== '1') return snapshot;
+    const rows = request.query?.domain === 'payment' ? snapshot.records.filter(row => row.status === 'success' && (row.routeProvider || row.linkopsProvider || ({ IN: 'upi', VN: 'momo', ID: 'gopay' })[String(row.sourceCountryCode || '').toUpperCase()] || 'paypal') === 'paypal') : snapshot.records;
+    const { items, ...page } = pageRows(rows, request.query);
+    return { ...snapshot, records: items, ...page };
   });
   app.get('/api/v1/mailcom/domains', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     return runManager.mailcomAliasDomains(request.query?.provider || '');
   });
-  app.get('/api/v1/robots', async (_request, reply) => {
+  app.get('/api/v1/robots', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    return robotService.snapshot();
+    const snapshot = robotService.snapshot();
+    return request.query?.compact === '1' ? { ...snapshot, robots: snapshot.robots.map(robot => ({ ...robot, runs: [] })) } : snapshot;
+  });
+  app.get('/api/v1/robots/runs', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const rows = robotService.snapshot().robots.flatMap(robot => {
+      const history = robot.runs || [];
+      const runs = robot.lastRun && !history.some(run => run.id === robot.lastRun.id) ? [robot.lastRun, ...history] : history;
+      return runs.map(run => ({ robot: { ...robot, runs: [] }, run }));
+    }).sort((a, b) => String(b.run.startedAt).localeCompare(String(a.run.startedAt)) || String(a.run.id).localeCompare(String(b.run.id)));
+    return pageRows(rows, request.query);
   });
   // Registered before `/robots/:robotId`, or `runs` would be read as an id.
   app.delete('/api/v1/robots/runs', async (_request, reply) => {
@@ -1040,6 +1099,14 @@ function buildApp(options = {}) {
   app.get('/api/v1/runs/:runId/logs', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const reveal = request.query?.reveal === '1';
+    if (request.query?.paged === '1') {
+      const { limit } = pagination(request.query);
+      const before = request.query?.before ? Number(request.query.before) : Infinity;
+      if (!(before > 0)) throw new HttpError(400, 'Invalid before');
+      const rows = logStore.read(safeRunId(request.params.runId), { limit: 10000, reveal }).filter(row => row.seq < before);
+      const logs = rows.slice(-limit);
+      return { logs, cursor: rows.length > limit ? String(logs[0].seq) : '' };
+    }
     return {
       logs: logStore.read(safeRunId(request.params.runId), {
         since: request.query?.since,
@@ -1070,7 +1137,7 @@ function buildApp(options = {}) {
       const visible = reveal ? record : sanitizeValue(record, { redactPii: true });
       response.write(`id: ${record.seq}\nevent: log\ndata: ${JSON.stringify(visible)}\n\n`);
     };
-    for (const record of logStore.read(runId, { since: lastId, reveal: true })) send(record);
+    for (const record of logStore.read(runId, { since: lastId, reveal: true, ...(request.query?.tail === '1' && !lastId ? { limit: 200 } : {}) })) send(record);
     const unsubscribe = logStore.subscribe(runId, send);
     const heartbeat = setInterval(() => response.write(': heartbeat\n\n'), 15000);
     request.raw.on('close', () => {
@@ -1094,7 +1161,19 @@ function buildApp(options = {}) {
     reply.header('Cache-Control', 'no-store');
     return smsbowerMail.test(request.body);
   });
-  app.get('/api/v1/proxies', async () => proxyService.list());
+  app.get('/api/v1/proxies', async (request) => {
+    const snapshot = await proxyService.list();
+    if (request.query?.compact !== '1' && request.query?.paged !== '1') return snapshot;
+    const dynamic = { ...snapshot.dynamic, countryPools: (snapshot.dynamic?.countryPools || []).map(pool => ({ ...pool, entries: [] })) };
+    if (request.query?.paged !== '1') return { ...snapshot, dynamic };
+    const { items, ...page } = pageRows(snapshot.local?.proxies || snapshot.proxies || [], request.query);
+    return { ...snapshot, ...page, proxies: items, local: { ...snapshot.local, proxies: items }, dynamic };
+  });
+  app.get('/api/v1/proxies/pools/:country/entries', async (request) => {
+    const snapshot = await proxyService.list();
+    const pool = snapshot.dynamic?.countryPools?.find(pool => pool.countryCode === request.params.country);
+    return pageRows((pool?.entries || []).filter(entry => entry.sourceId === 'manual'), request.query);
+  });
   app.post('/api/v1/proxies/preview', async (request) => proxyService.preview(request.body || {}));
   app.post('/api/v1/proxies/import', async (request) => proxyService.import(request.body || {}));
   app.post('/api/v1/proxies/api/build-pull', async (request) => proxyService.buildAndPullApi(request.body || {}));
@@ -1165,9 +1244,13 @@ function buildApp(options = {}) {
 
   app.get('/api/v1/rebind/providers', async () => rebindService.providers());
   app.post('/api/v1/rebind/preflight', async (request) => rebindService.preflight(request.body || {}));
-  app.get('/api/v1/rebind/status', async (_request, reply) => {
+  app.get('/api/v1/rebind/status', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    return rebindService.status();
+    const snapshot = rebindService.status();
+    if (request.query?.paged !== '1') return snapshot;
+    const results = rebindService.state?.results || snapshot.results || [];
+    const { items, ...page } = pageRows([...results].reverse(), request.query);
+    return { ...snapshot, results: items, resultsPage: page };
   });
   app.post('/api/v1/rebind/start', async (request, reply) => {
     const result = await rebindService.start(request.body || {});
@@ -1175,7 +1258,13 @@ function buildApp(options = {}) {
     return result;
   });
   app.post('/api/v1/rebind/stop', async () => rebindService.stop());
-  app.get('/api/v1/rebind/queue', async () => rebindService.getQueue());
+  app.get('/api/v1/rebind/queue/ids', async () => ({ ids: rebindService.getQueue().accounts.map(asset => asset.id) }));
+  app.get('/api/v1/rebind/queue', async (request) => {
+    const snapshot = rebindService.getQueue();
+    if (request.query?.paged !== '1') return snapshot;
+    const { items, ...page } = pageRows(snapshot.accounts, request.query);
+    return { accounts: items, ...page };
+  });
   app.post('/api/v1/rebind/queue/add', async (request) => rebindService.addToQueue(request.body?.assetIds));
   app.post('/api/v1/rebind/queue/remove', async (request) => rebindService.removeFromQueue(request.body?.assetIds));
   app.post('/api/v1/rebind/queue/clear', async () => rebindService.clearQueue());

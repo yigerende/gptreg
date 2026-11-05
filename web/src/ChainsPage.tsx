@@ -1,3 +1,4 @@
+import { Pagination } from './components/Pagination';
 /**
  * 提链控制台 — the shell that replaced the in-process extraction workbench.
  *
@@ -572,7 +573,9 @@ export function ChainsPage() {
   const status = useQuery({ queryKey: ['linkops-status'], queryFn: endpoints.linkopsStatus, refetchInterval: 10000, retry: false });
   const online = status.data?.online === true;
 
-  const snapshot = useQuery({ queryKey: ['chains'], queryFn: endpoints.chains, refetchInterval: 5000 });
+  const [recordOffset, setRecordOffset] = useState(0);
+  useEffect(() => { setRecordOffset(0); setSelected(new Set()); }, [tab]);
+  const snapshot = useQuery({ queryKey: ['chains', tab, recordOffset], queryFn: () => endpoints.chainsPage(recordOffset, tab), refetchInterval: 5000 });
   const records: ChainRecord[] = useMemo(() => snapshot.data?.records || [], [snapshot.data]);
   /**
    * Which account each engine job belongs to.
@@ -676,9 +679,11 @@ export function ChainsPage() {
       || left.key.localeCompare(right.key));
   }, [tab, extractionRows, paymentRows, rules, snapshot.data?.proxyRegions, snapshot.data?.billingCountries]);
 
+  const [jobOffset, setJobOffset] = useState(0);
+  useEffect(() => { setJobOffset(0); }, [tab, jobFilter, jobProvider]);
   const jobs = useQuery({
-    queryKey: ['linkops-jobs', tab],
-    queryFn: () => endpoints.linkopsJobs({ domain: tab, limit: 100 }),
+    queryKey: ['linkops-jobs', tab, jobFilter, jobProvider, jobOffset],
+    queryFn: () => endpoints.linkopsJobsPage(jobOffset, tab, jobFilter, jobProvider),
     enabled: online,
     retry: false,
     refetchInterval: (query) => ((query.state.data?.jobs || []).some((job) => LIVE_JOB_STATUSES.has(job.status)) ? 2000 : 8000),
@@ -689,7 +694,7 @@ export function ChainsPage() {
    * hundred have accumulated: the two things an operator looks for are what is
    * still moving and what went wrong, and both are buried by the completed.
    */
-  const jobCounts = useMemo(() => {
+  const pageJobCounts = useMemo(() => {
     const counts: Record<JobFilter, number> = { all: allJobs.length, live: 0, done: 0, bad: 0 };
     for (const job of allJobs) {
       if (LIVE_JOB_STATUSES.has(job.status)) counts.live += 1;
@@ -705,7 +710,8 @@ export function ChainsPage() {
     if (jobFilter === 'bad') return !LIVE_JOB_STATUSES.has(job.status) && job.status !== 'completed';
     return true;
   }), [allJobs, jobFilter, jobProvider]);
-  const jobProviders = useMemo(() => [...new Set(allJobs.map((job) => job.provider))].sort(), [allJobs]);
+  const jobCounts = jobs.data?.counts || pageJobCounts;
+  const jobProviders = useMemo(() => jobs.data?.providers || [...new Set(allJobs.map((job) => job.provider))].sort(), [allJobs, jobs.data?.providers]);
   /** The engine refuses to delete a running job, so only finished ones count. */
   const clearableJobIds = useMemo(
     () => jobRows.filter((job) => !LIVE_JOB_STATUSES.has(job.status)).map((job) => job.id),
@@ -1262,26 +1268,28 @@ export function ChainsPage() {
             />}
           </div>
         </div>
+      <Pagination label="提链账号分页" total={snapshot.data?.total ?? rows.length} offset={recordOffset} busy={snapshot.isFetching} onChange={setRecordOffset} />
       </section>
 
       <section className="workspace-band chain-jobs-band">
+        {jobs.error && <Notice tone="danger">{errorMessage(jobs.error)} <Button onClick={() => jobs.refetch()}>重试</Button></Notice>}
         <div className="section-heading">
           <div>
             <h2>{tab === 'extraction' ? '提链作业' : '支付作业'}</h2>
-            <p>{online ? `${jobRows.length}/${allJobs.length} 个作业` : '服务未运行'}</p>
+            <p>{online ? `共 ${jobs.data?.total ?? allJobs.length} 个作业 · 外部引擎最近 ${jobs.data?.recentLimit || 200} 条内分页` : '服务未运行'}</p>
           </div>
           {online && allJobs.length > 0 && <div className="section-actions">
             <ConfirmDialog
-              trigger={<Button icon={clearJobs.isPending ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />} disabled={!clearableJobIds.length || clearJobs.isPending}>{`清除已结束${clearableJobIds.length ? ` (${clearableJobIds.length})` : ''}`}</Button>}
-              title="清除已结束的作业"
-              description={`将从引擎删除当前筛选下已结束的 ${clearableJobIds.length} 个作业记录。进行中的作业不受影响，提链台账也不受影响。`}
+              trigger={<Button icon={clearJobs.isPending ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />} disabled={!clearableJobIds.length || clearJobs.isPending}>{`清除本页已结束${clearableJobIds.length ? ` (${clearableJobIds.length})` : ''}`}</Button>}
+              title="清除本页已结束的作业"
+              description={`将从引擎删除当前页筛选下已结束的 ${clearableJobIds.length} 个作业记录。进行中的作业不受影响，提链台账也不受影响。`}
               danger
               confirmLabel="确认清除"
               onConfirm={() => clearJobs.mutate(clearableJobIds)}
             />
           </div>}
         </div>
-        {online && allJobs.length > 0 && <div className="chain-job-filters">
+        {online && <div className="chain-job-filters">
           <div className="chain-job-tabs" role="group" aria-label="作业状态筛选">
             {JOB_FILTERS.map(({ id, label }) => <button
               key={id}
@@ -1336,6 +1344,7 @@ export function ChainsPage() {
                 ? <EmptyState icon={<Link2 size={24} />} title="没有符合筛选的作业" detail="换一个状态或 provider 再看。" />
                 : <EmptyState icon={<Link2 size={24} />} title="暂无作业" detail={tab === 'extraction' ? '派发提链后，作业会显示在这里。' : '发起支付后，作业会显示在这里。'} />}
         </div>
+        {online && <Pagination label="外部作业分页" total={jobs.data?.total ?? allJobs.length} offset={jobOffset} busy={jobs.isFetching} onChange={setJobOffset} />}
       </section>
     </div>
   </div>;

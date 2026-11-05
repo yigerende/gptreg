@@ -1,3 +1,4 @@
+import { Pagination } from './components/Pagination';
 import type { ProxyAssignment } from './types';
 import { OAuthProxyDialog } from './OAuthProxyDialog';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
@@ -50,7 +51,7 @@ type StoredFilters = {
   facets: string[];
 };
 
-const PAGE_SIZE = 200;
+const PAGE_SIZE = 50;
 // Keep the endpoint's own four-worker concurrency, while splitting large
 // selections so the shared top bar can advance after each completed batch.
 const SESSION_CHECK_BATCH_SIZE = 4;
@@ -60,7 +61,7 @@ const SESSION_CHECK_BATCH_SIZE = 4;
 const SEARCH_DEBOUNCE_MS = 280;
 // Past this many loaded rows the background poll costs more than it is worth —
 // it refetches everything already on screen. See `pollInterval`.
-const POLL_ROW_BUDGET = 400;
+
 const FILTERS_KEY = 'gpt-re.session-assets.filters.v1';
 
 const DEFAULT_FILTERS: StoredFilters = {
@@ -647,7 +648,8 @@ export function SessionAssetsPage() {
   // What the input shows, versus what the query uses. They differ only while
   // the operator is mid-word.
   const [searchDraft, setSearchDraft] = useState(() => filters.search);
-  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [offset, setOffset] = useState(0);
+  const limit = PAGE_SIZE;
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [focusedId, setFocusedId] = useState('');
   const [refreshConcurrency, setRefreshConcurrency] = useState(MAX_WORKER_CONCURRENCY);
@@ -663,8 +665,8 @@ export function SessionAssetsPage() {
     return () => window.clearTimeout(timer);
   }, [searchDraft, filters.search]);
   // A narrower filter almost always means a shorter list, so paging back to the
-  // first page keeps "载入更多" honest instead of leaving a stale deep offset.
-  useEffect(() => { setLimit(PAGE_SIZE); }, [search, sourceRun, lifecycle, queue, facets]);
+  // first page avoids leaving a stale deep offset.
+  useEffect(() => { setOffset(0); }, [search, sourceRun, lifecycle, queue, facets]);
 
   const query = useMemo(() => ({
     lifecycle,
@@ -678,15 +680,11 @@ export function SessionAssetsPage() {
   // rows, so a group's label and its list are the same computation and cannot
   // disagree. Previous data is held during a refetch so changing a filter does
   // not blank the list.
-  // The poll refetches whatever is loaded, so its cost grows with every press
-  // of "载入更多": at 1000 rows one refresh is ~2 MB and several seconds of
-  // server time, every five seconds. A deep page is a deliberate browse rather
-  // than a dashboard, so the poll backs off and then stops, and the operator
-  // refreshes explicitly. The first page keeps its live cadence.
-  const pollInterval = limit <= PAGE_SIZE ? 5000 : (limit <= POLL_ROW_BUDGET ? 20000 : false as const);
+  // Only the first page polls. Browsing history never reloads a growing prefix.
+  const pollInterval = offset === 0 ? 5000 : false;
   const page = useQuery({
-    queryKey: ['session-assets', query, limit],
-    queryFn: () => endpoints.sessionAssets({ ...query, limit }),
+    queryKey: ['session-assets', query, offset, limit],
+    queryFn: () => endpoints.sessionAssets({ ...query, limit, cursor: String(offset) }),
     refetchInterval: pollInterval,
     placeholderData: keepPreviousData,
   });
@@ -698,7 +696,6 @@ export function SessionAssetsPage() {
   const counts = page.data?.counts;
   const total = page.data?.total || 0;
   const sourceRuns = useMemo(() => page.data?.sourceRuns || [], [page.data?.sourceRuns]);
-  const moreCursor = page.data?.cursor || '';
 
   // Selection survives a filter change, so the batch bar has to say something
   // about accounts that are no longer on screen — and the id lists returned by
@@ -1092,12 +1089,7 @@ export function SessionAssetsPage() {
           </div>;
            })}</div> : <EmptyState icon={<KeyRound size={25} />} title={page.isLoading ? '读取登录态' : '没有匹配的登录态'} detail={page.isLoading ? '正在按当前筛选取回。' : '放宽库存、待办或属性筛选，或清除搜索。'} />}
         </div>
-        {(moreCursor || pollInterval === false) && <div className="session-list-more">
-          {moreCursor && <Button tone="quiet" onClick={() => setLimit((current) => current + PAGE_SIZE)} disabled={page.isFetching}>{page.isFetching ? '载入中' : `载入更多（已显示 ${rows.length} / ${total}）`}</Button>}
-          {/* Saying so, because a page that silently stopped updating is worse
-              than one that never claimed to. */}
-          {pollInterval === false && <button type="button" className="session-list-refresh" onClick={() => page.refetch()} disabled={page.isFetching}>{page.isFetching ? '刷新中' : `已暂停自动刷新（${rows.length} 行）· 手动刷新`}</button>}
-        </div>}
+        <Pagination label="登录态分页" total={total} offset={offset} limit={limit} busy={page.isFetching} onChange={setOffset} />
       </section>
       <aside className="session-inspector">
         {detail.isLoading ? <div className="loading-line"><LoaderCircle className="spin" />读取登录态详情</div> : detail.data ? <SessionAssetInspector asset={detail.data} latestRunId={latestAssetRunId} onCopy={copy} onTotp={() => revealTotp.mutate(detail.data!.id)} onProbe={() => probe.mutate([detail.data!.id])} onTrialCheck={() => trialCheck.mutate([detail.data!.id])} onOAuth={() => setOAuthDialogIds([detail.data!.id])} onClearOAuthCooldown={() => clearOAuthCooldown.mutate(detail.data!.id)} clearingOAuthCooldown={clearOAuthCooldown.isPending && clearOAuthCooldown.variables === detail.data.id} probing={probingIds.has(detail.data.id)} trialChecking={trialCheckingIds.has(detail.data.id)} checkBusy={sessionCheckBusy} oauthing={oauthingIds.has(detail.data.id)} /> : <EmptyState icon={<UserRoundCheck size={25} />} title="选择一个登录态" detail="右侧会显示完整会话与可执行操作。" />}

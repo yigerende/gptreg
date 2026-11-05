@@ -21,7 +21,7 @@ function conforms(schema, body) {
   const validate = ajv.compile({ ...schema, components: openapi.components });
   assert.ok(validate(body), JSON.stringify(validate.errors));
 }
-test("OpenAPI examples conform to schemas and cover only the ten public operations", () => {
+test("OpenAPI examples conform to schemas and cover only the nine public operations", () => {
   let count = 0;
   for (const [path, methods] of Object.entries(openapi.paths)) {
     assert.ok(path.startsWith("/open/v1/"));
@@ -42,7 +42,7 @@ test("OpenAPI examples conform to schemas and cover only the ten public operatio
       }
     }
   }
-  assert.equal(count, 10);
+  assert.equal(count, 9);
 });
 const connection =
   process.env.GPTREG_TEST_DATABASE_URL ||
@@ -211,14 +211,25 @@ test(
       credentials.oauth.id_token = jwt({ email: credentials.email });
       // Simulate a completed delivery in the isolated schema; never contact providers.
       await orders.finish(detail.items[0].id, credentials);
-      const cancelled = await request(
-        "POST",
-        "/open/v1/registration-orders/{id}/cancel",
-        `/open/v1/registration-orders/${created.id}/cancel`,
-      );
-      assert.equal(cancelled.items.length, 2);
-      assert.equal(cancelled.delivered, 1);
-      assert.equal(cancelled.released, 100);
+      const beforeCancel = await orders.detail(user.id, created.id);
+      const balanceBefore = await db.one("SELECT points,frozen FROM platform_users WHERE id=$1", [user.id]);
+      for (const prefix of ["/api/user/v1", "/open/v1"]) {
+        for (const orderId of [created.id, "unknown-order"]) {
+          const denied = await app.inject({ method: "POST", url: `${prefix}/registration-orders/${orderId}/cancel`,
+            headers: prefix === "/open/v1" ? { authorization } : { cookie, "x-requested-with": "gptreg" } });
+          assert.equal(denied.statusCode, 403, denied.body);
+        }
+      }
+      assert.deepEqual(await orders.detail(user.id, created.id), beforeCancel);
+      assert.deepEqual(await db.one("SELECT points,frozen FROM platform_users WHERE id=$1", [user.id]), balanceBefore);
+      const deniedAdmin = await app.inject({ method: "POST", url: `/api/admin/v1/orders/${created.id}/cancel`, headers: { cookie, "x-requested-with": "gptreg" } });
+      assert.equal(deniedAdmin.statusCode, 403);
+      // Only the authenticated administrator endpoint retains cancellation.
+      await db.query("UPDATE platform_users SET role='admin' WHERE id=$1", [user.id]);
+      const adminCancel = await app.inject({ method: "POST", url: `/api/admin/v1/orders/${created.id}/cancel`, headers: { cookie, "x-requested-with": "gptreg" } });
+      assert.equal(adminCancel.statusCode, 200, adminCancel.body);
+      assert.equal(adminCancel.json().released, 100);
+      await db.query("UPDATE platform_users SET role='member' WHERE id=$1", [user.id]);
       const accounts = await request(
         "GET",
         "/open/v1/accounts",
@@ -310,7 +321,7 @@ test(
         headers: { cookie },
       });
       assert.equal(unauthorized.statusCode, 401);
-      assert.equal(seen.size, 10);
+      assert.equal(seen.size, 9);
     } finally {
       await app.close();
       await db.close();

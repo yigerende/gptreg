@@ -38,6 +38,7 @@ function mount(accounts = [account('one')], handler?: Handler) {
       '/api/v1/rebind/providers': { activeProvider: 'icloud', providers: [{ id: 'fastmail', label: 'Fastmail', configured: true }] },
       '/api/v1/proxies': { dynamic: { countryPools: [] } },
       '/api/v1/rebind/queue': { accounts },
+      '/api/v1/rebind/queue/ids': { ids: accounts.map(account => account.id) },
       '/api/v1/rebind/status': idle,
     };
     const payload = custom ?? payloads[url.pathname];
@@ -172,7 +173,7 @@ it('refreshes the queue on completion and keeps detailed failures in the results
   });
   await screen.findByRole('checkbox', { name: 'one@icloud.com' });
   completed = true;
-  act(() => client.setQueryData(['rebind-status'], {
+  act(() => client.setQueryData(['rebind-status', 0], {
     ...idle, total: 2, done: 2, ok: 1, fail: 1, provider: 'fastmail', startedAt: timestamp,
     results: [{ assetId: 'failed', previousEmail: 'failed@icloud.com', newEmail: 'new@example.test', provider: 'fastmail', status: 'error', stage: 'otp', code: 'NO_OTP', error: '验证码超时，请检查邮箱接口', at: timestamp }],
   }));
@@ -186,7 +187,7 @@ it('refreshes the queue on completion and keeps detailed failures in the results
 it('distinguishes a confirmed rebind that only needs a health refresh', async () => {
   mount([account('one')]);
   await screen.findByRole('checkbox', { name: 'one@icloud.com' });
-  act(() => client.setQueryData(['rebind-status'], {
+  act(() => client.setQueryData(['rebind-status', 0], {
     ...idle, total: 1, done: 1, fail: 1, provider: 'fastmail', startedAt: timestamp,
     results: [{ assetId: 'one', previousEmail: 'one@icloud.com', newEmail: 'new@example.test', provider: 'fastmail', status: 'needs_refresh', changeConfirmed: true, stage: 'verify_health', error: 'access token was rejected (HTTP 401)', at: timestamp }],
   }));

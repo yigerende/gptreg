@@ -1,3 +1,4 @@
+import { Pagination, type PageInfo } from './components/Pagination';
 import { OAuthProxyDialog } from './OAuthProxyDialog';
 import { SmsSettingsDialog } from './SmsSettingsDialog';
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -3192,9 +3193,11 @@ function RunPage() {
   const resumeFeedback = useRef<'requested' | 'running' | ''>('');
   const runs = useRunsQuery();
   const runId = resolveRunId(params.runId, runs.data);
+  const [jobOffset, setJobOffset] = useState(0);
+  useEffect(() => { setJobOffset(0); }, [runId]);
   const run = useQuery({
-    queryKey: ['run', runId],
-    queryFn: () => endpoints.run(runId, true),
+    queryKey: ['run', runId, jobOffset],
+    queryFn: () => endpoints.runPage(runId, jobOffset),
     enabled: Boolean(runId),
     refetchInterval: 1500,
     // Keeps the run on screen while the next one loads, instead of dropping the
@@ -3215,7 +3218,7 @@ function RunPage() {
       }
     },
     onSuccess: (next, { kind }) => {
-      client.invalidateQueries({ queryKey: ['run', runId] });
+      client.invalidateQueries({ queryKey: ['run', runId, jobOffset] });
       client.invalidateQueries({ queryKey: ['runs'] });
       if (kind === 'resume') {
         resumeFeedback.current = next.active ? 'running' : 'requested';
@@ -3235,8 +3238,8 @@ function RunPage() {
     mutationFn: (jobId: string) => endpoints.retryJob(runId, jobId, { resolveSmsAcquisition: 'retry' }),
     onMutate: () => setNotice({ tone: 'info', text: '正在提交该账号的核对结果' }),
     onSuccess: (next, jobId) => {
-      client.setQueryData(['run', runId], next);
-      client.invalidateQueries({ queryKey: ['run', runId] });
+      client.setQueryData(['run', runId, jobOffset], next);
+      client.invalidateQueries({ queryKey: ['run', runId, jobOffset] });
       client.invalidateQueries({ queryKey: ['runs'] });
       const job = next.jobs?.find((candidate) => candidate.id === jobId);
       setNotice({
@@ -3252,8 +3255,8 @@ function RunPage() {
     mutationFn: (jobIds: string[]) => endpoints.retryJobs(runId, jobIds, { resolveSmsAcquisition: 'retry' }),
     onMutate: (jobIds) => setNotice({ tone: 'info', text: `正在提交 ${jobIds.length} 个账号的核对结果` }),
     onSuccess: (next, jobIds) => {
-      client.setQueryData(['run', runId], next);
-      client.invalidateQueries({ queryKey: ['run', runId] });
+      client.setQueryData(['run', runId, jobOffset], next);
+      client.invalidateQueries({ queryKey: ['run', runId, jobOffset] });
       client.invalidateQueries({ queryKey: ['runs'] });
       setNotice({ tone: 'success', text: `已确认 ${jobIds.length} 个账号，已一起加入继续执行队列` });
     },
@@ -3263,12 +3266,12 @@ function RunPage() {
     mutationFn: (body: MailRentalConfigureBody) => endpoints.configureMailRental(runId, body),
     onMutate: async (body) => {
       if (body.action !== 'stop') return undefined;
-      await client.cancelQueries({ queryKey: ['run', runId] });
-      const previous = client.getQueryData<RunSummary>(['run', runId]);
+      await client.cancelQueries({ queryKey: ['run', runId, jobOffset] });
+      const previous = client.getQueryData<RunSummary>(['run', runId, jobOffset]);
       const current = previous?.mailRentalWatch;
       if (!previous || !current) return { previous };
       const at = new Date().toISOString();
-      client.setQueryData<RunSummary>(['run', runId], {
+      client.setQueryData<RunSummary>(['run', runId, jobOffset], {
         ...previous,
         updatedAt: at,
         normalWait: {
@@ -3288,8 +3291,8 @@ function RunPage() {
       return { previous };
     },
     onSuccess: (next, body) => {
-      client.setQueryData(['run', runId], next);
-      client.invalidateQueries({ queryKey: ['run', runId] });
+      client.setQueryData(['run', runId, jobOffset], next);
+      client.invalidateQueries({ queryKey: ['run', runId, jobOffset] });
       client.invalidateQueries({ queryKey: ['runs'] });
       setMailRentalDialogOpen(false);
       const verb = next.mailRental?.mode === 'watch' ? '领取' : '租用';
@@ -3301,7 +3304,7 @@ function RunPage() {
       }
     },
     onError: (error, _body, context) => {
-      if (context?.previous) client.setQueryData(['run', runId], context.previous);
+      if (context?.previous) client.setQueryData(['run', runId, jobOffset], context.previous);
       setNotice({ tone: 'danger', text: errorMessage(error) });
     },
   });
@@ -3309,8 +3312,8 @@ function RunPage() {
     mutationFn: (jobId: string) => endpoints.skipJob(runId, jobId),
     onMutate: () => setNotice({ tone: 'info', text: '正在清理短信资源并跳过账号任务' }),
     onSuccess: (next, jobId) => {
-      client.setQueryData(['run', runId], next);
-      client.invalidateQueries({ queryKey: ['run', runId] });
+      client.setQueryData(['run', runId, jobOffset], next);
+      client.invalidateQueries({ queryKey: ['run', runId, jobOffset] });
       const job = next.jobs?.find((candidate) => candidate.id === jobId);
       setNotice({
         tone: job?.status === 'skipped' ? 'success' : 'warning',
@@ -3324,7 +3327,7 @@ function RunPage() {
   const balanceRetry = useMutation({
     mutationFn: () => endpoints.reconcileBalance(runId),
     onSuccess: (next) => {
-      client.setQueryData(['run', runId], next);
+      client.setQueryData(['run', runId, jobOffset], next);
       client.invalidateQueries({ queryKey: ['runs'] });
       setNotice({ tone: 'success', text: '余额已重新读取并完成核对' });
     },
@@ -3340,6 +3343,7 @@ function RunPage() {
   // required a main *and* an auxiliary task, so two auxiliary tasks running
   // together offered no way to switch between them.
   const showTaskSwitcher = activeTaskOptions.length > 1;
+  const [taskSwitcherOpen, setTaskSwitcherOpen] = useState(false);
   useEffect(() => {
     setOverviewOpen(false);
     setOperationsOpen(null);
@@ -3398,10 +3402,10 @@ function RunPage() {
   return <div className="run-page">
     {showTaskSwitcher && <nav className="run-task-switcher" aria-label="并行任务切换">
       <div className="run-task-switcher-heading">
-        <strong>并行任务<em>{activeTaskOptions.length}</em></strong>
+        <strong>并行任务<em>{activeTaskOptions.length}</em></strong><Button aria-expanded={taskSwitcherOpen} aria-controls="parallel-task-options" onClick={() => setTaskSwitcherOpen(open => !open)}>{taskSwitcherOpen ? '收起任务' : '展开任务'}</Button>
         <span>主任务与附属任务占用各自的任务位，可同时运行</span>
       </div>
-      <div className="run-task-switcher-options">
+      <div id="parallel-task-options" className="run-task-switcher-options" hidden={!taskSwitcherOpen}>
         {activeTaskOptions.map((candidate) => {
           const selected = candidate.runId === runId;
           const description = runTaskDescription(candidate);
@@ -3515,10 +3519,10 @@ function RunPage() {
                 onConfirm={() => retryJobs.mutate(smsReconciliationJobs.map((job) => job.id))}
               />}
             </div>
-            <div className="data-table jobs-table">
+            <div className="data-table jobs-table" inert={run.isPlaceholderData}>
               <div className="table-head"><span>#</span><span>邮箱</span><span>阶段</span><span>状态</span><span>短信</span><span>金额</span><span>结果</span><span /></div>
-              {(data.jobs || []).map((job, index) => <div className="table-row" key={job.id}>
-                <span className="job-sequence">{index + 1}</span>
+              {(data.jobsPage?.items || data.jobs || []).map((job, index) => <div className="table-row" key={job.id}>
+                <span className="job-sequence">{(data.jobsPage?.offset || 0) + index + 1}</span>
                 <div><strong>{job.email}</strong><small>{job.sessionAssetId || job.id}</small></div>
                 {/* Labelled, with the identifier kept in the tooltip: this column
                     is how an operator finds the stuck job, and it used to read
@@ -3540,6 +3544,7 @@ function RunPage() {
                 </div>
               </div>)}
             </div>
+            <Pagination label="账号任务分页" total={data.jobsPage?.total ?? data.jobs?.length ?? 0} offset={jobOffset} busy={run.isFetching} onChange={setJobOffset} />
           </section>
         </div>
         <aside className="run-observer-column">
@@ -3627,9 +3632,20 @@ function proxyRefreshNotice(run: RobotRun | null) {
   };
 }
 
+function ManualProxyEntries({ country, onRemove }: { country: string; onRemove: (entryId: string) => void }) {
+  const [offset, setOffset] = useState(0);
+  const entries = useQuery({ queryKey: ['proxies', 'entries', country, offset], queryFn: () => endpoints.proxyEntries(country, offset) });
+  return <div className="manual-proxy-list">
+    {entries.error && <Notice tone="danger">{errorMessage(entries.error)}</Notice>}
+    {(entries.data?.items || []).map(entry => <div key={entry.id}><code>{entry.url}</code><IconButton label="删除手工代理" onClick={() => onRemove(entry.id)}><Trash2 size={14} /></IconButton></div>)}
+    <Pagination label={`${country} 手工代理分页`} total={entries.data?.total || 0} offset={offset} busy={entries.isFetching} onChange={setOffset} />
+  </div>;
+}
+
 function ProxyPage() {
   const client = useQueryClient();
-  const proxies = useQuery({ queryKey: ['proxies'], queryFn: endpoints.proxies });
+  const [proxyOffset, setProxyOffset] = useState(0);
+  const proxies = useQuery({ queryKey: ['proxies', 'page', proxyOffset], queryFn: () => endpoints.proxiesPage(proxyOffset) });
   const [localContent, setLocalContent] = useState('');
   const [dynamicContent, setDynamicContent] = useState('');
   const [localProtocol, setLocalProtocol] = useState('http');
@@ -3676,7 +3692,7 @@ function ProxyPage() {
         setLocalContent('');
         setLocalPreview(null);
       }
-      client.setQueryData(['proxies'], result.snapshot);
+      void client.invalidateQueries({ queryKey: ['proxies'] });
       setNotice({ tone: 'success', text: result.pulled ? `已构建并拉取 ${result.pulled} 个代理 API 来源` : '代理资源已导入' });
       refresh();
     },
@@ -3685,8 +3701,8 @@ function ProxyPage() {
   const quickProviderMeta = PROXY_API_PROVIDER_META[quickProvider];
   const quickPull = useMutation({
     mutationFn: () => endpoints.buildAndPullProxyApi({ provider: quickProvider, countryCode: quickCountry, count: quickCount, protocol: quickProtocol }),
-    onSuccess: (snapshot) => {
-      client.setQueryData(['proxies'], snapshot);
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['proxies'] });
       setNotice({ tone: 'success', text: `已拉取 ${quickCountry === 'GLOBAL' ? '全球' : quickCountry} 国家池，目标 ${quickCount} 条` });
       refresh();
     },
@@ -3748,7 +3764,7 @@ function ProxyPage() {
         cards were. Hints move to the tooltip to keep the strip one line. */}
     <PageHeader title="代理资源" description="本地端口独立检测，动态代理按国家合并并由 Worker 使用前检测" actions={
       <div className="proxy-summary-inline">
-        <div title={`${healthy} 健康 · ${failed} 失败`}><Radio size={14} /><strong>{local.length}</strong><span>本地端口</span></div>
+        <div title={`${healthy} 健康 · ${failed} 失败`}><Radio size={14} /><strong>{proxies.data?.total ?? local.length}</strong><span>本地端口</span></div>
         <div title={`${proxies.data?.dynamic?.total ?? 0} 条已拉取`}><Network size={14} /><strong>{pools.length}</strong><span>国家池</span></div>
         <div title="按代理商构建并拉取"><RefreshCw size={14} /><strong>{apiSourceCount}</strong><span>API 来源</span></div>
       </div>
@@ -3765,6 +3781,7 @@ function ProxyPage() {
         </div>
         <div className="proxy-pane-scroll">
           {local.length ? <div className="proxy-endpoint-list">{local.map((proxy: ProxyRecord) => <div className="proxy-endpoint-row" key={proxy.id}><div><code>{proxy.endpoint}</code><span>{proxy.protocol.toUpperCase()} · {proxy.hasCredentials ? '账号认证' : '无认证'}</span></div><StatusBadge status={proxy.check?.status || 'unknown'} /><span>{proxy.check?.latencyMs == null ? '—' : `${proxy.check.latencyMs} ms`}</span><IconButton label="检测此端口" onClick={() => check.mutate([proxy.id])} disabled={check.isPending}><Gauge size={15} /></IconButton></div>)}</div> : <EmptyState icon={<Radio size={25} />} title="没有本地端口" detail="可直接粘贴端口号，每行一条。" />}
+          <Pagination label="本地代理分页" total={proxies.data?.total ?? local.length} offset={proxyOffset} busy={proxies.isFetching} onChange={setProxyOffset} />
         </div>
       </section>
 
@@ -3784,15 +3801,14 @@ function ProxyPage() {
           <div className="composer-actions"><Button onClick={previewDynamic} disabled={!dynamicContent.trim()}>识别并预览</Button><Button tone="primary" icon={importMutation.isPending ? <LoaderCircle className="spin" size={16} /> : dynamicPreview?.items?.some((item: any) => item.kind === 'api') ? <RefreshCw size={16} /> : <Upload size={16} />} onClick={() => importMutation.mutate({ scope: 'dynamic', content: dynamicContent, mode: dynamicMode, defaultProtocol: dynamicProtocol, overrides: dynamicOverrides, autoPull: dynamicPreview?.items?.some((item: any) => item.kind === 'api') })} disabled={!dynamicPreview || dynamicPreview.invalid > 0 || importMutation.isPending}>{dynamicPreview?.items?.some((item: any) => item.kind === 'api') ? '导入并拉取' : '合并到国家池'}</Button></div>
         </div>
         <div className="proxy-pane-scroll country-pool-scroll">
-          {pools.length ? pools.map((pool) => <div className="country-pool" key={pool.countryCode}><div className="country-pool-heading"><div><span className="country-code">{pool.countryCode === 'GLOBAL' ? '全球' : pool.countryCode}</span><div><strong>{pool.total} 条代理</strong><small>{pool.manualCount} 手工 · {pool.sources.length} API</small></div></div><ConfirmDialog trigger={<IconButton label="删除此国家池"><Trash2 size={15} /></IconButton>} title={`删除 ${pool.countryCode} 代理池`} description="该国家池的手工代理、API 来源和缓存都会删除。" danger confirmLabel="删除" onConfirm={() => removeDynamic.mutate({ countryCode: pool.countryCode })} /></div>{pool.sources.map((source) => { const provider = PROXY_API_PROVIDER_META[source.provider]; return <div className="proxy-source" key={source.id}><div className="source-meta"><div><strong>{provider?.label || source.provider} · {source.protocol.toUpperCase()}</strong><span>{source.count} 条 · 固定 {source.sessionMinutes} 分钟 · 不提前换 IP</span></div><StatusBadge status={source.lastError ? 'failed' : source.lastPulledAt ? 'healthy' : 'unknown'} /></div><code>{source.url}</code><div className="source-footer"><span>{source.lastPulledAt ? `${formatTime(source.lastPulledAt)} · ${source.cachedCount} 条` : '尚未拉取'}</span>{source.lastError && <span className="source-error">{source.lastError}</span>}<div><Button icon={pull.isPending && pull.variables === source.id ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} onClick={() => pull.mutate(source.id)} disabled={pull.isPending}>{source.lastPulledAt ? '刷新' : '拉取'}</Button><ConfirmDialog trigger={<IconButton label="删除 API 来源"><Trash2 size={15} /></IconButton>} title="删除 API 来源" description="只删除此 URL 及其上次拉取结果。" danger confirmLabel="删除" onConfirm={() => removeDynamic.mutate({ countryCode: pool.countryCode, sourceId: source.id })} /></div></div></div>; })}{pool.manualCount > 0 && <div className="manual-proxy-list">{pool.entries.filter((entry) => entry.sourceId === 'manual').map((entry) => <div key={entry.id}><code>{entry.url}</code><IconButton label="删除手工代理" onClick={() => removeDynamic.mutate({ countryCode: pool.countryCode, entryId: entry.id })}><Trash2 size={14} /></IconButton></div>)}</div>}</div>) : <EmptyState icon={<Network size={25} />} title="没有国家代理池" detail="未识别国家的代理会自动归入全球池。" />}
+          {pools.length ? pools.map((pool) => <div className="country-pool" key={pool.countryCode}><div className="country-pool-heading"><div><span className="country-code">{pool.countryCode === 'GLOBAL' ? '全球' : pool.countryCode}</span><div><strong>{pool.total} 条代理</strong><small>{pool.manualCount} 手工 · {pool.sources.length} API</small></div></div><ConfirmDialog trigger={<IconButton label="删除此国家池"><Trash2 size={15} /></IconButton>} title={`删除 ${pool.countryCode} 代理池`} description="该国家池的手工代理、API 来源和缓存都会删除。" danger confirmLabel="删除" onConfirm={() => removeDynamic.mutate({ countryCode: pool.countryCode })} /></div>{pool.sources.map((source) => { const provider = PROXY_API_PROVIDER_META[source.provider]; return <div className="proxy-source" key={source.id}><div className="source-meta"><div><strong>{provider?.label || source.provider} · {source.protocol.toUpperCase()}</strong><span>{source.count} 条 · 固定 {source.sessionMinutes} 分钟 · 不提前换 IP</span></div><StatusBadge status={source.lastError ? 'failed' : source.lastPulledAt ? 'healthy' : 'unknown'} /></div><code>{source.url}</code><div className="source-footer"><span>{source.lastPulledAt ? `${formatTime(source.lastPulledAt)} · ${source.cachedCount} 条` : '尚未拉取'}</span>{source.lastError && <span className="source-error">{source.lastError}</span>}<div><Button icon={pull.isPending && pull.variables === source.id ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} onClick={() => pull.mutate(source.id)} disabled={pull.isPending}>{source.lastPulledAt ? '刷新' : '拉取'}</Button><ConfirmDialog trigger={<IconButton label="删除 API 来源"><Trash2 size={15} /></IconButton>} title="删除 API 来源" description="只删除此 URL 及其上次拉取结果。" danger confirmLabel="删除" onConfirm={() => removeDynamic.mutate({ countryCode: pool.countryCode, sourceId: source.id })} /></div></div></div>; })}{pool.manualCount > 0 && <ManualProxyEntries country={pool.countryCode} onRemove={(entryId) => removeDynamic.mutate({ countryCode: pool.countryCode, entryId })} />}</div>) : <EmptyState icon={<Network size={25} />} title="没有国家代理池" detail="未识别国家的代理会自动归入全球池。" />}
         </div>
       </section>
     </div>
   </div>;
 }
 
-// 与后端 log-store 的保留上限一致。日志是打开时全量拉一次、之后走 SSE 增量推送，
-// 所以放大它只是一次性的首屏成本，不是每次轮询都多拉。
+// 日志分批加载历史并接收 SSE 增量；浏览器保留量与后端日志上限一致。
 const MAX_LOG_RECORDS = 10000;
 
 const SECURITY_LOG_LABELS: Record<string, string> = {
@@ -3890,6 +3906,10 @@ function logHaystack(record: LogRecord) {
 }
 
 function useRunLogs(runId: string) {
+  const [cursor, setCursor] = useState('');
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [logError, setLogError] = useState('');
+  const currentRun = useRef(runId); currentRun.current = runId;
   const [records, setRecords] = useState<LogRecord[]>([]);
   useEffect(() => {
     if (!runId) { setRecords([]); return; }
@@ -3903,10 +3923,11 @@ function useRunLogs(runId: string) {
       if (!cancelled && batch.length) setRecords((current) => mergeLogRecords(current, batch));
     };
     setRecords([]);
-    endpoints.logs(runId, true, MAX_LOG_RECORDS).then(({ logs }) => {
-      if (!cancelled) setRecords((current) => mergeLogRecords(current, logs));
-    }).catch(() => {});
-    const source = new EventSource(`/api/v1/runs/${encodeURIComponent(runId)}/events?reveal=1`);
+    setCursor(''); setLogError(''); setLoadingOlder(false);
+    endpoints.logPage(runId).then(({ logs, cursor }) => {
+      if (!cancelled) { setRecords((current) => mergeLogRecords(current, logs)); setCursor(cursor || ''); }
+    }).catch(error => { if (!cancelled) setLogError(errorMessage(error)); });
+    const source = new EventSource(`/api/v1/runs/${encodeURIComponent(runId)}/events?reveal=1&tail=1`);
     source.addEventListener('log', (event) => {
       try {
         pending.push(JSON.parse((event as MessageEvent).data) as LogRecord);
@@ -3919,7 +3940,17 @@ function useRunLogs(runId: string) {
       source.close();
     };
   }, [runId]);
-  return records;
+  const loadOlder = async () => {
+    if (!cursor || loadingOlder) return;
+    setLoadingOlder(true); setLogError('');
+    try {
+      const page = await endpoints.logPage(runId, cursor);
+      if (currentRun.current !== runId) return;
+      setRecords(current => mergeLogRecords(current, page.logs)); setCursor(page.cursor || '');
+    } catch (error) { if (currentRun.current === runId) setLogError(errorMessage(error)); }
+    finally { if (currentRun.current === runId) setLoadingOlder(false); }
+  };
+  return { records, cursor, loadingOlder, loadOlder, logError };
 }
 
 function RunLogPanel({ runId }: { runId: string }) {
@@ -3928,7 +3959,7 @@ function RunLogPanel({ runId }: { runId: string }) {
   const [query, setQuery] = useState('');
   const [clearedThrough, setClearedThrough] = useState(0);
   const [followTail, setFollowTail] = useState(true);
-  const records = useRunLogs(runId);
+  const { records, cursor, loadingOlder, loadOlder, logError } = useRunLogs(runId);
   // The old button only filtered by `seq` on the client, so the file was
   // untouched and a refresh brought every line back. It deletes for real now;
   // the local marker still runs so the view empties without waiting for the
@@ -3975,15 +4006,17 @@ function RunLogPanel({ runId }: { runId: string }) {
   };
   return <section className="workspace-band run-log-band">
     <div className="section-heading">
-      <div><h2>实时运行日志</h2><p>结构化事件与调度阶段</p></div>
+      <div><h2>实时运行日志</h2><p>每次加载 200 条；搜索和下载针对已加载日志</p></div>
       <div className="log-heading-actions">
-        <span className="log-count">{filtered.length} 条</span>
-        <ConfirmDialog trigger={<IconButton label="清空该任务日志" disabled={!visibleRecords.length || clearLogs.isPending}><Eraser size={16} /></IconButton>} title="清空该任务日志" description={`将从磁盘删除这个任务已记录的 ${records.length} 条日志，运行状态和产物不受影响。`} danger confirmLabel="确认清空" onConfirm={() => clearLogs.mutate()} />
+        <span className="log-count">已加载 {filtered.length} 条</span>
+        {cursor && !clearedThrough && <Button disabled={loadingOlder} onClick={() => { setFollowTail(false); void loadOlder(); }}>{loadingOlder ? '加载中…' : '加载更早日志'}</Button>}
+        <ConfirmDialog trigger={<IconButton label="清空该任务日志" disabled={!visibleRecords.length || clearLogs.isPending}><Eraser size={16} /></IconButton>} title="清空该任务日志" description={`将从磁盘删除这个任务的全部日志（包括未加载部分），运行状态和产物不受影响。`} danger confirmLabel="确认清空" onConfirm={() => clearLogs.mutate()} />
         <IconButton label={followTail ? '关闭实时跟随' : '开启实时跟随'} aria-pressed={followTail} className={followTail ? 'icon-button-active' : ''} onClick={() => setFollowTail((current) => { const next = !current; if (next) requestAnimationFrame(() => scrollTo('bottom')); return next; })}><Radio size={16} /></IconButton>
         <IconButton label="回到日志底部" onClick={() => { setFollowTail(true); scrollTo('bottom'); }} disabled={!filtered.length}><ChevronsDown size={16} /></IconButton>
-        <IconButton label="下载 JSONL" onClick={download} disabled={!filtered.length}><Download size={16} /></IconButton>
+        <IconButton label="下载已加载 JSONL" onClick={download} disabled={!filtered.length}><Download size={16} /></IconButton>
       </div>
     </div>
+    {logError && <Notice tone="danger">{logError}</Notice>}
     <div className="log-toolbar run-log-toolbar"><AppSelect ariaLabel="日志级别" value={levelFilter} onValueChange={setLevelFilter} options={[{ value: 'all', label: '全部级别' }, { value: 'info', label: 'Info' }, { value: 'error', label: 'Error' }]} /><AppSelect ariaLabel="日志来源" value={sourceFilter} onValueChange={setSourceFilter} options={[{ value: 'all', label: '全部来源' }, ...sources.map((source) => ({ value: source, label: source }))]} /><input aria-label="搜索日志" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索事件、阶段或 Job" /></div>
     <div className="log-view run-log-view" ref={parentRef} tabIndex={0} aria-label="运行日志列表" onWheel={(event) => { if (event.deltaY < 0) setFollowTail(false); }} onTouchStart={() => setFollowTail(false)} onPointerDown={(event) => { if (event.target === event.currentTarget) setFollowTail(false); }} onKeyDown={(event) => { if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) setFollowTail(false); }} onScroll={(event) => { const element = event.currentTarget; if (!followTail && element.scrollHeight - element.clientHeight - element.scrollTop <= 16) setFollowTail(true); }}>{filtered.length ? <div style={{ height: `${virtual.getTotalSize()}px`, position: 'relative' }}>{virtual.getVirtualItems().map((row) => { const record = filtered[row.index]; return <div className={`log-row run-log-row log-${record.level}`} key={record.seq} style={{ transform: `translateY(${row.start}px)` }}><div className="log-meta"><time>{new Date(record.at).toLocaleTimeString('zh-CN', { hour12: false })}</time><span className="log-source">{record.source}</span><span className="log-type" title={record.type}>{semanticLogType(record)}</span>{record.jobId && <small title={record.jobId}>{record.jobId}</small>}</div><span className="log-message" title={record.message}>{semanticLogMessage(record)}</span></div>; })}</div> : <EmptyState icon={<ScrollText size={24} />} title={clearedThrough ? '日志已清空' : '暂无运行日志'} detail={clearedThrough ? '磁盘上的记录已删除，新事件到达后会继续实时显示。' : '该任务产生事件后会在这里实时显示。'} />}</div>
   </section>;
@@ -4071,7 +4104,7 @@ function artifactSelectionKey(artifact: CpaArtifactSelectionItem) {
   return artifact.key || artifactPairKey(artifact);
 }
 
-type CpaArtifactsPayload = { artifacts: CpaArtifact[] };
+type CpaArtifactsPayload = { artifacts: CpaArtifact[]; typeCounts?: Record<string, number>; lifecycleCounts?: Record<string, number> } & Partial<PageInfo>;
 type CpaArtifactItem = CpaArtifactSelectionItem;
 
 /**
@@ -4623,9 +4656,12 @@ function Sub2ApiErrorRail({ onNotice }: { onNotice: (notice: { tone: string; tex
 
 function HistoryPage() {
   const client = useQueryClient();
-  const runs = useRunsQuery();
+  const liveRuns = useRunsQuery();
+  const [runOffset, setRunOffset] = useState(0);
+  const [artifactOffset, setArtifactOffset] = useState(0);
+  const runs = useQuery({ queryKey: ['runs', 'history', runOffset], queryFn: () => endpoints.runsPage(runOffset), placeholderData: keepPreviousData, refetchInterval: 10000 });
   const runRows = runs.data?.runs || [];
-  const artifactPollInterval = runRows.some((run) => !isTerminalRunStatus(run.status)) ? 10_000 : 30_000;
+  const artifactPollInterval = liveRuns.data?.activeRunIds?.length ? 10_000 : 30_000;
   // Opens on the unexported set: the reason to visit this page is almost always
   // "what is new since I last exported", and `all` buries that under everything
   // ever produced.
@@ -4646,10 +4682,11 @@ function HistoryPage() {
   // so fetching them on every visit only delays the actionable first paint.
   // Shelves that can display or unlock them opt in when selected.
   const includeLocked = lifecycleFilter === 'all' || lifecycleFilter === 'self_use' || lifecycleFilter === 'sold';
-  const artifactQueryKey = ['cpa-artifacts', includeLocked ? 'with-locked' : 'unlocked'] as const;
+  useEffect(() => { setArtifactOffset(0); }, [lifecycleFilter, typeFilter]);
+  const artifactQueryKey = ['cpa-artifacts', includeLocked ? 'with-locked' : 'unlocked', lifecycleFilter, typeFilter, artifactOffset] as const;
   const artifacts = useQuery<CpaArtifactsPayload>({
     queryKey: artifactQueryKey,
-    queryFn: () => endpoints.cpaArtifacts({ includeLocked }),
+    queryFn: () => endpoints.cpaArtifacts({ includeLocked, offset: artifactOffset, lifecycle: lifecycleFilter, type: typeFilter }),
     placeholderData: keepPreviousData,
     staleTime: artifactPollInterval,
     refetchInterval: artifactPollInterval,
@@ -4663,7 +4700,7 @@ function HistoryPage() {
   // One pass produces the sorted rows and the type counts together. They used
   // to be three walks of the same few thousand records — the store only grows,
   // and this runs again on every poll that actually changes something.
-  const { rows: allArtifactRows, typeCounts } = useMemo(() => {
+  const { rows: allArtifactRows, typeCounts: pageTypeCounts } = useMemo(() => {
     const rows = [...(artifacts.data?.artifacts || [])].sort((left, right) => {
       const deliveryOrder = Number(!isUnexportedArtifact(left)) - Number(!isUnexportedArtifact(right));
       return deliveryOrder
@@ -4681,7 +4718,7 @@ function HistoryPage() {
       : allArtifactRows, [allArtifactRows, typeFilter]);
   // The visible shelf and every shelf's badge count come from the same walk:
   // the tabs are a view of this filter, not a second computation over it.
-  const { rows: artifactRows, counts: lifecycleCounts } = useMemo(() => {
+  const { rows: artifactRows, counts: pageLifecycleCounts } = useMemo(() => {
     const counts = { all: typeFilteredRows.length, fresh: 0, planned: 0, self_use: 0, sold: 0 };
     const rows: CpaArtifact[] = [];
     for (const artifact of typeFilteredRows) {
@@ -4693,6 +4730,8 @@ function HistoryPage() {
     }
     return { rows: lifecycleFilter === 'all' ? typeFilteredRows : rows, counts };
   }, [typeFilteredRows, lifecycleFilter]);
+  const typeCounts = artifacts.data?.typeCounts || pageTypeCounts;
+  const lifecycleCounts = artifacts.data?.lifecycleCounts || pageLifecycleCounts;
   // Scoped to the category on screen, not the whole store: standing on 计划卖出
   // and clicking this should hand over that shelf's files, not every account
   // ever produced. The rows are therefore named explicitly instead of sending
@@ -4708,8 +4747,8 @@ function HistoryPage() {
   const lifecycleTabLabel = lifecycleFilter === 'all' ? '全部' : lifecycleFilter === 'fresh' ? '最新' : CPA_LIFECYCLE_LABELS[lifecycleFilter];
   // Rebuilt over every artifact on every render otherwise, four times a minute.
   const runsWithRetainedCpa = useMemo(
-    () => new Set(allArtifactRows.map((artifact) => artifact.runId)),
-    [allArtifactRows],
+    () => new Set([...allArtifactRows.map((artifact) => artifact.runId), ...runRows.filter(run => run.hasRetainedCpa).map(run => run.runId)]),
+    [allArtifactRows, runRows],
   );
   const selectedRunRows = useMemo(
     () => runRows.filter((run) => selectedRuns.has(run.runId)),
@@ -4719,7 +4758,8 @@ function HistoryPage() {
   const selectedRunCpaIds = selectedRunIds.filter((runId) => runsWithRetainedCpa.has(runId));
   const selectedRunsDeletable = selectedRunRows.length > 0 && selectedRunRows.every((run) => ['complete', 'partial', 'cancelled', 'failed'].includes(run.status) && !run.active);
   const allRunsSelected = runRows.length > 0 && runRows.every((run) => selectedRuns.has(run.runId));
-  const latestRunWithCpa = runRows[0] && runsWithRetainedCpa.has(runRows[0].runId) ? runRows[0] : undefined;
+  const latestRun = runs.data?.latestRun ?? (runOffset === 0 ? runRows[0] : undefined);
+  const latestRunWithCpa = latestRun && (latestRun.hasRetainedCpa || runsWithRetainedCpa.has(latestRun.runId)) ? latestRun : undefined;
   const selectedArtifacts = useMemo(
     () => artifactRows.filter((artifact) => artifact.locked !== true && selected.has(artifactSelectionKey(artifact))),
     [artifactRows, selected],
@@ -5580,7 +5620,7 @@ function HistoryPage() {
   };
 
   return <div className="history-page">
-    <PageHeader title="CPA 产物" description="按登录态生命周期管理可售产物；任务历史收在下方抽屉" actions={
+    <PageHeader title="CPA 产物" description="按登录态生命周期分页管理；批次与批量操作针对当前页，任务历史可展开" actions={
       <>
         <Button
           tone="primary"
@@ -5588,19 +5628,21 @@ function HistoryPage() {
           disabled={!unexportedCount || exportSelected.isPending}
           title={unexportedCount ? `导出「${lifecycleTabLabel}」里 ${unexportedCount} 个还没导出过的产物；导出后它们会被标记，下次不再重复` : `「${lifecycleTabLabel}」里的产物都已导出过`}
           onClick={() => exportSelected.mutate({ selection: { items: unexportedRows.map(({ runId, jobId, key }) => ({ runId, jobId, key })) } })}
-        >导出未导出{unexportedCount ? ` (${unexportedCount})` : ''}</Button>
+        >导出本页未导出{unexportedCount ? ` (${unexportedCount})` : ''}</Button>
         <a className={`button button-default${latestRunWithCpa ? '' : ' button-disabled'}`} aria-disabled={!latestRunWithCpa} tabIndex={latestRunWithCpa ? 0 : -1} href={latestRunWithCpa ? `/api/v1/runs/${encodeURIComponent(latestRunWithCpa.runId)}/cpa` : undefined} title={latestRunWithCpa?.runId} onClick={(event) => { if (!latestRunWithCpa) event.preventDefault(); }}><Download size={17} />导出上次任务 CPA</a>
       </>
     } />
     {notice && <Notice tone={notice.tone} floating onClose={() => setNotice(null)} autoDismissToken={notice}>{notice.text}</Notice>}
+    {runs.error && <Notice tone="danger">任务历史加载失败：{errorMessage(runs.error)} <Button onClick={() => runs.refetch()}>重试</Button></Notice>}
+    {artifacts.error && <Notice tone="danger">CPA 列表加载失败：{errorMessage(artifacts.error)} <Button onClick={() => artifacts.refetch()}>重试</Button></Notice>}
     <details className="history-drawer">
       <summary className="history-drawer-summary">
-        <span className="history-drawer-title"><ChevronRight size={15} className="history-drawer-chevron" /><History size={15} />任务历史<em>{runRows.length}</em></span>
+        <span className="history-drawer-title"><ChevronRight size={15} className="history-drawer-chevron" /><History size={15} />任务历史<em>{runs.data?.total ?? runRows.length}</em></span>
         <small>不常看——需要时展开管理与删除</small>
       </summary>
-      <div className="history-drawer-body">
+      <div className="history-drawer-body" inert={runs.isPlaceholderData}>
         <div className="history-drawer-actions">
-          {runRows.length > 0 && <label className="artifact-select-all"><input type="checkbox" checked={allRunsSelected} onChange={toggleAllRuns} />全选任务</label>}
+          {runRows.length > 0 && <label className="artifact-select-all"><input type="checkbox" checked={allRunsSelected} onChange={toggleAllRuns} />全选本页任务</label>}
           <IconButton label={`导出选中任务 CPA${selectedRunCpaIds.length ? ` (${selectedRunCpaIds.length})` : ''}`} onClick={() => exportSelected.mutate({ selection: { runIds: selectedRunCpaIds } })} disabled={!selectedRunCpaIds.length || exportSelected.isPending}><Download size={16} /></IconButton>
           <IconButton label={`按单文件打包导出选中任务 CPA${selectedRunCpaIds.length ? ` (${selectedRunCpaIds.length})` : ''}`} onClick={() => exportCpaArchive.mutate({ runIds: selectedRunCpaIds })} disabled={!selectedRunCpaIds.length || exportCpaArchive.isPending}><FolderDown size={16} /></IconButton>
           <ConfirmDialog trigger={<IconButton label={selectedRunRows.length && !selectedRunsDeletable ? '活动或未结束任务不能删除' : `删除选中任务历史${selectedRunIds.length ? ` (${selectedRunIds.length})` : ''}`} disabled={!selectedRunsDeletable || removeMany.isPending}><Trash2 size={16} /></IconButton>} title="批量删除任务历史" description={`将永久删除选中的 ${selectedRunIds.length} 条状态与日志记录。`} danger confirmLabel="确认删除" onConfirm={() => removeMany.mutate()}><label className="delete-option"><input type="checkbox" checked={batchRemoveArtifacts} onChange={(event) => setBatchRemoveArtifacts(event.target.checked)} />同时删除这些任务的 CPA 产物</label></ConfirmDialog>
@@ -5609,9 +5651,10 @@ function HistoryPage() {
           const deletable = ['complete', 'partial', 'cancelled', 'failed'].includes(run.status) && !run.active;
           return <div className="history-item" key={run.runId}><input aria-label={`选择历史 ${run.runId}`} type="checkbox" checked={selectedRuns.has(run.runId)} onChange={() => toggleRun(run.runId)} /><div className="history-main"><div><StatusBadge status={run.status} label={runStatusLabel(run.status)} /><strong>{taskKindLabel(run.taskKind || run.plan?.taskKind, run.plan)}</strong><span className="history-slot">{runTaskSlotLabel(run)}</span></div><p className="history-desc">{runTaskDescription(run) || '—'}</p><p className="history-meta"><code>{run.runId}</code><span>更新于 {formatTime(run.updatedAt)}</span><span title={phaseLabel(run.phase).raw}>{phaseLabel(run.phase).label}</span></p></div><div className="history-count"><span>登录态<strong>{run.counts?.sessionsSaved ?? run.counts?.accountsCreated ?? 0}</strong></span><span>CPA 产出<strong>{run.counts?.cpaCompleted ?? 0}</strong></span>{Boolean(run.counts?.deactivated) && <span title="运行期间被 OpenAI 关停的账号，不计入失败">封禁<strong>{run.counts?.deactivated}</strong></span>}</div><div className="history-actions"><Link className="button button-quiet" to={`/run/${run.runId}`}>详情</Link>{runsWithRetainedCpa.has(run.runId) && <a className="icon-button" aria-label={`下载 ${run.runId} 的 CPA`} href={`/api/v1/runs/${encodeURIComponent(run.runId)}/cpa`}><Download size={17} /></a>}{deletable && <ConfirmDialog trigger={<IconButton label="删除历史"><Trash2 size={17} /></IconButton>} title="删除运行历史" description="状态和日志删除后无法恢复任务。CPA 默认保留。" danger confirmLabel="确认删除" onConfirm={() => remove.mutate(run.runId)}><label className="delete-option"><input type="checkbox" checked={removeArtifacts} onChange={(event) => setRemoveArtifacts(event.target.checked)} />同时删除 CPA 产物</label></ConfirmDialog>}</div></div>;
         }) : <EmptyState icon={<History size={26} />} title="暂无历史任务" detail="完成、暂停和取消的任务都会保留在这里。" />}</div>
+        <Pagination label="任务历史分页" total={runs.data?.total ?? runRows.length} offset={runOffset} busy={runs.isFetching} onChange={setRunOffset} />
       </div>
     </details>
-    <section className={`workspace-band artifact-panel artifact-panel-primary${artifactRefreshing ? ' artifact-panel-refreshing' : ''}`} aria-busy={artifactInitialLoading || artifactRefreshing}>
+    <section className={`workspace-band artifact-panel artifact-panel-primary${artifactRefreshing ? ' artifact-panel-refreshing' : ''}`} aria-busy={artifactInitialLoading || artifactRefreshing} inert={artifacts.isPlaceholderData}>
       <div className="artifact-filter-tabs" role="tablist" aria-label="CPA 生命周期分类">
         <button type="button" role="tab" aria-selected={lifecycleFilter === 'all'} className={lifecycleFilter === 'all' ? 'selected' : ''} onClick={() => setLifecycleFilter('all')}>全部<span>{lifecycleCounts.all}</span></button>
         <button type="button" role="tab" aria-selected={lifecycleFilter === 'fresh'} className={lifecycleFilter === 'fresh' ? 'selected' : ''} onClick={() => setLifecycleFilter('fresh')} title="还没有导出过的产物，或导出后又重新生成的；已归类为计划卖出、自用、已卖出的不再计入">最新<span>{lifecycleCounts.fresh}</span></button>
@@ -5620,8 +5663,8 @@ function HistoryPage() {
         <button type="button" role="tab" aria-selected={lifecycleFilter === 'sold'} className={lifecycleFilter === 'sold' ? 'selected' : ''} onClick={() => setLifecycleFilter('sold')}>已卖出<span>{lifecycleCounts.sold}</span></button>
         <div className="artifact-type-filter"><AppSelect ariaLabel="类型筛选" value={typeFilter} onValueChange={(value) => setTypeFilter(value as 'all' | 'plus' | 'oauth')} options={[{ value: 'all', label: `全部类型 · ${typeCounts.all}` }, { value: 'plus', label: `Plus · ${typeCounts.plus}` }, { value: 'oauth', label: `普通 OAuth · ${typeCounts.oauth}` }]} /></div>
       </div>
-      <div className="section-heading"><div><div className="artifact-heading-title"><h2>CPA 文件</h2><span className={`artifact-refresh-indicator${artifactRefreshing ? ' is-active' : ''}`} role="status" aria-label={artifactRefreshing ? '正在刷新 CPA 文件' : undefined}>{artifactRefreshing && <LoaderCircle aria-hidden="true" size={15} />}</span></div><p>{artifactRows.length} 个当前保留文件</p></div><div className="history-heading-actions artifact-action-groups">
-        {artifactRows.length > 0 && <label className="artifact-select-all"><input type="checkbox" checked={allSelected} onChange={toggleAll} />全选{selectedArtifacts.length > 0 && !allSelected ? `（${selectedArtifacts.length}）` : ''}</label>}
+      <div className="section-heading"><div><div className="artifact-heading-title"><h2>CPA 文件</h2><span className={`artifact-refresh-indicator${artifactRefreshing ? ' is-active' : ''}`} role="status" aria-label={artifactRefreshing ? '正在刷新 CPA 文件' : undefined}>{artifactRefreshing && <LoaderCircle aria-hidden="true" size={15} />}</span></div><p>共 {artifacts.data?.total ?? artifactRows.length} 个文件 · 本页 {artifactRows.length} 个</p></div><div className="history-heading-actions artifact-action-groups">
+        {artifactRows.length > 0 && <label className="artifact-select-all"><input type="checkbox" checked={allSelected} onChange={toggleAll} />全选本页{selectedArtifacts.length > 0 && !allSelected ? `（${selectedArtifacts.length}）` : ''}</label>}
         <div className="artifact-action-group" role="group" aria-label="归类">
            <Button tone="quiet" icon={<Tag size={15} />} disabled={lifecycleActionDisabled} title={lifecycleActionTitle || (selectedArtifacts.length && !selectedAssetIds.length ? '选中的产物未关联账号，无法归类' : `移回在库${selectedAssetIds.length ? ` (${selectedAssetIds.length})` : ''}`)} onClick={() => classify.mutate('active')}>在库</Button>
            <Button tone="quiet" icon={<Tag size={15} />} disabled={lifecycleActionDisabled} title={lifecycleActionTitle} onClick={() => classify.mutate('planned')}>计划卖出</Button>
@@ -5743,6 +5786,7 @@ function HistoryPage() {
       </div>
       {lifecycleFilter === 'self_use' && <Sub2ApiErrorRail onNotice={setNotice} />}
       </div>
+    <Pagination label="CPA 文件分页" total={artifacts.data?.total ?? artifactRows.length} offset={artifactOffset} busy={artifacts.isFetching} onChange={setArtifactOffset} />
     </section>
   </div>;
 }

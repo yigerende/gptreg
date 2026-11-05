@@ -1,3 +1,4 @@
+import { Pagination } from './components/Pagination';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { KeyRound, LoaderCircle, Mail, Play, Plus, Repeat, Settings2, ShieldCheck, Square, Trash2 } from 'lucide-react';
@@ -48,18 +49,20 @@ export function RebindPage() {
 
   const providers = useQuery({ queryKey: ['rebind-providers'], queryFn: endpoints.rebindProviders });
   const proxies = useQuery({ queryKey: ['proxies'], queryFn: endpoints.proxies });
+  const [resultOffset, setResultOffset] = useState(0);
   const status = useQuery({
-    queryKey: ['rebind-status'], queryFn: endpoints.rebindStatus,
+    queryKey: ['rebind-status', resultOffset], queryFn: () => endpoints.rebindStatusPage(resultOffset),
     refetchInterval: (query) => query.state.data?.running || query.state.data?.starting ? 1500 : 8000,
   });
-  const queue = useQuery({ queryKey: ['rebind-queue'], queryFn: endpoints.rebindQueue });
+  const [offset, setOffset] = useState(0);
+  const queue = useQuery({ queryKey: ['rebind-queue', offset], queryFn: () => endpoints.rebindQueuePage(offset) });
   const accounts = useMemo(() => queue.data?.accounts || [], [queue.data]);
   const ids = useMemo(() => accounts.map((asset) => asset.id), [accounts]);
   const selectedIds = ids.filter((id) => selected.has(id));
   const running = status.data?.running === true;
   const preparing = status.data?.starting === true;
   const stopping = running && status.data?.stopRequested === true;
-  const effectiveConcurrency = Math.max(1, Math.min(concurrency, accounts.length || 1));
+  const effectiveConcurrency = Math.max(1, Math.min(concurrency, (queue.data?.total ?? accounts.length) || 1));
   const proxyAssignments = proxyMode === MAINTENANCE_MODE ? maintenanceProxyAssignments(effectiveConcurrency) : countryPoolAssignments(effectiveConcurrency, proxyMode);
   const rangeSelection = useRangeSelection({ keys: ids, selected, setSelected });
 
@@ -117,7 +120,8 @@ export function RebindPage() {
   }, [addPending]);
 
   const start = useMutation({
-    mutationFn: (assetIds: string[]) => {
+    mutationFn: async (requestedIds: string[] | null) => {
+      const assetIds = requestedIds || (await endpoints.rebindQueueIds()).ids;
       const workerConcurrency = Math.max(1, Math.min(concurrency, assetIds.length));
       const assignments = proxyMode === MAINTENANCE_MODE ? maintenanceProxyAssignments(workerConcurrency) : countryPoolAssignments(workerConcurrency, proxyMode);
       return endpoints.startRebind({ assetIds, provider, workerConcurrency, proxyAssignments: assignments, autoRefresh: loginMode !== 'never', alwaysFreshLogin: loginMode === 'always', proxyRetries, otpRetries });
@@ -137,7 +141,7 @@ export function RebindPage() {
     onError,
   });
   const check = useMutation({
-    mutationFn: () => endpoints.rebindPreflight({ provider, workerConcurrency: effectiveConcurrency, count: accounts.length, proxyAssignments, probe: true }),
+    mutationFn: () => endpoints.rebindPreflight({ provider, workerConcurrency: effectiveConcurrency, count: queue.data?.total ?? accounts.length, proxyAssignments, probe: true }),
     onSuccess: (snapshot) => {
       const probe = snapshot.proxy.probe;
       const failure = probe?.results.find((item) => item.status !== 'healthy');
@@ -173,7 +177,7 @@ export function RebindPage() {
   };
   const startDisabledReason = disabledReasonFor(accounts);
   const runningIds = useMemo(() => new Set(status.data?.assetIds || ids), [status.data?.assetIds, ids]);
-  const latestResults = useMemo(() => [...(status.data?.results || [])].reverse(), [status.data?.results]);
+  const latestResults = useMemo(() => status.data?.resultsPage ? status.data.results : [...(status.data?.results || [])].reverse(), [status.data]);
   const resultByAsset = useMemo(() => new Map((status.data?.results || []).map((result) => [result.assetId, result])), [status.data?.results]);
   const activeByAsset = useMemo(() => new Map((status.data?.active || []).map((item) => [item.assetId, item])), [status.data?.active]);
   const liveActiveResults = useMemo(() => (status.data?.active || [])
@@ -187,7 +191,7 @@ export function RebindPage() {
     <PageHeader title="换绑" description="换绑后使用同一代理刷新登录态，测活通过后完成。" actions={
       running
         ? <Button tone="danger" icon={stopping || stop.isPending ? <LoaderCircle className="spin" size={16} /> : <Square size={16} />} onClick={() => stop.mutate()} disabled={stopping || stop.isPending}>{stopping ? '正在停止…' : '停止任务'}</Button>
-        : <Button tone="primary" icon={locked ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />} onClick={() => start.mutate(ids)} disabled={locked || Boolean(startDisabledReason) || check.isPending} title={startDisabledReason || '处理队列中的全部账号'}>{locked ? '准备中…' : '启动全部'}</Button>
+        : <Button tone="primary" icon={locked ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />} onClick={() => start.mutate(null)} disabled={locked || Boolean(startDisabledReason) || check.isPending} title={startDisabledReason || '处理队列中的全部账号'}>{locked ? '准备中…' : '启动全部'}</Button>
     } />
     {notice && <Notice tone={notice.tone} floating onClose={() => setNotice(null)} autoDismissToken={notice}>{notice.text}</Notice>}
     {dataError && <Notice tone="error">加载失败：{errorMessage(dataError.error)} <Button tone="quiet" onClick={() => { for (const query of [status, queue, providers, proxies]) if (query.isError) void query.refetch(); }}>重试</Button></Notice>}
@@ -222,7 +226,7 @@ export function RebindPage() {
           <Button tone="quiet" icon={<Plus size={15} />} onClick={() => setPickerOpen(true)} disabled={locked || queueBusy || queue.isPending}>加入账号</Button>
         </header>
         <div className="rebind-selbar">
-          <label><input type="checkbox" aria-label="全选待处理账号" checked={ids.length > 0 && selectedIds.length === ids.length} disabled={locked || queueBusy || !ids.length} onChange={() => setSelected(selectedIds.length === ids.length ? new Set() : new Set(ids))} />{selectedIds.length ? `已选 ${selectedIds.length}` : '全选'}</label>
+          <label><input type="checkbox" aria-label="全选待处理账号" checked={ids.length > 0 && selectedIds.length === ids.length} disabled={locked || queueBusy || !ids.length} onChange={() => setSelected(selectedIds.length === ids.length ? new Set() : new Set(ids))} />{selectedIds.length ? `已选 ${selectedIds.length}` : '全选本页'}</label>
           <div className="rebind-selbar-actions">
             <Button tone="quiet" icon={<Trash2 size={14} />} onClick={() => remove.mutate(selectedIds)} disabled={!selectedIds.length || locked || queueBusy}>移除</Button>
             <button type="button" className="rebind-link-btn" onClick={() => remove.mutate(null)} disabled={!ids.length || locked || queueBusy}>清空</button>
@@ -255,10 +259,11 @@ export function RebindPage() {
             </div>;
           }) : <EmptyState icon={<KeyRound size={24} />} title={queue.isError ? '队列读取失败' : '暂无待处理账号'} detail={queue.isError ? '请重试加载队列。' : '点击右上角「加入账号」，浏览选择或粘贴邮箱。'} />}
         </div>
+        <Pagination label="换绑队列分页" total={queue.data?.total ?? accounts.length} offset={offset} busy={queue.isFetching || locked} onChange={setOffset} />
       </section>
 
       <section className="rebind-panel" aria-label="换绑结果">
-        <header className="rebind-panel-head"><div><h2>换绑结果</h2><small>{liveActiveResults.length ? `正在处理 ${liveActiveResults.length} 条${latestResults.length ? ` · 最近 ${latestResults.length} 条` : ''}` : latestResults.length ? `本次任务最近 ${latestResults.length} 条 · 最新在前` : '新邮箱在执行时领取'}</small></div><span className="rebind-provider-chip"><Mail size={14} />{providerLabel(status.data?.total ? status.data.provider : provider)}</span></header>
+        <header className="rebind-panel-head"><div><h2>换绑结果</h2><small>{liveActiveResults.length ? `正在处理 ${liveActiveResults.length} 条${latestResults.length ? ` · 最近 ${latestResults.length} 条` : ''}` : latestResults.length ? `本页 ${latestResults.length} 条 · 最新在前` : '新邮箱在执行时领取'}</small></div><span className="rebind-provider-chip"><Mail size={14} />{providerLabel(status.data?.total ? status.data.provider : provider)}</span></header>
         <div className="rebind-result-stats" role="group" aria-label="换绑结果统计">
           <span>总计 <strong>{status.data?.total ?? 0}</strong></span>
           <span className="ok">成功 <strong>{status.data?.ok ?? 0}</strong></span>
@@ -289,6 +294,7 @@ export function RebindPage() {
           </div>) : null}
           {!liveActiveResults.length && !latestResults.length && <EmptyState icon={<Mail size={24} />} title={running ? '正在处理…' : '暂无换绑结果'} detail={running ? '账号处理完成后将在此显示。' : '选择邮箱接口，加入账号后启动。'} />}
         </div>
+        <Pagination label="换绑结果分页" total={status.data?.resultsPage?.total ?? latestResults.length} offset={resultOffset} busy={status.isFetching} onChange={setResultOffset} />
       </section>
     </div>
     {pickerOpen && !locked && <RebindAssetPicker queuedIds={ids} onClose={() => setPickerOpen(false)} onAdd={add.mutateAsync} />}

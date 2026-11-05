@@ -522,6 +522,8 @@ export type WastedBreakdownItem = {
 };
 
 export type RunSummary = {
+  hasRetainedCpa?: boolean;
+  jobsPage?: { items: JobSummary[]; total: number; offset: number; limit: number };
   schemaVersion?: number;
   runId: string;
   taskKind?: RunPlan['taskKind'];
@@ -666,6 +668,7 @@ export type RunSummary = {
 };
 
 export type RunListSnapshot = {
+  latestRun?: RunSummary | null;
   activeRunId: string;
   activeRunIds?: string[];
   taskCapacity?: TaskCapacitySnapshot | null;

@@ -17,7 +17,7 @@ import { Pagination } from "./Insights";
 export const featureLabels: Row = {
   home: ["工作台", "客户概览、服务介绍与快捷入口"],
   register: ["注册服务", "选择模式与数量，创建注册订单"],
-  orders: ["订单中心", "查询订单进度、详情和取消未执行部分"],
+  orders: ["订单中心", "查询订单进度和详情"],
   accounts: ["账号交付", "查看、领取和导出已交付的账号凭据"],
   wallet: ["资金账户", "查询积分、账本及兑换充值"],
   keys: ["开发接入", "创建 API Key 并通过 API 调用服务"],
