@@ -36,6 +36,7 @@ export default function Auth({
     setMessage("");
   }
   async function send() {
+    if (busy || sending || seconds || !email) return;
     setSending(true);
     setError("");
     try {
@@ -53,7 +54,7 @@ export default function Auth({
   }
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (busy) return;
+    if (busy || sending) return;
     setError("");
     if (mode === "reset" && password !== confirm) {
       setError("两次输入的密码不一致");
@@ -127,6 +128,7 @@ export default function Auth({
                 type="button"
                 className={mode === "login" ? "selected" : ""}
                 onClick={() => change("login")}
+                disabled={busy || sending}
               >
                 登录账户
               </button>
@@ -135,6 +137,7 @@ export default function Auth({
                   type="button"
                   className={mode === "register" ? "selected" : ""}
                   onClick={() => change("register")}
+                  disabled={busy || sending}
                 >
                   注册账户
                 </button>
@@ -145,6 +148,7 @@ export default function Auth({
               type="button"
               className="p-link"
               onClick={() => change("login")}
+              disabled={busy || sending}
             >
               ← 返回登录
             </button>
@@ -260,6 +264,7 @@ export default function Auth({
               className="p-link p-forgot"
               type="button"
               onClick={() => change("reset")}
+              disabled={busy || sending}
             >
               忘记密码？
             </button>

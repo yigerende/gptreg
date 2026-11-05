@@ -109,6 +109,10 @@ function source(r, proxies) {
   }
   return unknown;
 }
+function trustedPeer(r, proxies) {
+  const peer = normalizeIP(r.raw?.socket?.remoteAddress || r.socket?.remoteAddress);
+  return Boolean(peer && proxyList(proxies).check(peer, isIP(peer) === 4 ? "ipv4" : "ipv6"));
+}
 function validateSettings(v) {
   fail(v && typeof v === "object" && !Array.isArray(v), "风控配置无效");
   fail(
@@ -165,4 +169,5 @@ module.exports = {
   validateSettings,
   normalizeIP,
   source,
+  trustedPeer,
 };

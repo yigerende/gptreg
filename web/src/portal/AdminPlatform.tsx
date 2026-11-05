@@ -17,6 +17,7 @@ import AdminUserDetail from "./AdminUserDetail";
 import BrandSettings from "./BrandSettings";
 import AdminSiteControls from "./AdminSiteControls";
 import AdminAnnouncements from "./AdminAnnouncements";
+import AdminRedeemUsage from "./AdminRedeemUsage";
 import AdminCodes from "./AdminCodes";
 import AdminAccounts from "./AdminAccounts";
 export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
@@ -34,6 +35,8 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
     [amount, setAmount] = useState(0),
     [note, setNote] = useState(""),
     [adjustKey, setAdjustKey] = useState(uid);
+  const [codesUsage, setCodesUsage] = useState(false);
+  const usagePage = tab === "codes" && codesUsage;
   const a = useAction();
   const settingsPage = ["settings", "products", "announcements"].includes(tab);
   const endpoint = settingsPage
@@ -48,6 +51,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
     ...filters,
   });
   const { data, error, refetch, isFetching } = useQuery({
+    enabled: !usagePage,
     queryKey: ["admin", tab, offset, filters, days],
     queryFn: () => call(`/api/admin/v1/${endpoint}?${params}`),
     refetchInterval: (query) =>
@@ -100,6 +104,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
         </div>
       </div>
       <div className="p-admin-toolbar">
+        {tab === "codes" && <button className="p-button secondary" onClick={()=>setCodesUsage(!codesUsage)}>{codesUsage?"返回兑换码":"使用情况"}</button>}
         {tab === "users" && (
           <button className="p-button" onClick={() => setCreateUser(true)}>
             创建客户账户 +
@@ -119,7 +124,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
             <option value={90}>最近 90 天</option>
           </select>
         )}
-        {!settingsPage && (
+        {!settingsPage && !usagePage && (
           <button
             className="p-button secondary"
             disabled={isFetching}
@@ -132,11 +137,11 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
       </div>
       <Feedback a={a} />
 
-      {error && <div className="p-alert">{error.message}</div>}
+      {!usagePage && error && <div className="p-alert">{error.message}</div>}
       {tab === "overview" && data && (
         <AdminOverview data={data} onOrder={setDetail} />
       )}
-      {["orders", "users", "accounts", "finance", "codes", "audit"].includes(
+      {!usagePage && ["orders", "users", "accounts", "finance", "codes", "audit"].includes(
         tab,
       ) && (
         <Filters
@@ -290,7 +295,8 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
           />
         </section>
       )}
-      {tab === "codes" && (
+      {usagePage && <AdminRedeemUsage/>}
+      {tab === "codes" && !usagePage && (
         <AdminCodes
           key={JSON.stringify([offset, filters])}
           rows={rows}
@@ -562,7 +568,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
           />
         </section>
       )}
-      {["users", "orders", "accounts", "finance", "codes", "audit"].includes(
+      {!usagePage && ["users", "orders", "accounts", "finance", "codes", "audit"].includes(
         tab,
       ) && (
         <Pagination

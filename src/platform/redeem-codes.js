@@ -2,6 +2,7 @@
 const { id, token, digest, fail, integer } = require("./security");
 const { audit } = require("./db");
 const { search, option } = require("./reports");
+const {reportPeriod}=require('./report-period');
 
 // Bound only redemption-code transactions; registration/order timeouts stay intact.
 async function redeemTransaction(db, work) {
@@ -20,6 +21,20 @@ async function redeemTransaction(db, work) {
 }
 
 function registerRedeemCodes(app, db, crypt) {
+  app.get('/api/admin/v1/redeem-codes/usage',async(r)=>{
+    const period=reportPeriod(r.query.period||'day',r.query.date||'');
+    const limit=integer(Number(r.query.limit||50),1,100,'limit');
+    const offset=integer(Number(r.query.offset||0),0,1000000,'offset');
+    const values=[period.start,period.end,search(r.query.q)];
+    const where=`FROM platform_redeem_codes c LEFT JOIN platform_users u ON u.id=c.redeemed_by WHERE c.redeemed_at >= $1 AND c.redeemed_at < $2 AND c.redeemed_by IS NOT NULL AND (c.prefix ILIKE $3 OR c.batch ILIKE $3 OR u.email ILIKE $3 OR u.name ILIKE $3)`;
+    return db.tx(async(q)=>{
+      await q.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+      await q.query("SET LOCAL statement_timeout='10s'");
+      const summary=(await q.query(`SELECT count(*)::int AS redemptions,count(DISTINCT c.id)::int AS codes,count(DISTINCT c.redeemed_by)::int AS accounts,COALESCE(sum(c.points),0)::float8 AS amount ${where}`,values)).rows[0];
+      const items=(await q.query(`SELECT c.id,c.id AS code_id,c.prefix,c.redeemed_by AS user_id,u.email,u.name,c.batch AS note,c.points AS amount,c.redeemed_at ${where} ORDER BY c.redeemed_at DESC,c.id DESC LIMIT $4 OFFSET $5`,[...values,limit,offset])).rows;
+      return {items,summary,total:summary.redemptions,limit,offset,start_date:period.start_date,end_date:period.end_date,timezone:period.timezone};
+    });
+  });
   app.get("/api/admin/v1/redeem-codes", async (r) => {
     const limit = integer(Number(r.query.limit || 50), 1, 100, "limit");
     const offset = integer(Number(r.query.offset || 0), 0, 1000000, "offset");

@@ -1286,9 +1286,11 @@ test(
       await t.test(
         "invalid email code counts survive transactions; password reset revokes sessions",
         async () => {
+          const challenge = id();
+          const credential = await store.one("SELECT password_hash FROM platform_users WHERE id=$1", [alice.id]);
           await store.query(
-            "INSERT INTO platform_email_codes(email,purpose,hash,expires_at) VALUES($1,'reset',$2,now()+interval '15 minutes')",
-            [alice.email, digest(`${alice.email}:reset:123456`)],
+            "INSERT INTO platform_email_codes(email,purpose,hash,expires_at,challenge_id,user_id,credential_hash,delivered) VALUES($1,'reset',$2,now()+interval '15 minutes',$3,$4,$5,true)",
+            [alice.email, require('../src/platform/auth').codeHash(crypt,alice.email,'reset','123456',challenge), challenge, alice.id, digest(credential.password_hash)],
           );
           assert.equal(
             (

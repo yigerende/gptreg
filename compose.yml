@@ -14,6 +14,8 @@ services:
     environment:
       DATABASE_URL: postgresql://gptreg:${GPTREG_DB_PASSWORD:?Set GPTREG_DB_PASSWORD in .env}@postgres:5432/gptreg
       WORKER_URL: http://worker:3211
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     depends_on:
       postgres:
         condition: service_healthy

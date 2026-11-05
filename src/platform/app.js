@@ -17,11 +17,14 @@ function buildPlatform({
   cwd = process.cwd(),
   workerUrl = "http://worker:3211",
   proxy = true,
+  publicOrigin = process.env.PUBLIC_ORIGIN || "",
+  secureCookies = process.env.COOKIE_SECURE === "true",
 }) {
   const app = Fastify({
     logger: false,
     bodyLimit: 1024 * 1024,
-    trustProxy: ["127.0.0.1", "::1"],
+    // risk-config supplies the single explicit trusted-proxy policy.
+    trustProxy: false,
   });
   registerRisk(app, db);
   app.addHook("onRequest", async (r, reply) => {
@@ -106,7 +109,7 @@ function buildPlatform({
     }
     reply.code(status).send({ error: message, status });
   });
-  registerAuth(app, db, crypt);
+  registerAuth(app, db, crypt, { publicOrigin, secureCookies });
   registerApi(app, db, orders, crypt);
   for (const route of ["/site-icon", "/favicon.ico", "/site-icon/default"]) {
     app.get(route, async (r, reply) => {

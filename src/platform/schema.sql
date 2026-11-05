@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS platform_email_codes (
  email text NOT NULL,purpose text NOT NULL,hash text NOT NULL,attempts integer NOT NULL DEFAULT 0,
  expires_at timestamptz NOT NULL,sent_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(email,purpose)
 );
+ALTER TABLE platform_email_codes ADD COLUMN IF NOT EXISTS challenge_id text NOT NULL DEFAULT '';
+ALTER TABLE platform_email_codes ADD COLUMN IF NOT EXISTS user_id text NOT NULL DEFAULT '';
+ALTER TABLE platform_email_codes ADD COLUMN IF NOT EXISTS credential_hash text NOT NULL DEFAULT '';
+ALTER TABLE platform_email_codes ADD COLUMN IF NOT EXISTS delivered boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS platform_rate_limits (key text PRIMARY KEY,hits integer NOT NULL,expires_at timestamptz NOT NULL);
 CREATE TABLE IF NOT EXISTS platform_orders (
  id text PRIMARY KEY,user_id text NOT NULL REFERENCES platform_users(id),quantity integer NOT NULL CHECK(quantity BETWEEN 1 AND 1000),
@@ -52,6 +56,7 @@ CREATE TABLE IF NOT EXISTS platform_redeem_codes (
  id text PRIMARY KEY,hash text UNIQUE NOT NULL,prefix text NOT NULL,points integer NOT NULL CHECK(points>0),
  redeemed_by text REFERENCES platform_users(id),disabled boolean NOT NULL DEFAULT false,created_at timestamptz NOT NULL DEFAULT now(),redeemed_at timestamptz
 );
+CREATE INDEX IF NOT EXISTS platform_redeem_used_at ON platform_redeem_codes(redeemed_at DESC,id DESC) WHERE redeemed_by IS NOT NULL;
 CREATE TABLE IF NOT EXISTS platform_audit (id bigserial PRIMARY KEY,actor_id text,action text NOT NULL,target text,detail text NOT NULL DEFAULT '',created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS platform_worker (id integer PRIMARY KEY CHECK(id=1),heartbeat timestamptz NOT NULL,error text NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS platform_order_owner ON platform_orders(user_id,created_at DESC);

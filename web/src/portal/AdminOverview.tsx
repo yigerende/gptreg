@@ -1,3 +1,4 @@
+import DataProtectionNotice from "./DataProtectionNotice";
 import {
   Activity,
   ArrowUpRight,
@@ -27,6 +28,7 @@ export default function AdminOverview({
     Date.now() - new Date(data.worker.heartbeat).getTime() < 90000;
   return (
     <>
+      <DataProtectionNotice/>
       <div
         className={`p-ops-banner ${!online || !operations.orders_open ? "warn" : ""}`}
       >

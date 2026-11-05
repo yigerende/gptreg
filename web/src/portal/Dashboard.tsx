@@ -1,3 +1,4 @@
+import DataProtectionNotice from "./DataProtectionNotice";
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -35,6 +36,7 @@ export default function Dashboard({ user, pub }: { user: Row; pub: Row }) {
   }, [stats.spent, stats.released, q]);
   return (
     <>
+      <DataProtectionNotice/>
       <section className="p-hero">
         <div>
           <span className="p-eyebrow">YOUR ACCOUNT WORKSPACE</span>

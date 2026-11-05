@@ -12,6 +12,7 @@ const {
 } = require("./security");
 const { audit } = require("./db");
 const { publicBrand } = require("./branding");
+const { trustedPeer } = require("./risk-config");
 const userView = (u) => ({
   id: u.id,
   email: u.email,
@@ -25,7 +26,7 @@ const userView = (u) => ({
 const emailValid = (e) =>
   typeof e === "string" &&
   e.length <= 254 &&
-  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+  /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/.test(e);
 const passwordValid = (p) =>
   typeof p === "string" && p.length >= 10 && p.length <= 72;
 const cookieToken = (r) =>
@@ -34,40 +35,58 @@ const cookieToken = (r) =>
     .map((x) => x.trim())
     .find((x) => x.startsWith("gptreg_session="))
     ?.slice(15) || "";
-function registerAuth(app, db, crypt) {
+const codeHash = (crypt, email, purpose, code, challenge) =>
+  crypt.authCodeHash(JSON.stringify([email, purpose, challenge, code]));
+const sourceIP = (r) => r.risk?.source_ip || r.raw.socket.remoteAddress;
+const allowedEmail = (s, email) => !s.email_domains.length || s.email_domains.includes(email.split("@")[1]);
+function registerAuth(app, db, crypt, { publicOrigin = "", secureCookies = false } = {}) {
+  let origin;
+  if (publicOrigin) {
+    origin = new URL(publicOrigin);
+    fail(["http:", "https:"].includes(origin.protocol) && !origin.username && !origin.password && origin.pathname === "/" && !origin.search && !origin.hash, "PUBLIC_ORIGIN 格式无效", 500);
+  }
+  const secure = (r) => secureCookies || Boolean(r.raw.socket.encrypted) ||
+    (origin?.protocol === "https:" && r.headers.host === origin.host) ||
+    (trustedPeer(r, r.risk?.cfg.trusted_proxies || []) && r.headers["x-forwarded-proto"] === "https");
   const cookie = (r, reply, value, maxAge) =>
     reply.header(
       "Set-Cookie",
-      `gptreg_session=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${r.protocol === "https" ? "; Secure" : ""}`,
+      `gptreg_session=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure(r) ? "; Secure" : ""}`,
     );
-  async function session(r, reply, userId) {
+  async function insertSession(q, userId, t) {
+    await q.query("INSERT INTO platform_sessions(hash,user_id,expires_at) VALUES($1,$2,now()+interval '24 hours')", [digest(t), userId]);
+  }
+  async function session(r, reply, verified) {
     const t = token();
-    await db.query(
-      "INSERT INTO platform_sessions(hash,user_id,expires_at) VALUES($1,$2,now()+interval '24 hours')",
-      [digest(t), userId],
-    );
+    r.user = await db.tx(async (q) => {
+      const current = (await q.query("SELECT * FROM platform_users WHERE id=$1 FOR UPDATE", [verified.id])).rows[0];
+      fail(current?.status === "active" && current.password_hash === verified.password_hash && current.email === verified.email, "登录信息已变更，请重新登录", 401);
+      await insertSession(q, current.id, t);
+      return current;
+    });
     cookie(r, reply, t, 86400);
     return { ok: true };
   }
-  async function consume(q, email, purpose, code) {
+  async function consume(q, email, purpose, code, user) {
     const row = (
       await q.query(
         "SELECT * FROM platform_email_codes WHERE email=$1 AND purpose=$2 FOR UPDATE",
         [email, purpose],
       )
     ).rows[0];
-    if (!row || row.expires_at < new Date() || row.attempts >= 5)
+    if (!row || !row.challenge_id || !row.delivered || row.expires_at <= new Date() || row.attempts >= 5)
       return "验证码已失效，请重新获取";
+    await q.query("UPDATE platform_email_codes SET attempts=attempts+1 WHERE email=$1 AND purpose=$2", [email, purpose]);
+    const expected = Buffer.from(codeHash(crypt, email, purpose, code, row.challenge_id));
+    const actual = Buffer.from(row.hash);
     if (
-      !/^\d{6}$/.test(String(code)) ||
-      row.hash !== digest(`${email}:${purpose}:${code}`)
+      typeof code !== "string" || !/^\d{6}$/.test(code) ||
+      actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)
     ) {
-      await q.query(
-        "UPDATE platform_email_codes SET attempts=attempts+1 WHERE email=$1 AND purpose=$2",
-        [email, purpose],
-      );
       return "验证码不正确";
     }
+    if (purpose === "reset" && (!user || user.status !== "active" || row.user_id !== user.id || row.credential_hash !== digest(user.password_hash)))
+      return "验证码已失效，请重新获取";
     await q.query(
       "DELETE FROM platform_email_codes WHERE email=$1 AND purpose=$2",
       [email, purpose],
@@ -111,7 +130,7 @@ function registerAuth(app, db, crypt) {
       401,
     );
     r.user = u;
-    return session(r, reply, u.id);
+    return session(r, reply, u);
   });
   app.post("/api/auth/logout", async (r, reply) => {
     await db.query("DELETE FROM platform_sessions WHERE hash=$1", [
@@ -121,7 +140,7 @@ function registerAuth(app, db, crypt) {
     return { ok: true };
   });
   app.post("/api/auth/email-code", async (r) => {
-    fail(await db.limit(`email:${r.ip}`, 5), "发送过于频繁，请稍后再试", 429);
+    fail(await db.limit(`email:${sourceIP(r)}`, 5), "发送过于频繁，请稍后再试", 429);
     const { purpose } = r.body || {},
       email = String(r.body?.email || "")
         .trim()
@@ -133,8 +152,21 @@ function registerAuth(app, db, crypt) {
     const s = await db.settings();
     fail(s.smtp.host && s.smtp.from, "邮件服务尚未配置", 503);
     fail(purpose !== "register" || s.registration_open, "暂未开放注册", 403);
+    if (purpose === "register") {
+      fail(s.email_verify_enabled, "当前注册无需邮箱验证码", 403);
+      fail(allowedEmail(s, email), "此邮箱域名暂不支持注册");
+    }
+    fail(await db.limit(`email-day-ip:${sourceIP(r)}`, 100, 86400), "今日发送次数已达上限", 429);
+    fail(await db.limit(`email-day-recipient:${digest(email)}`, 20, 86400), "此邮箱今日发送次数已达上限", 429);
     const code = String(crypto.randomInt(100000, 1000000));
-    await db.tx(async (q) => {
+    const challenge = id(), hash = codeHash(crypt, email, purpose, code, challenge);
+    const eligible = await db.tx(async (q) => {
+      const current = (await q.query("SELECT value FROM platform_settings WHERE id=1 FOR SHARE")).rows[0].value;
+      if (purpose === "register") {
+        fail(current.registration_open, "暂未开放注册", 403);
+        fail(current.email_verify_enabled, "当前注册无需邮箱验证码", 403);
+        fail(allowedEmail(current, email), "此邮箱域名暂不支持注册");
+      }
       await q.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
         `code:${email}`,
       ]);
@@ -149,16 +181,14 @@ function registerAuth(app, db, crypt) {
         "请在 60 秒后重发",
         429,
       );
+      const user = (await q.query("SELECT id,password_hash,status FROM platform_users WHERE email=$1", [email])).rows[0];
       await q.query(
-        "INSERT INTO platform_email_codes(email,purpose,hash,expires_at) VALUES($1,$2,$3,now()+interval '15 minutes') ON CONFLICT(email,purpose) DO UPDATE SET hash=$3,expires_at=now()+interval '15 minutes',attempts=0,sent_at=now()",
-        [email, purpose, digest(`${email}:${purpose}:${code}`)],
+        "INSERT INTO platform_email_codes(email,purpose,hash,expires_at,challenge_id,user_id,credential_hash,delivered) VALUES($1,$2,$3,now()+interval '15 minutes',$4,$5,$6,false) ON CONFLICT(email,purpose) DO UPDATE SET hash=$3,expires_at=now()+interval '15 minutes',attempts=0,sent_at=now(),challenge_id=$4,user_id=$5,credential_hash=$6,delivered=false",
+        [email, purpose, hash, challenge, user?.id || "", user ? digest(user.password_hash) : ""],
       );
+      return purpose === "register" ? !user : user?.status === "active";
     });
-    const exists = await db.one(
-      "SELECT id FROM platform_users WHERE email=$1 AND status=$2",
-      [email, "active"],
-    );
-    if (purpose === "register" || exists) {
+    if (eligible) {
       try {
         await sendMail(
           db,
@@ -169,10 +199,11 @@ function registerAuth(app, db, crypt) {
           `${s.site_name} 邮箱验证码`,
           `您的验证码：${code}，15 分钟内有效。请勿分享给他人。`,
         );
+        await db.query("UPDATE platform_email_codes SET delivered=true WHERE email=$1 AND purpose=$2 AND challenge_id=$3", [email, purpose, challenge]);
       } catch {
         await db.query(
-          "DELETE FROM platform_email_codes WHERE email=$1 AND purpose=$2 AND hash=$3",
-          [email, purpose, digest(`${email}:${purpose}:${code}`)],
+          "DELETE FROM platform_email_codes WHERE email=$1 AND purpose=$2 AND challenge_id=$3",
+          [email, purpose, challenge],
         );
         fail(false, "邮件发送失败，请联系管理员检查邮件服务", 503);
       }
@@ -184,7 +215,7 @@ function registerAuth(app, db, crypt) {
   });
   app.post("/api/auth/register", async (r, reply) => {
     fail(
-      await db.limit(`register:${r.ip}`, 5),
+      await db.limit(`register:${sourceIP(r)}`, 5),
       "注册过于频繁，请稍后再试",
       429,
     );
@@ -201,7 +232,7 @@ function registerAuth(app, db, crypt) {
       "请填写邮箱、用户名及 10～72 位密码",
     );
     const hashed = await passwordHash(v.password),
-      uid = id();
+      uid = id(), sessionToken = token();
     const error = await db.tx(async (q) => {
       const s = (
         await q.query(
@@ -210,8 +241,7 @@ function registerAuth(app, db, crypt) {
       ).rows[0].value;
       fail(s.registration_open, "暂未开放注册", 403);
       fail(
-        !s.email_domains.length ||
-          s.email_domains.includes(email.split("@")[1]),
+        allowedEmail(s, email),
         "此邮箱域名暂不支持注册",
       );
       if (s.email_verify_enabled) {
@@ -222,13 +252,15 @@ function registerAuth(app, db, crypt) {
         "INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)",
         [uid, email, name, hashed],
       );
+      await insertSession(q, uid, sessionToken);
       return "";
     });
     fail(!error, error);
-    return session(r, reply, uid);
+    cookie(r, reply, sessionToken, 86400);
+    return { ok: true };
   });
   app.post("/api/auth/reset-password", async (r) => {
-    fail(await db.limit(`reset:${r.ip}`, 10), "尝试过于频繁", 429);
+    fail(await db.limit(`reset:${sourceIP(r)}`, 10), "尝试过于频繁", 429);
     const v = r.body || {},
       email = String(v.email || "")
         .trim()
@@ -245,7 +277,7 @@ function registerAuth(app, db, crypt) {
           [email],
         )
       ).rows[0];
-      const e = await consume(q, email, "reset", v.code);
+      const e = await consume(q, email, "reset", v.code, u);
       if (e || !u || u.status !== "active") return e || "验证码无效";
       await q.query("UPDATE platform_users SET password_hash=$2 WHERE id=$1", [
         u.id,
@@ -273,7 +305,12 @@ function registerAuth(app, db, crypt) {
           (await passwordMatches(v.old_password, r.user.password_hash)),
         "原密码不正确或新密码须为 10～72 位",
       );
+    const hashed = v.password ? await passwordHash(v.password) : null;
     await db.tx(async (q) => {
+      const current = (await q.query("SELECT * FROM platform_users WHERE id=$1 FOR UPDATE", [r.user.id])).rows[0];
+      fail(current?.status === "active" && current.password_hash === r.user.password_hash, "登录信息已变更，请重新登录", 401);
+      const validSession = (await q.query("SELECT 1 FROM platform_sessions WHERE hash=$1 AND user_id=$2 AND expires_at>now()", [digest(cookieToken(r)), current.id])).rowCount;
+      fail(validSession, "登录已失效，请重新登录", 401);
       await q.query("UPDATE platform_users SET name=$2 WHERE id=$1", [
         r.user.id,
         name,
@@ -281,7 +318,7 @@ function registerAuth(app, db, crypt) {
       if (v.password) {
         await q.query(
           "UPDATE platform_users SET password_hash=$2 WHERE id=$1",
-          [r.user.id, await passwordHash(v.password)],
+          [r.user.id, hashed],
         );
         await q.query("DELETE FROM platform_sessions WHERE user_id=$1", [
           r.user.id,
@@ -319,4 +356,4 @@ async function authenticate(db, r, api = false) {
   r.user = u;
   return u;
 }
-module.exports = { registerAuth, authenticate, userView };
+module.exports = { registerAuth, authenticate, userView, codeHash };

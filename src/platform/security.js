@@ -54,6 +54,9 @@ function loadSecrets(cwd) {
 function cipher(master) {
   const key = Buffer.from(master, "base64");
   return {
+    authCodeHash(value) {
+      return crypto.createHmac("sha256", key).update("gptreg/email-code/v1\0" + value).digest("hex");
+    },
     encrypt(value) {
       const iv = crypto.randomBytes(12),
         c = crypto.createCipheriv("aes-256-gcm", key, iv);
