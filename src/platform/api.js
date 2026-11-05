@@ -27,9 +27,10 @@ const paging = (r) => ({
 const { validateControls, visibleMenus } = require("./site-controls");
 const { registerMail } = require("./mail");
 const { registerAdminAccounts } = require("./admin-accounts");
-const { registerRedeemCodes } = require("./redeem-codes");
+const { registerRedeemCodes, redeemTransaction } = require("./redeem-codes");
 const { oauthExport } = require("./account-export");
 const { registerCustomerCenter } = require("./customer-center");
+const { availableAccount } = require("./account-retention");
 function registerApi(app, db, orders, crypt) {
   registerMail(app, db, crypt);
   registerAdminAccounts(app, db, crypt);
@@ -60,7 +61,6 @@ function registerApi(app, db, orders, crypt) {
       app.get(`${prefix}/me`, async (r) => userView(r.user));
     app.post(`${prefix}/registration-orders`, async (r, reply) => {
       scope(r, "orders:write");
-      fail(await db.limit(`orders:${r.user.id}`, 20), "下单过于频繁", 429);
       const result = await orders.create(
         r.user,
         r.body,
@@ -111,13 +111,13 @@ function registerApi(app, db, orders, crypt) {
       );
       const rows = (
         await db.query(
-          "SELECT * FROM platform_accounts WHERE user_id=$1 AND id=ANY($2::text[])",
+          `SELECT * FROM platform_accounts WHERE user_id=$1 AND id=ANY($2::text[]) AND ${availableAccount()}`,
           [r.user.id, [...new Set(v.ids)]],
         )
       ).rows;
       fail(
         rows.length === new Set(v.ids).size,
-        "部分账号不存在或无权访问",
+        "部分账号不存在、无权访问或领取资料已超过 72 小时，请刷新账号列表后重选",
         404,
       );
       const values = rows.map((x) => crypt.decrypt(x.credentials));
@@ -148,13 +148,16 @@ function registerApi(app, db, orders, crypt) {
     return listLedger(db, r.user.id, r.query);
   });
   app.post("/api/user/v1/redeem", async (r) => {
-    fail(await db.limit(`redeem:${r.user.id}`, 10), "兑换尝试过多", 429);
     const code = String(r.body?.code || "").trim();
     fail(code.length >= 20 && code.length <= 100, "兑换码无效");
-    return db.tx(async (q) => {
-      await q.query("SELECT id FROM platform_users WHERE id=$1 FOR UPDATE", [
-        r.user.id,
-      ]);
+    return redeemTransaction(db, async (q) => {
+      const user = (
+        await q.query(
+          "SELECT id,status FROM platform_users WHERE id=$1 FOR UPDATE",
+          [r.user.id],
+        )
+      ).rows[0];
+      fail(user?.status === "active", "账户已停用，无法兑换", 403);
       const c = (
         await q.query(
           "SELECT * FROM platform_redeem_codes WHERE hash=$1 FOR UPDATE",

@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import {
   Activity,
   ChartNoAxesCombined,
@@ -9,6 +10,7 @@ import {
   Bell,
   ScrollText,
   KeyRound,
+  ShieldCheck,
 } from "lucide-react";
 import { Link, useRouter } from "../router";
 import Shell, { type NavGroup } from "./Shell";
@@ -16,12 +18,14 @@ import AdminPlatform from "./AdminPlatform";
 import CustomPage from "./CustomPage";
 import AdminEntry from "./AdminEntry";
 import type { Row } from "./client";
+const AdminRisk = lazy(() => import("./AdminRisk"));
 const groups: NavGroup[] = [
   {
     label: "运营洞察",
     items: [
       { path: "/admin", name: "运营概览", icon: LayoutDashboard },
       { path: "/admin/orders", name: "订单监控", icon: Activity },
+      { path: "/admin/risk", name: "风控监控", icon: ShieldCheck },
       { path: "/admin/finance", name: "积分报表", icon: ChartNoAxesCombined },
     ],
   },
@@ -78,6 +82,10 @@ export default function AdminChrome({
     >
       {path.startsWith("/admin/custom/") ? (
         <CustomPage id={path.slice(14)} admin />
+      ) : path === "/admin/risk" ? (
+        <Suspense fallback={<div className="p-loading">正在打开风控监控…</div>}>
+          <AdminRisk />
+        </Suspense>
       ) : current ? (
         <AdminPlatform
           key={path + search}

@@ -1,6 +1,7 @@
 "use strict";
 const { fail, integer } = require("./security");
 const { publicOrder } = require("./orders");
+const { expiresAt, availableAccount } = require("./account-retention");
 
 const page = (query) => ({
   limit: integer(Number(query.limit || 50), 1, 100, "limit"),
@@ -54,24 +55,66 @@ async function listOrders(db, owner, query) {
     ...p,
   };
 }
+function accountFilter(owner, query) {
+  const values = [
+    owner,
+    search(query.q),
+    option(query.mode, ["standard", "oauth"]),
+    query.order_id || null,
+  ];
+  const where =
+    "FROM platform_accounts a JOIN platform_users u ON u.id=a.user_id WHERE ($1::text IS NULL OR a.user_id=$1) AND (a.email ILIKE $2 OR a.order_id ILIKE $2) AND ($3='' OR a.need_oauth=($3='oauth')) AND ($4::text IS NULL OR a.order_id=$4)" +
+    (owner ? ` AND ${availableAccount("a")}` : "");
+  return { values, where };
+}
 async function listAccounts(db, owner, query) {
   const p = page(query),
-    values = [
-      owner,
-      search(query.q),
-      option(query.mode, ["standard", "oauth"]),
-      query.order_id || null,
-    ];
-  const where =
-    "FROM platform_accounts a JOIN platform_users u ON u.id=a.user_id WHERE ($1::text IS NULL OR a.user_id=$1) AND (a.email ILIKE $2 OR a.order_id ILIKE $2) AND ($3='' OR a.need_oauth=($3='oauth')) AND ($4::text IS NULL OR a.order_id=$4)";
+    { values, where } = accountFilter(owner, query);
   const [rows, count] = await Promise.all([
     db.query(
-      `SELECT a.id,a.email,a.order_id,a.need_oauth,a.created_at${owner ? "" : ",u.email AS owner_email"} ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT $5 OFFSET $6`,
+      `SELECT a.id,a.email,a.order_id,a.need_oauth,a.created_at,${expiresAt("a")} AS download_expires_at${owner ? "" : ",u.email AS owner_email"} ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT $5 OFFSET $6`,
       [...values, p.limit, p.offset],
     ),
-    db.one(`SELECT count(*)::int AS total ${where}`, values),
+    db.one(
+      `SELECT count(*)::int AS total,min(${expiresAt("a")}) AS next_expires_at,now() AS server_time ${where}`,
+      values,
+    ),
   ]);
-  return { items: rows.rows, total: count.total, ...p };
+  return { items: rows.rows, ...count, ...p };
+}
+async function accountOrders(db, owner, query) {
+  const p = page(query),
+    { values, where } = accountFilter(owner, query);
+  const [rows, count] = await Promise.all([
+    db.query(
+      `SELECT a.order_id AS id,a.order_id,a.need_oauth,count(*)::int AS available_count,
+      min(a.created_at) AS first_delivered_at,max(a.created_at) AS last_delivered_at,
+      min(${expiresAt("a")}) AS download_expires_at
+      ${where} GROUP BY a.order_id,a.need_oauth ORDER BY max(a.created_at) DESC,a.order_id DESC LIMIT $5 OFFSET $6`,
+      [...values, p.limit, p.offset],
+    ),
+    db.one(
+      `SELECT count(DISTINCT a.order_id)::int AS total,count(*)::int AS accounts_total,
+      min(${expiresAt("a")}) AS next_expires_at,now() AS server_time ${where}`,
+      values,
+    ),
+  ]);
+  return { items: rows.rows, ...count, ...p };
+}
+async function accountSelection(db, owner, query) {
+  const { values, where } = accountFilter(owner, query);
+  // One bounded snapshot: selection never downloads credentials or pages an unbounded list.
+  const rows = await db.query(
+    `SELECT a.id,a.order_id,${expiresAt("a")} AS download_expires_at,
+    count(*) OVER()::int AS total,now() AS server_time
+    ${where} ORDER BY a.created_at DESC,a.id DESC LIMIT 1000`,
+    values,
+  );
+  return {
+    items: rows.rows.map(({ total, server_time, ...row }) => row),
+    total: rows.rows[0]?.total || 0,
+    server_time: rows.rows[0]?.server_time || new Date(),
+  };
 }
 async function listLedger(db, owner, query) {
   const p = page(query),
@@ -109,6 +152,12 @@ async function trend(db, owner, days) {
   ).rows;
 }
 function registerReports(app, db) {
+  app.get("/api/user/v1/account-orders", (r) =>
+    accountOrders(db, r.user.id, r.query),
+  );
+  app.get("/api/user/v1/accounts/selection", (r) =>
+    accountSelection(db, r.user.id, r.query),
+  );
   app.get("/api/user/v1/overview", async (r) => {
     const [stats, recent, ledger, daily] = await Promise.all([
       db.one(

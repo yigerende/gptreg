@@ -56,8 +56,8 @@ const errors = {
     "检查密钥权限及站点功能开关，必要时联系管理员。",
   ],
   404: [
-    "记录不存在或不属于当前账户",
-    "核对订单或账号 ID；只能访问密钥所属用户的数据。",
+    "记录不存在、不属于当前账户或账号资料已到期",
+    "核对订单或账号 ID；账号交付满 72 小时后不可再读取或导出，请提前保存。",
   ],
   409: [
     "幂等键与请求内容冲突",
@@ -126,6 +126,7 @@ const account = {
   email: exampleCredentials.email,
   need_oauth: true,
   created_at: time,
+  download_expires_at: "2026-11-08T04:00:00.000Z",
 };
 const schemas = {
   User: obj({
@@ -198,7 +199,10 @@ const schemas = {
     order_id: str("交付所属订单 ID"),
     email: str("交付账号的邮箱"),
     need_oauth: bool("该账号是否包含 OAuth 数据"),
-    created_at: stamp("交付入库时间"),
+    created_at: stamp("交付成功时间，72 小时领取期从此刻起算"),
+    download_expires_at: stamp(
+      "用户领取资料删除时间；到达此时间后列表不再返回，凭据与导出均不可用。运营后台保留",
+    ),
   }),
   OAuth: obj(
     {
@@ -227,6 +231,9 @@ const schemas = {
     allOf: [
       ref("StoredCredentials"),
       obj({
+        download_expires_at: stamp(
+          "交付成功 72 小时后的资料领取截止时间，UTC ISO 8601",
+        ),
         totp_code: str("读取时计算的当前 6 位验证码；前导零须保留"),
         totp_expires_in: num("当前验证码剩余秒数，刷新凭据接口可获得新验证码", {
           minimum: 1,
@@ -263,6 +270,13 @@ function pageSchema(name, item) {
 }
 pageSchema("OrderPage", "Order");
 pageSchema("AccountPage", "Account");
+Object.assign(schemas.AccountPage.properties, {
+  server_time: stamp("服务器当前时间，可用于校准领取截止时间"),
+  next_expires_at: {
+    ...stamp("当前筛选结果中最早的领取截止时间；无可领取账号时为 null"),
+    type: ["string", "null"],
+  },
+});
 const pagination = [
   {
     name: "limit",
@@ -547,7 +561,7 @@ operation(
   "筛选与分页查询交付账号",
   "账号交付",
   "accounts:read",
-  "返回已交付账号的基础信息，不含密码、2FA 或 OAuth。按创建时间及 ID 倒序返回；用 items[].id 读取凭据或导出。",
+  "仅返回交付后未满 72 小时的账号基础信息，包含 download_expires_at，不含密码、2FA 或 OAuth。到期账号从列表及 total 中移除，历史订单不受影响。按创建时间及 ID 倒序返回；用 items[].id 读取凭据或导出。",
   {
     parameters: [
       ...pagination,
@@ -586,12 +600,13 @@ operation(
   "读取账号凭据与验证码",
   "账号交付",
   "credentials:read",
-  "读取密码、2FA 密钥和当前验证码。只有购买含 OAuth 服务的账号才返回 oauth；标准账号省略该字段。完整 OAuth 对象可能包含额外元数据。",
+  "仅在交付后 72 小时内可读取密码、2FA 密钥和当前验证码；到期返回 404，即使保存过账号 ID 也无法继续领取。只有购买含 OAuth 服务的账号才返回 oauth；标准账号省略该字段。完整 OAuth 对象可能包含额外元数据。",
   {
     parameters: [identifier("account")],
     result: ref("Credentials"),
     example: {
       ...exampleCredentials,
+      download_expires_at: account.download_expires_at,
       totp_code: "012345",
       totp_expires_in: 18,
     },
@@ -604,7 +619,7 @@ operation(
   "批量导出交付资料",
   "账号交付",
   "credentials:read",
-  "一次传入 1～1000 个账号 ID。任一 ID 不存在或不属于当前用户则整体返回 404；重复 ID 自动去重，不保证输出顺序与请求顺序相同。TXT/CSV 为基础凭据；JSON 保留完整交付数据。CPA 每个账号一份 OAuth JSON，多账号打包 ZIP（encoding=base64）；SUB 多账号合并为一个 sub2api 导入 JSON。CPA/SUB 只支持完整 OAuth 账号，混入标准账号会整批拒绝。响应始终是 JSON 封装，先解析，ZIP 需 Base64 解码后保存。",
+  "一次传入 1～1000 个账号 ID。任一 ID 不存在、不属于当前用户或已超过交付后 72 小时领取期，则整体返回 404；重复 ID 自动去重，不保证输出顺序与请求顺序相同。TXT/CSV 为基础凭据；JSON 保留完整交付数据。CPA 每个账号一份 OAuth JSON，多账号打包 ZIP（encoding=base64）；SUB 多账号合并为一个 sub2api 导入 JSON。CPA/SUB 只支持完整 OAuth 账号，混入标准账号会整批拒绝。响应始终是 JSON 封装，先解析，ZIP 需 Base64 解码后保存。",
   {
     requestBody: requestBody(
       obj(
@@ -768,7 +783,7 @@ const openapi = {
   openapi: "3.1.0",
   info: {
     title: "GPT Register 开放 API",
-    version: "1.2.0",
+    version: "1.3.0",
     description:
       "通过服务端 API 创建标准或含 OAuth 的注册订单，查询进度并领取交付凭据。下单预留积分，按实际交付结算；失败/取消未交付部分释放。所有示例为虚构演示资料，实际价格与上限以接口返回为准。",
   },
@@ -853,7 +868,7 @@ const openapi = {
                 headers: {
                   "Retry-After": {
                     description:
-                      "达到总体 API 频率限制时返回建议等待秒数；下单频率或订单数量上限不保证携带",
+                      "命中平台配置的风控频率限制时返回建议等待秒数；未完成订单数量上限等业务限制不保证携带",
                     schema: { type: "integer", example: 60 },
                   },
                 },

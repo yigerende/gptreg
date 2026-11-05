@@ -13,8 +13,13 @@ import {
 import { Link, Router, useRouter } from "./router";
 import Auth from "./portal/Auth";
 import Workspace from "./portal/Workspace";
+import CustomerAccounts from "./portal/CustomerAccounts";
 import Dashboard from "./portal/Dashboard";
-import { CustomerOrderCenter, FundsAccount, PersonalSettings } from "./portal/CustomerCenter";
+import {
+  CustomerOrderCenter,
+  FundsAccount,
+  PersonalSettings,
+} from "./portal/CustomerCenter";
 import CustomPage from "./portal/CustomPage";
 import Docs from "./portal/Docs";
 import Shell, { type NavGroup } from "./portal/Shell";
@@ -170,6 +175,8 @@ export default function Platform() {
         <Dashboard user={me.data} pub={pub.data} />
       ) : path === "/orders" ? (
         <CustomerOrderCenter user={me.data} pub={pub.data} />
+      ) : path === "/accounts" ? (
+        <CustomerAccounts key={`${me.data.id}:${search}`} userId={me.data.id} />
       ) : path === "/wallet" ? (
         <FundsAccount user={me.data} pub={pub.data} />
       ) : path === "/profile" ? (

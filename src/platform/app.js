@@ -8,6 +8,7 @@ const { openapi } = require("./openapi");
 const { fail } = require("./security");
 const { siteIcon } = require("./branding");
 const { requestFeature } = require("./site-controls");
+const { registerRisk } = require("./risk");
 function buildPlatform({
   db,
   orders,
@@ -22,6 +23,7 @@ function buildPlatform({
     bodyLimit: 1024 * 1024,
     trustProxy: ["127.0.0.1", "::1"],
   });
+  registerRisk(app, db);
   app.addHook("onRequest", async (r, reply) => {
     // Check the decoded path used by routing, including encoded asset names.
     let pathname;
@@ -79,10 +81,6 @@ function buildPlatform({
       }
       if (api) {
         fail(settings.api_enabled, "API 暂未开放", 503);
-        if (!(await db.limit(`api:${r.user.id}`, 120))) {
-          reply.header("Retry-After", "60");
-          fail(false, "请求过于频繁，请稍后重试", 429);
-        }
       }
     }
     if (

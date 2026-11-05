@@ -1,6 +1,8 @@
 "use strict";
 const { id, digest, fail, integer } = require("./security");
 const { audit } = require("./db");
+const { checkNewOrder } = require("./risk-store");
+const { expiresAt, availableAccount } = require("./account-retention");
 const publicOrder = (row) =>
   Object.fromEntries(
     [
@@ -76,6 +78,7 @@ class Orders {
         fail(previous.request_hash === hash, "相同幂等键不能用于不同请求", 409);
         return { order: publicOrder(previous), replayed: true };
       }
+      await checkNewOrder(q, user.id);
       const s = (
         await q.query(
           "SELECT value FROM platform_settings WHERE id=1 FOR SHARE",
@@ -306,16 +309,19 @@ class Orders {
   }
   async account(userId, accountId) {
     const a = await this.db.one(
-      "SELECT * FROM platform_accounts WHERE id=$1 AND user_id=$2",
+      `SELECT *,${expiresAt()} AS download_expires_at FROM platform_accounts WHERE id=$1 AND user_id=$2 AND ${availableAccount()}`,
       [accountId, userId],
     );
-    fail(a, "账号不存在", 404);
+    fail(a, "账号不存在、无权访问或领取资料已超过 72 小时", 404);
     return a;
   }
   async reveal(userId, accountId) {
     const a = await this.account(userId, accountId);
     await audit(this.db, userId, "account.credentials", accountId);
-    return this.crypt.decrypt(a.credentials);
+    return {
+      ...this.crypt.decrypt(a.credentials),
+      download_expires_at: a.download_expires_at,
+    };
   }
 }
 module.exports = { Orders, ledger, publicOrder };

@@ -38,7 +38,7 @@ Content-Type: application/json
 {"quantity":10,"need_oauth":true}
 ```
 
-返回 202 和订单 ID。相同用户同键同请求返回原订单（200），请求不同则 409。查询详情后，通过 accounts 的 order_id 过滤获取已交付结果。默认调用 120 次/用户/分钟、下单 20 次/分钟；轮询建议每 5 秒。密钥仅首次完整显示，数据库存摘要，可撤销，按 orders:read / orders:write / accounts:read / credentials:read 授权。
+返回 202 和订单 ID。相同用户同键同请求返回原订单（200），请求不同则 409。查询详情后，通过 accounts 的 order_id 过滤获取已交付结果。访问频率由运营控制台风控配置按业务、客户和 API 密钥管理，网页与 API 共用客户额度；轮询建议每 5 秒。执行限流返回 429 与 Retry-After；客户暂停新订单返回 403，已受理订单的原幂等键确认仍可用（其他频率规则继续适用）。密钥仅首次完整显示，数据库存摘要，可撤销，按 orders:read / orders:write / accounts:read / credentials:read 授权。详见 [风控监控](risk-monitor.md)。
 
 ### 开发者文档
 
@@ -80,7 +80,7 @@ Content-Type: application/json
 
 `/profile` 为个人设置：身份卡、可用/预留积分、订单/完成/进行中/累计消费统计，以及可筛选的注册记录。编辑用户名和修改密码为独立弹窗，改密验证旧密码和两次新密码，成功撤销旧会话与 API Key。关闭订单或资金功能时，相应摘要和关联记录均由服务端裁剪。
 
-运营后台 `/admin/accounts` 支持查看每个交付账号的邮箱、密码、2FA 密钥、当前验证码、全部 OAuth 字段与原始 JSON，以及所属客户、订单、资产、时间和售出同步状态；验证码按需刷新。单个或勾选批量下载：完整 JSON 包含原始交付凭据和 delivery 归属对象，CSV 包含凭据/OAuth/归属，TXT 为邮箱----密码----2FA。CSV 对公式前缀文本添加保护字符；需要逐字保留原始字段时使用 JSON/TXT。每批 1～100 个，未知 ID 拒绝整批导出；按请求 ID 顺序去重。
+运营后台 `/admin/accounts` 支持查看每个交付账号的邮箱、密码、2FA 密钥、当前验证码、全部 OAuth 字段与原始 JSON，以及所属客户、订单、资产、时间和售出同步状态；验证码按需刷新。单个或勾选批量下载：完整 JSON 包含原始交付凭据和 delivery 归属对象，CSV 包含凭据/OAuth/归属，TXT 为邮箱----密码----2FA。CSV 对公式前缀文本添加保护字符；需要逐字保留原始字段时使用 JSON/TXT。每批 1～1000 个，未知 ID 拒绝整批导出；按请求 ID 顺序去重。
 
 管理读取 `/api/admin/v1/accounts/:id/credentials` 与导出 `/api/admin/v1/accounts/export` 仅管理员网页会话可访问，普通用户、匿名和 API Key 不能访问。返回 no-store，读取/导出记录操作者、账号 ID 与格式，不记录凭据。交付列表不包含秘密，只有显式查看/导出时解密；不改账号状态或客户积分。上述管理和站内资金接口不进入客户 `/open/v1` 文档，九个公开接口协议不变。
 
@@ -131,3 +131,8 @@ node scripts/platform-preview.js
 仅完整 OAuth 交付可导出 CPA/SUB，混入标准账号整批拒绝。原始完整 JSON 和 CSV 接口保留。网页支持选择当前筛选结果最多 1000 个，选择期间显示读取数量，生成下载期间持续转圈显示账号数并阻止重复提交。
 
 开放 API accounts/export 新增 cpa、sub 两个 format，单次上限从 100 扩为 1000。仍返回 filename / content；仅 CPA ZIP 额外返回 encoding=base64，调用方须解码为字节再写文件。其他格式 content 为 UTF-8 正文。OpenAPI 升至 1.2.0，Python/Node.js 示例包含 Base64 处理，原 txt/csv/json 调用保持兼容。
+
+
+## 我的账号分组与领取期限
+
+用户账号按订单展开或按账号平铺，支持整单、跨单、跨页选择，合计最多 1000 条；交付成功起算 72 小时后移除用户端可领取资料，运营后台完整保留。公开 API 同样执行到期限制，列表及凭据新增 `download_expires_at`，OpenAPI 1.3.0。详情及上线旧数据行为见 [account-retention.md](account-retention.md)。

@@ -129,7 +129,7 @@ function requestFeature(path, method) {
   if (p === "/products" || (p === "/registration-orders" && method === "POST"))
     return "register";
   if (p.startsWith("/registration-orders")) return "orders";
-  if (p.startsWith("/accounts")) return "accounts";
+  if (p.startsWith("/accounts") || p === "/account-orders") return "accounts";
   if (["/ledger", "/redeem", "/wallet"].includes(p)) return "wallet";
   if (p.startsWith("/keys")) return "keys";
   return null;

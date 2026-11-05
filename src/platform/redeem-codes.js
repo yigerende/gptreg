@@ -3,6 +3,22 @@ const { id, token, digest, fail, integer } = require("./security");
 const { audit } = require("./db");
 const { search, option } = require("./reports");
 
+// Bound only redemption-code transactions; registration/order timeouts stay intact.
+async function redeemTransaction(db, work) {
+  try {
+    return await db.tx(async (q) => {
+      await q.query("SET LOCAL lock_timeout='3s'");
+      await q.query("SET LOCAL statement_timeout='10s'");
+      return work(q);
+    });
+  } catch (error) {
+    if (["55P03", "57014", "40P01"].includes(error.code)) {
+      fail(false, "兑换码操作繁忙，请稍后重试", 503);
+    }
+    throw error;
+  }
+}
+
 function registerRedeemCodes(app, db, crypt) {
   app.get("/api/admin/v1/redeem-codes", async (r) => {
     const limit = integer(Number(r.query.limit || 50), 1, 100, "limit");
@@ -36,7 +52,7 @@ function registerRedeemCodes(app, db, crypt) {
     ).trim();
     fail(batch.length > 0 && batch.length <= 80, "批次名称须为 1～80 字");
     const codes = [];
-    await db.tx(async (q) => {
+    await redeemTransaction(db, async (q) => {
       for (let i = 0; i < count; i++) {
         const code = `GR-${token()}`;
         await q.query(
@@ -72,7 +88,7 @@ function registerRedeemCodes(app, db, crypt) {
       ["copy", "export", "enable", "disable", "delete"].includes(action),
       "批量操作无效",
     );
-    return db.tx(async (q) => {
+    return redeemTransaction(db, async (q) => {
       if (["copy", "export"].includes(action)) {
         const rows = (
           await q.query(
@@ -132,7 +148,7 @@ function registerRedeemCodes(app, db, crypt) {
   });
   app.patch("/api/admin/v1/redeem-codes/:id", async (r) => {
     fail(typeof r.body?.disabled === "boolean", "状态格式错误");
-    await db.tx(async (q) => {
+    await redeemTransaction(db, async (q) => {
       const result = await q.query(
         "UPDATE platform_redeem_codes SET disabled=$2 WHERE id=$1 AND redeemed_by IS NULL RETURNING id",
         [r.params.id, r.body.disabled],
@@ -148,4 +164,4 @@ function registerRedeemCodes(app, db, crypt) {
     return { ok: true };
   });
 }
-module.exports = { registerRedeemCodes };
+module.exports = { registerRedeemCodes, redeemTransaction };

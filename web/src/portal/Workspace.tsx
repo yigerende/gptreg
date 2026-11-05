@@ -1,20 +1,17 @@
 import { useState, useEffect, lazy, Suspense, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Check, Copy, Download, Plus } from "lucide-react";
+import { ArrowUpRight, Check, Plus } from "lucide-react";
 import {
   call,
   copy,
   date,
-  download,
   statusNames,
   orderPending,
   type Row,
 } from "./client";
 import { Link } from "../router";
-import { Filters, Pagination } from "./Insights";
 import ServiceFeatures from "./ServiceFeatures";
 import { useOrderSubmission } from "./orderSubmission";
-import { ExportProgress, selectFilteredAccounts } from "./AccountExport";
 const AdminOrderActions = lazy(() => import("./AdminOrderActions"));
 export function Modal({
   title,
@@ -245,8 +242,6 @@ export default function Workspace({
 }) {
   const a = useAction(),
     [detail, setDetail] = useState(""),
-    [selected, setSelected] = useState<string[]>([]),
-    [secret, setSecret] = useState<Row | null>(null),
     [keyText, setKeyText] = useState(""),
     [keyName, setKeyName] = useState(""),
     [scopes, setScopes] = useState([
@@ -254,19 +249,7 @@ export default function Workspace({
       "orders:write",
       "accounts:read",
       "credentials:read",
-    ]),
-    [offset, setOffset] = useState(0),
-    [filters, setFilters] = useState<Row>(() => ({
-      ...(page === "accounts" &&
-      new URLSearchParams(location.search).get("order_id")
-        ? { order_id: new URLSearchParams(location.search).get("order_id") }
-        : {}),
-    }));
-  useEffect(() => {
-    setOffset(0);
-    setSelected([]);
-  }, [page]);
-  const listPath = page === "accounts" ? "/accounts" : "/keys";
+    ]);
   const q = useQueryClient();
   const submission = useOrderSubmission(
     user.id,
@@ -280,35 +263,12 @@ export default function Workspace({
   );
   const { quantity, setQuantity, oauth, setOauth } = submission;
   const { data, error, refetch, isFetching } = useQuery({
-    queryKey: ["workspace-list", page, offset, filters],
-    queryFn: () =>
-      call(
-        `/api/user/v1${listPath}?${new URLSearchParams({ limit: "50", offset: String(offset), ...filters })}`,
-      ),
+    queryKey: ["workspace-list", page],
+    queryFn: () => call("/api/user/v1/keys"),
     enabled: page !== "register",
   });
   const rows: Row[] = data?.items || [],
     price = oauth ? pub.price_oauth : pub.price_standard;
-  const [exporting, setExporting] = useState("");
-  async function exported(format: string) {
-    if (exporting) return;
-    setExporting(
-      `正在准备 ${selected.length} 个账号的 ${format.toUpperCase()} 文件`,
-    );
-    try {
-      const r = await a.run(
-        () =>
-          call("/api/user/v1/accounts/export", "POST", {
-            ids: selected,
-            format,
-          }),
-        "导出已准备",
-      );
-      if (r) download(r.filename, r.content, r.encoding);
-    } finally {
-      setExporting("");
-    }
-  }
   return (
     <>
       <Feedback a={a} />
@@ -495,152 +455,6 @@ export default function Workspace({
           </div>
         </>
       )}
-      {page === "accounts" && (
-        <>
-          <div className="p-page-heading">
-            <div>
-              <h1>我的账号</h1>
-              <p>每个账号都与你的订单关联，凭据仅对你可见。</p>
-            </div>
-            <div className="p-inline">
-              <button
-                className="p-button secondary"
-                disabled={!selected.length || a.busy}
-                onClick={() => exported("txt")}
-              >
-                <Download size={16} />
-                邮箱-密码-2fa
-              </button>
-              <button
-                className="p-button secondary"
-                disabled={!selected.length || a.busy}
-                onClick={() => exported("csv")}
-              >
-                导出 CSV
-              </button>
-              <button
-                className="p-button"
-                disabled={!selected.length || a.busy}
-                onClick={() => exported("cpa")}
-              >
-                CPA
-              </button>
-              <button
-                className="p-button"
-                disabled={!selected.length || a.busy || Boolean(exporting)}
-                onClick={() => exported("sub")}
-              >
-                SUB
-              </button>
-            </div>
-          </div>
-          <ExportProgress text={exporting} />
-          <div className="p-inline p-export-selection">
-            <span>已选择 {selected.length} 个账号</span>
-            <button
-              className="p-button secondary"
-              disabled={a.busy || Boolean(exporting)}
-              onClick={async () => {
-                try {
-                  const result = await a.run(
-                    () =>
-                      selectFilteredAccounts(
-                        "/api/user/v1/accounts",
-                        filters,
-                        setExporting,
-                      ),
-                    "已选择当前筛选结果，最多 1000 个",
-                  );
-                  if (result) setSelected(result.ids);
-                } finally {
-                  setExporting("");
-                }
-              }}
-            >
-              选择筛选结果（最多 1000）
-            </button>
-            <button
-              className="p-link"
-              disabled={a.busy || Boolean(exporting)}
-              onClick={() => setSelected([])}
-            >
-              清空选择
-            </button>
-          </div>
-          <p className="p-muted p-fine">
-            CPA：每个账号一个 JSON，批量下载 ZIP；SUB：多个账号合并一个
-            JSON。两者均需含 OAuth；普通账号请选择“邮箱-密码-2fa”。
-          </p>
-          <Filters
-            value={filters}
-            onChange={(v) => {
-              setFilters(v);
-              setOffset(0);
-              setSelected([]);
-            }}
-            mode
-            placeholder="搜索邮箱或订单编号"
-          />
-          <section className="p-card">
-            <Table
-              rows={rows}
-              columns={[
-                {
-                  title: "选择",
-                  render: (r) => (
-                    <input
-                      type="checkbox"
-                      aria-label={`选择 ${r.email}`}
-                      checked={selected.includes(r.id)}
-                      onChange={(e) =>
-                        setSelected(
-                          e.target.checked
-                            ? [...selected, r.id]
-                            : selected.filter((x) => x !== r.id),
-                        )
-                      }
-                    />
-                  ),
-                },
-                { title: "邮箱", render: (r) => r.email },
-                {
-                  title: "模式",
-                  render: (r) => (r.need_oauth ? "含 OAuth" : "标准账号"),
-                },
-                { title: "交付时间", render: (r) => date(r.created_at) },
-                {
-                  title: "操作",
-                  render: (r) => (
-                    <button
-                      className="p-link"
-                      onClick={async () => {
-                        const v = await a.run(
-                          () =>
-                            call(`/api/user/v1/accounts/${r.id}/credentials`),
-                          "",
-                        );
-                        if (v) setSecret({ ...v, id: r.id });
-                      }}
-                    >
-                      查看凭据
-                    </button>
-                  ),
-                },
-              ]}
-            />
-            <button
-              className="p-link"
-              onClick={() =>
-                setSelected(
-                  selected.length === rows.length ? [] : rows.map((r) => r.id),
-                )
-              }
-            >
-              选择 / 取消本页全部
-            </button>
-          </section>
-        </>
-      )}
       {page === "keys" && (
         <>
           <div className="p-page-heading">
@@ -740,71 +554,7 @@ export default function Workspace({
           </section>
         </>
       )}
-      {page === "accounts" && (
-        <Pagination
-          offset={offset}
-          total={data?.total}
-          count={rows.length}
-          onChange={(n) => {
-            setOffset(n);
-            setSelected([]);
-          }}
-        />
-      )}
       {detail && <OrderDetail id={detail} onClose={() => setDetail("")} />}
-      {secret && (
-        <Modal title="账号凭据" onClose={() => setSecret(null)}>
-          {[
-            ["邮箱", secret.email],
-            ["密码", secret.password],
-            ["2FA 密钥", secret.totp_secret],
-            ["当前验证码", secret.totp_code],
-          ].map(([label, value]) => (
-            <label key={label}>
-              {label}
-              <div className="p-inline">
-                <input readOnly value={value} />
-                <button
-                  className="p-button secondary"
-                  onClick={() => a.run(() => copy(value), "已复制")}
-                >
-                  <Copy size={15} />
-                </button>
-              </div>
-            </label>
-          ))}
-          <p className="p-muted">
-            验证码每 30 秒变化。读取时剩余 {secret.totp_expires_in} 秒。
-          </p>
-          <div className="p-inline">
-            <button
-              className="p-button secondary"
-              onClick={async () => {
-                const v = await a.run(
-                  () => call(`/api/user/v1/accounts/${secret.id}/credentials`),
-                  "验证码已刷新",
-                );
-                if (v) setSecret({ ...v, id: secret.id });
-              }}
-            >
-              刷新验证码
-            </button>
-            {secret.oauth && (
-              <button
-                className="p-button"
-                onClick={() =>
-                  download(
-                    `${secret.email}-oauth.json`,
-                    JSON.stringify(secret.oauth, null, 2),
-                  )
-                }
-              >
-                下载 OAuth JSON
-              </button>
-            )}
-          </div>
-        </Modal>
-      )}
       {keyText && (
         <Modal title="API Key 创建成功" onClose={() => setKeyText("")}>
           <p>完整密钥仅显示一次，请立即保存。</p>

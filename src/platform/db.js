@@ -63,6 +63,7 @@ class Database {
       await c.query(
         fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8"),
       );
+      await c.query(fs.readFileSync(path.join(__dirname, "risk-schema.sql"), "utf8"));
       await c.query(
         "INSERT INTO platform_settings(id,value) VALUES(1,$1) ON CONFLICT DO NOTHING",
         [defaults],

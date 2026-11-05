@@ -93,11 +93,6 @@ function registerAuth(app, db, crypt) {
     };
   });
   app.post("/api/auth/login", async (r, reply) => {
-    fail(
-      await db.limit(`login:${r.ip}`, 10),
-      "登录尝试过多，请一分钟后再试",
-      429,
-    );
     const v = r.body || {};
     fail(
       typeof v.password === "string" && v.password.length <= 128,
@@ -115,6 +110,7 @@ function registerAuth(app, db, crypt) {
       "账号或密码不正确，或账户已停用",
       401,
     );
+    r.user = u;
     return session(r, reply, u.id);
   });
   app.post("/api/auth/logout", async (r, reply) => {

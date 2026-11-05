@@ -681,7 +681,8 @@ export default function Docs({
               </p>
               <p>
                 网页与 API 订单共用注册队列，同时受全平台和单用户并发上限约束。
-                单用户的多笔订单及 OAuth 任务合并计算，超出名额的账号自动排队，任务结束后补位。
+                单用户的多笔订单及 OAuth
+                任务合并计算，超出名额的账号自动排队，任务结束后补位。
                 并发上限由运营配置；请求已受理不代表所有账号立即同时开始。
               </p>
             </Section>
@@ -721,6 +722,13 @@ export default function Docs({
               </p>
             </Section>
             <Section id="workflow" title="订单到交付">
+              <div className="p-alert">
+                <strong>账号资料领取期为交付后 72 小时。</strong>{" "}
+                请根据账号列表或凭据中的 <code>download_expires_at</code>{" "}
+                提前下载。到期后网页及 API
+                列表不再显示该账号，读取凭据和导出均返回
+                404；历史订单保留，运营后台保留售后记录。同一订单的账号按各自交付时间分别计时。
+              </div>
               <ol className="d-flow">
                 <li>
                   <a href="#get_me">查询可用积分</a>与
@@ -743,7 +751,8 @@ export default function Docs({
                 <li>
                   使用账号 <code>id</code>{" "}
                   <a href="#get_credentials">读取凭据</a>，或每批不超过 1000 个
-                  ID <a href="#export_accounts">导出</a>。完整资料选 JSON，导入 CPA 选 cpa，导入 sub2api 选 sub。
+                  ID <a href="#export_accounts">导出</a>。完整资料选 JSON，导入
+                  CPA 选 cpa，导入 sub2api 选 sub。
                 </li>
               </ol>
               <details className="d-details">
@@ -878,8 +887,8 @@ export default function Docs({
                   409。只有确定创建另一笔订单时才生成新键；示例占位符必须替换。
                 </li>
                 <li>
-                  每用户每分钟总计 120 次 API 调用，下单另限每分钟 20
-                  次。查询进度建议间隔 5 秒。
+                  访问频率由平台按业务类型、客户及 API 密钥配置；网页与 API
+                  共用客户额度。查询进度建议间隔 5 秒。
                 </li>
                 <li>
                   429 若带 Retry-After，按指定秒数等待；没有时至少等待 60

@@ -1,0 +1,297 @@
+.p-retention-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 22px 26px;
+  margin: 0 0 24px;
+  border: 1px solid #ecd3a5;
+  border-radius: 16px;
+  color: #845818;
+  background: linear-gradient(120deg, #fff8e9, #fffdf7);
+}
+.p-retention-banner > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.p-retention-banner > div {
+  flex: 1;
+}
+.p-retention-banner strong {
+  font-size: 17px;
+}
+.p-retention-banner p {
+  font-size: 13px;
+  line-height: 1.85;
+  margin: 9px 0;
+  max-width: 860px;
+}
+.p-retention-banner span {
+  font-size: 11px;
+  color: #9c7942;
+}
+.p-retention-banner > b {
+  font-size: 34px;
+  line-height: 1.2;
+  text-align: center;
+  padding-left: 16px;
+}
+.p-retention-banner > b small {
+  display: block;
+  font-size: 11px;
+  margin-top: 7px;
+  font-weight: 500;
+}
+.p-account-deliveries.p-card {
+  padding: 0;
+  overflow: hidden;
+}
+.p-account-selection {
+  padding: 18px 24px;
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  background: #f8fbfc;
+  border-block: 1px solid #e9eff2;
+}
+.p-account-selection strong {
+  font-size: 12px;
+  color: #728791;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.p-account-selection strong b {
+  color: #25747b;
+  font-size: 19px;
+}
+.p-account-selection .p-button {
+  padding: 9px 12px;
+  font-size: 12px;
+}
+.p-account-deliveries > .p-export-progress {
+  margin: 12px 24px;
+}
+.p-account-table-wrap {
+  overflow-x: auto;
+}
+.p-account-table {
+  width: 100%;
+  min-width: 940px;
+  border-collapse: collapse;
+  font-size: 12px;
+  text-align: left;
+}
+.p-account-table th {
+  padding: 14px 16px;
+  color: #738894;
+  background: #f5f8f9;
+  font-size: 11px;
+  font-weight: 500;
+}
+.p-account-table td {
+  padding: 18px 16px;
+  border-top: 1px solid #edf1f3;
+  line-height: 1.7;
+  vertical-align: middle;
+}
+.p-account-table th:first-child,
+.p-account-table td:first-child {
+  width: 48px;
+  text-align: center;
+}
+.p-account-table input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #27767b;
+}
+.p-account-table td small {
+  display: block;
+  font-size: 10px;
+  color: #879aa5;
+}
+.p-account-table time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+.p-account-mode {
+  background: #edf6f5;
+  color: #407777;
+  padding: 4px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.p-account-expiry.soon {
+  color: #b86724;
+}
+.p-account-expiry.soon small {
+  color: #b86724;
+}
+.p-account-expiry small {
+  display: block;
+}
+.p-order-expand {
+  display: flex;
+  text-align: left;
+  gap: 9px;
+  align-items: center;
+  border: 0;
+  background: none;
+  color: #365563;
+  cursor: pointer;
+  padding: 0;
+}
+.p-order-expand > svg {
+  flex-shrink: 0;
+}
+.p-order-expand code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.p-order-expand small {
+  margin-top: 5px;
+}
+.p-account-groups tr.expanded {
+  background: #f2f8f8;
+}
+.p-account-table .p-account-detail-row > td {
+  padding: 0 16px 18px;
+  background: #f2f8f8;
+  text-align: left;
+}
+.p-order-accounts {
+  background: white;
+  border: 1px solid #e3edee;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.p-account-deliveries > .p-pagination,
+.p-order-accounts > .p-pagination {
+  padding: 18px 24px;
+  margin: 0;
+}
+.p-account-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+}
+.p-account-filter-fields {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  min-width: 0;
+}
+.p-account-filter code {
+  overflow-wrap: anywhere;
+}
+.p-account-order-ref {
+  max-width: 260px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .p-retention-banner {
+    padding: 18px;
+    gap: 12px;
+  }
+  .p-retention-banner > b {
+    display: none;
+  }
+  .p-retention-banner strong {
+    font-size: 15px;
+  }
+  .p-account-selection {
+    padding: 16px;
+  }
+  .p-account-selection > .p-inline {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .p-account-deliveries .p-records-heading {
+    flex-wrap: wrap;
+    padding: 20px 16px;
+  }
+  .p-account-deliveries .p-center-filters {
+    padding: 0 16px;
+  }
+  .p-account-table,
+  .p-account-table tbody,
+  .p-account-table tr,
+  .p-account-table td {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+  .p-account-table thead {
+    display: block;
+  }
+  .p-account-table thead tr {
+    display: flex;
+    padding: 10px 16px;
+  }
+  .p-account-table thead th {
+    display: none;
+  }
+  .p-account-table thead th:first-child {
+    display: block;
+    width: auto;
+    padding: 0;
+  }
+  .p-account-table thead th:first-child:after {
+    content: " 本页选择";
+    margin-left: 8px;
+  }
+  .p-account-groups thead {
+    display: none;
+  }
+  .p-account-table tbody > tr {
+    padding: 14px 16px;
+    border-top: 1px solid #e6edef;
+  }
+  .p-account-table td,
+  .p-account-table td:first-child {
+    width: 100%;
+    border: 0;
+    display: flex;
+    text-align: left;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 7px 0;
+  }
+  .p-account-table td:before {
+    content: attr(data-label);
+    color: #81929b;
+    font-size: 11px;
+    flex-shrink: 0;
+    width: 70px;
+  }
+  .p-account-table td > * {
+    min-width: 0;
+  }
+  .p-account-table td:nth-child(2) {
+    flex-wrap: wrap;
+  }
+  .p-account-table td:nth-child(2) > small {
+    margin-left: auto;
+  }
+  .p-order-expand {
+    flex: 1;
+  }
+  .p-account-table .p-account-detail-row {
+    padding: 0 8px 16px;
+  }
+  .p-account-table .p-account-detail-row > td {
+    display: block;
+    padding: 0;
+  }
+  .p-account-detail-row > td:before {
+    display: none;
+  }
+  .p-account-deliveries > .p-pagination,
+  .p-order-accounts > .p-pagination {
+    padding: 14px 12px;
+  }
+}
