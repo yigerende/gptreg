@@ -350,6 +350,14 @@ function buildApp(options = {}) {
     reply.header('Cache-Control', 'no-store');
     return smsSettings.test(request.params.provider, request.body || {});
   });
+  app.post('/api/v1/sms/settings/:provider/countries', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return smsSettings.countries(request.params.provider, request.body || {});
+  });
+  app.post('/api/v1/sms/settings/:provider/quotes', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return smsSettings.quotes(request.params.provider, request.body || {});
+  });
   app.put('/api/v1/sms/settings/:provider', async (request, reply) => {
     // Legacy live runs do not have a private SMS config snapshot yet.
     if (runManager.starting || runManager.auxiliaryStarting || runManager.customerStarting || runManager.activeRuns().some((r) => !r.state.smsConfig)) throw new HttpError(409, '请等待正在启动或旧版任务结束后保存短信配置');

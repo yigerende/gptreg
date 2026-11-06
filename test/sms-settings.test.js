@@ -56,3 +56,37 @@ test('querying inactive SMSBower while Hero is active never borrows the Hero key
   assert.equal(observed.apiKey, '');
   assert.equal(observed.apiKeyEnv, 'SMSBOWER_API_KEY');
 });
+
+test('SMSBower refresh loads live countries and quoted inventory without saving or purchasing', async t => {
+  const calls = [];
+  const { app, file } = fixture(t, { smsSettingsFetch: async url => {
+    const u = new URL(url); calls.push(u);
+    const action = u.searchParams.get('action');
+    assert.equal(u.searchParams.get('api_key'), 'draft-bower');
+    if (action === 'getCountries') return new Response(JSON.stringify({ 1003: { id: 1003, eng: 'Bermuda', chn: '百慕大' } }));
+    assert.equal(action, 'getPricesV3');
+    assert.equal(u.searchParams.get('country'), '1003');
+    assert.equal(u.searchParams.get('service'), 'dr');
+    return new Response(JSON.stringify({ 1003: { dr: { 1: { price: .03, count: 5 }, 2: { price: .07, count: 9 }, 3: { price: .01, count: 0 } } } }));
+  } });
+  const before = fs.readFileSync(file, 'utf8');
+  const payload = { apiKey: 'draft-bower', countries: [], service: 'dr', maxPrice: .055 };
+  let r = await app.inject({ method: 'POST', url: '/api/v1/sms/settings/smsbower/countries', payload });
+  assert.equal(r.statusCode, 200); assert.deepEqual(r.json().countries.map(c => c.id), ['1003']);
+  assert.deepEqual(calls.map(u => u.searchParams.get('action')), ['getCountries']);
+  r = await app.inject({ method: 'POST', url: '/api/v1/sms/settings/smsbower/quotes', payload: { ...payload, countries: [{ id: '1003' }] } });
+  assert.equal(r.statusCode, 200); const quote = r.json().market.countries[0];
+  assert.equal(quote.cheapestPrice, .03); assert.equal(quote.inventory, 14); assert.equal(quote.affordableInventory, 5);
+  assert.deepEqual(calls.map(u => u.searchParams.get('action')), ['getCountries', 'getPricesV3']);
+  assert.equal(r.body.includes('draft-bower'), false); assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v1/sms/settings/smsbower/quotes', payload })).statusCode, 400);
+});
+
+test('SMSBower catalog failures preserve an error and failed quotes never show zero inventory', async t => {
+  const { app } = fixture(t, { smsSettingsFetch: async () => new Response('BAD_KEY') });
+  const payload = { apiKey: 'draft-bower', countries: [{ id: '6' }], maxPrice: .055 };
+  const list = (await app.inject({ method: 'POST', url: '/api/v1/sms/settings/smsbower/countries', payload })).json();
+  assert.equal(list.ok, false); assert.equal(list.countries, undefined); assert.equal(list.code, 'AUTH_FAILED');
+  const quote = (await app.inject({ method: 'POST', url: '/api/v1/sms/settings/smsbower/quotes', payload })).json().market.countries[0];
+  assert.equal(quote.issue, 'AUTH_FAILED'); assert.equal(quote.inventory, null); assert.equal(quote.affordableInventory, null);
+});

@@ -1,6 +1,6 @@
 'use strict';
 
-const { createSmsProvider, SMSBOWER_COUNTRY_CATALOG } = require('../sms-provider');
+const { createSmsProvider } = require('../sms-provider');
 const { PROVIDERS, normalizeHero, effectiveSmsConfig, smsFailure } = require('../sms-settings');
 const { getFirefoxFunCredentials } = require('../firefox-fun-credentials');
 const { summarizeSmsPreflight } = require('../preflight-resources');
@@ -61,6 +61,30 @@ class SmsSettingsService {
     else Object.assign(sms, publicFields);
     return this.configService.update({ config: { sms }, secretPatch: key ? { [provider === 'hero-sms' ? 'heroSmsApiKey' : provider === 'firefox' ? 'firefoxToken' : 'smsApiKey']: key } : {} });
   }
+  async countries(provider, input = {}) {
+    if (provider !== 'smsbower') throw new HttpError(400, '此国家刷新接口仅用于 SMSBower');
+    const client = createSmsProvider(this.settings(provider, input));
+    try {
+      const countries = await client.getCountries();
+      if (!countries.length) throw new Error('Empty country catalog');
+      return { ok: true, provider, countries, message: `已刷新 ${countries.length} 个国家，原有勾选保持不变。` };
+    } catch (error) { return { ok: false, provider, ...smsFailure(error) }; }
+  }
+  async quotes(provider, input = {}) {
+    if (provider !== 'smsbower') throw new HttpError(400, '此报价接口仅用于 SMSBower');
+    const config = this.settings(provider, input);
+    if (config.countries.length !== 1 || !/^\d+$/.test(String(config.countries[0]?.id ?? '')))
+      throw new HttpError(400, '请选择一个有效国家查询报价');
+    const client = createSmsProvider(config), country = { id: String(config.countries[0].id) };
+    let prices = [], issue = '';
+    try {
+      prices = (await client.getPrices({ country: country.id, service: client.service }))
+        .filter(p => (p.country == null || String(p.country) === country.id) && (p.service == null || String(p.service) === client.service));
+    } catch (error) { issue = smsFailure(error).code; }
+    const market = summarizeSmsPreflight({ countries: [{ country, prices, issue }] }, config);
+    for (const row of market.countries) row.message = row.issue ? '请检查国家报价或接口配置' : '';
+    return { ok: true, provider, currency: 'USD', market, message: issue ? '报价查询失败，请重试' : '已查询所选国家报价与库存' };
+  }
   async test(provider, input = {}) {
     const config = this.settings(provider, input);
     // Pass only this provider's settings: nested copies from another provider
@@ -69,8 +93,7 @@ class SmsSettingsService {
     const started = Date.now();
     try {
       const balance = await client.getBalance();
-      const countries = provider === 'firefox' ? await client.listCountriesForConfig()
-        : provider === 'smsbower' ? SMSBOWER_COUNTRY_CATALOG : await client.getCountries();
+      const countries = provider === 'firefox' ? await client.listCountriesForConfig() : await client.getCountries();
       let market = null;
       let marketError = null;
       if (config.countries?.length || provider === 'firefox') {

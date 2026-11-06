@@ -799,6 +799,10 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .sms-country-heading > div { display: grid; gap: 4px; min-width: 0; }
 .sms-country-heading strong { font-size: 11px; }
 .sms-country-heading small { color: var(--muted); font-size: 9px; line-height: 14px; }
+.sms-country-heading > button { flex-shrink: 0; }
+.sms-country-help { display: block; margin: 8px 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.sms-bower-country-option .sms-country-quote { display: grid; gap: 3px; text-align: right; white-space: normal; }
+.sms-bower-country-option .sms-country-quote small { white-space: normal; }
 .sms-country-trigger { width: 100%; min-height: 45px; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-2); color: var(--text); cursor: pointer; text-align: left; transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease; }
 .sms-country-trigger:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--surface); }
 .sms-country-trigger[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent); }

@@ -40,12 +40,24 @@ function summarizeCountryMarket(market = {}, maxPrice = NaN) {
   const eligible = market.eligible === true
     || (market.eligible !== false && cheapestPrice !== null && (!Number.isFinite(maxPrice) || cheapestPrice <= maxPrice));
   const country = market.country || { id: market.id || '' };
+  const readFailed = market.issue && !['SMS_INVENTORY_EMPTY', 'SMS_PRICE_ABOVE_MAX'].includes(market.issue);
+  const countsKnown = !readFailed && prices.every(p => {
+    const n = p.count ?? p.quantity ?? p.available;
+    return n !== undefined && n !== null && n !== '' && Number.isFinite(Number(n)) && Number(n) >= 0;
+  });
+  const inventory = countsKnown ? availableOffers.reduce((sum, p) => sum + Number(p.count ?? p.quantity ?? p.available), 0) : null;
+  const affordableInventory = countsKnown ? availableOffers.reduce((sum, p) => {
+    const price = priceValue(p);
+    return sum + (price !== null && (!Number.isFinite(maxPrice) || price <= maxPrice) ? Number(p.count ?? p.quantity ?? p.available) : 0);
+  }, 0) : null;
   return {
     id: String(country.id ?? country.country ?? country.code ?? '').trim(),
     name: String(country.name ?? country.eng ?? country.title ?? '').trim(),
     country,
     service: market.service || null,
     cheapestPrice,
+    inventory,
+    affordableInventory,
     offers: availableOffers.length,
     lowestOffers,
     eligible,
