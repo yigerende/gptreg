@@ -1307,10 +1307,12 @@ describe('console shell', () => {
     fireEvent.change(screen.getByLabelText('数量'), { target: { value: '18' } });
     fireEvent.blur(screen.getByLabelText('数量'));
     fireEvent.change(screen.getByLabelText('会话粘性时间（分钟）'), { target: { value: '45' } });
+    expect(screen.getByLabelText('API 地址（问号前）')).toHaveValue('https://white.1024proxy.com/white/api');
+    fireEvent.change(screen.getByLabelText('API 地址（问号前）'), { target: { value: 'https://proxy-api.example:8443/v2/extract' } });
     fireEvent.click(screen.getByRole('combobox', { name: '协议' }));
     fireEvent.click(await screen.findByRole('option', { name: 'SOCKS5' }));
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
-    await waitFor(() => expect(saves).toEqual([{ provider: '1024proxy', count: 18, protocol: 'socks5', sessionMinutes: 45 }]));
+    await waitFor(() => expect(saves).toEqual([{ provider: '1024proxy', count: 18, protocol: 'socks5', sessionMinutes: 45, apiBaseUrl: 'https://proxy-api.example:8443/v2/extract' }]));
     expect(await screen.findByRole('progressbar', { name: '国家池更新进度' })).toHaveAttribute('max', '2');
     expect(screen.getByRole('button', { name: '更新中' })).toBeDisabled();
     progress = { ...progress, status: 'partial', done: 2, result: { succeeded: 1, failed: 1, pulled: 18, results: [{ sourceId: 'jp', countryCode: 'JP', ok: false, error: '服务暂不可用' }] } };
@@ -1324,11 +1326,13 @@ describe('console shell', () => {
     await chooseProvider('1024 Proxy');
     expect(screen.getByLabelText('数量')).toHaveValue(18);
     expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(45);
+    expect(screen.getByLabelText('API 地址（问号前）')).toHaveValue('https://proxy-api.example:8443/v2/extract');
     rendered.unmount(); client.clear(); client = makeClient(); rendered = render(view());
     await chooseProvider('1024 Proxy');
     await waitFor(() => expect(screen.getByLabelText('数量')).toHaveValue(18));
     expect(screen.getByRole('combobox', { name: '协议' })).toHaveTextContent('SOCKS5');
     expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(45);
+    expect(screen.getByLabelText('API 地址（问号前）')).toHaveValue('https://proxy-api.example:8443/v2/extract');
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(saves).toHaveLength(2));
     rendered.unmount(); client.clear();
@@ -1376,7 +1380,7 @@ describe('console shell', () => {
     fireEvent.blur(count);
     fireEvent.click(screen.getByRole('button', { name: '构建并拉取' }));
 
-    await waitFor(() => expect(buildRequest).toEqual({ provider: 'cliproxy', countryCode: 'US', count: 3, protocol: 'http', sessionMinutes: 15 }));
+    await waitFor(() => expect(buildRequest).toEqual({ provider: 'cliproxy', countryCode: 'US', count: 3, protocol: 'http', sessionMinutes: 15, apiBaseUrl: 'https://api.cliproxy.io/white/api' }));
     expect(await screen.findByText('已拉取 US 国家池，目标 3 条')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('已拉取 US 国家池，目标 3 条')).not.toBeInTheDocument(), { timeout: 4000 });
   });

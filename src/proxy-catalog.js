@@ -23,6 +23,9 @@ const PROXY_API_TEMPLATES = Object.freeze({
   '1024proxy': DEFAULT_1024_API_TEMPLATE,
   cliproxy: DEFAULT_CLIPROXY_API_TEMPLATE,
 });
+const PROXY_API_BASE_URLS = Object.freeze(Object.fromEntries(
+  Object.entries(PROXY_API_TEMPLATES).map(([provider, template]) => [provider, apiBaseUrlOf(template)]),
+));
 const PROXY_API_LABELS = Object.freeze({
   '711proxy': '711Proxy',
   b2proxy: 'B2Proxy',
@@ -114,7 +117,31 @@ function normalizeProviderSettings(provider, value = {}) {
       : normalizeProxyApiCount(value.count, DEFAULT_PROXY_API_COUNT, provider);
   const protocol = value.protocol ?? DEFAULT_PROXY_API_PROTOCOLS[provider];
   if (!['http', 'socks5'].includes(protocol)) throw new Error('协议只支持 HTTP 或 SOCKS5');
-  return { count, protocol, sessionMinutes: normalizeSessionMinutes(provider, value.sessionMinutes) };
+  return { count, protocol, sessionMinutes: normalizeSessionMinutes(provider, value.sessionMinutes), apiBaseUrl: normalizeProviderBaseUrl(provider, value.apiBaseUrl) };
+}
+
+function apiBaseUrlOf(value) {
+  const url = new URL(value);
+  url.search = '';
+  url.hash = '';
+  return url.href;
+}
+
+function normalizeProviderBaseUrl(provider, value = PROXY_API_BASE_URLS[provider]) {
+  if (!Object.hasOwn(PROXY_API_BASE_URLS, provider)) throw new Error('不支持的代理厂商');
+  let url;
+  try { url = new URL(typeof value === 'string' ? value.trim() : ''); } catch { /* Validated below. */ }
+  if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password
+    || url.search || url.hash || !url.hostname || value.length > 2048 || /[?#]/.test(value)) {
+    throw new Error('API 地址须填写完整的 http(s)://域名:端口/路径，只填问号前的部分，不含账号密码或参数');
+  }
+  const known = proxyApiProviderFromHost(url.href);
+  if (known && known !== provider) throw new Error('API 地址属于其他代理厂商');
+  return url.href;
+}
+
+function matchesConfiguredApi(value, options) {
+  return Boolean(options.apiBaseUrl) && apiBaseUrlOf(value) === options.apiBaseUrl;
 }
 
 function providerSettingsSnapshot(settings = {}) {
@@ -129,11 +156,12 @@ function parseUrl(value) {
   }
 }
 
-function is711ApiUrl(value) {
+function is711ApiUrl(value, options = {}) {
   try {
     const url = parseUrl(value);
+    if (matchesConfiguredApi(value, options)) return true;
     return ['http:', 'https:'].includes(url.protocol)
-      && /(^|\.)rotgbapi\.711proxy\.com$/i.test(url.hostname)
+      && (/(^|\.)rotgbapi\.711proxy\.com$/i.test(url.hostname) || url.hostname === 'global.rotgbapi.trustsource.live')
       && url.port === '8089'
       && url.pathname.replace(/\/+$/, '') === '/gen';
   } catch {
@@ -141,11 +169,12 @@ function is711ApiUrl(value) {
   }
 }
 
-function isB2ProxyApiUrl(value) {
+function isB2ProxyApiUrl(value, options = {}) {
   try {
     const url = parseUrl(value);
+    if (matchesConfiguredApi(value, options)) return true;
     return ['http:', 'https:'].includes(url.protocol)
-      && url.hostname.toLowerCase() === 'global.rrp.bestgo.work'
+      && (url.hostname === 'global.rrp.bestgo.work')
       && url.port === '8089'
       && url.pathname.replace(/\/+$/, '') === '/gen';
   } catch {
@@ -153,43 +182,46 @@ function isB2ProxyApiUrl(value) {
   }
 }
 
-function is1024ApiUrl(value) {
+function is1024ApiUrl(value, options = {}) {
   try {
     const url = parseUrl(value);
+    if (matchesConfiguredApi(value, options)) return true;
     return url.protocol === 'https:'
-      && url.hostname.toLowerCase() === 'white.1024proxy.com'
+      && (url.hostname === 'white.1024proxy.com')
+      && !url.port
       && url.pathname.replace(/\/+$/, '') === '/white/api';
   } catch {
     return false;
   }
 }
 
-function isCliProxyApiUrl(value) {
+function isCliProxyApiUrl(value, options = {}) {
   try {
     const url = parseUrl(value);
+    if (matchesConfiguredApi(value, options)) return true;
     return url.protocol === 'https:'
-      && url.hostname.toLowerCase() === 'api.cliproxy.io'
+      && (url.hostname === 'api.cliproxy.io')
+      && !url.port
       && url.pathname.replace(/\/+$/, '') === '/white/api';
   } catch {
     return false;
   }
 }
 
-function proxyApiProviderFromHost(value) {
+function proxyApiProviderFromHost(value, settings = {}) {
   try {
     const hostname = parseUrl(value).hostname.toLowerCase();
-    if (/(^|\.)rotgbapi\.711proxy\.com$/i.test(hostname)) return '711proxy';
+    if (/(^|\.)rotgbapi\.711proxy\.com$/i.test(hostname) || hostname === 'global.rotgbapi.trustsource.live') return '711proxy';
     if (hostname === 'global.rrp.bestgo.work') return 'b2proxy';
     if (hostname === 'white.1024proxy.com') return '1024proxy';
     if (hostname === 'api.cliproxy.io') return 'cliproxy';
+    for (const [provider, config] of Object.entries(settings)) {
+      if (config.apiBaseUrl && apiBaseUrlOf(value) === config.apiBaseUrl) return provider;
+    }
     return '';
   } catch {
     return '';
   }
-}
-
-function isProxyApiHost(value) {
-  return Boolean(proxyApiProviderFromHost(value));
 }
 
 function countryFromProxyEntry(entry) {
@@ -200,7 +232,7 @@ function countryFromProxyEntry(entry) {
 
 function normalize711ApiUrl(value, options = {}) {
   const url = parseUrl(value);
-  if (!is711ApiUrl(url.toString())) throw new Error('Only 711Proxy rotating GB API URLs are supported');
+  if (!is711ApiUrl(url.toString(), options)) throw new Error('Only 711Proxy rotating GB API URLs are supported');
   const countryCode = normalizeCountryCode(options.countryCode || url.searchParams.get('region') || GLOBAL_COUNTRY_CODE);
   const count = normalize711Count(options.count, url.searchParams.get('count') || DEFAULT_PROXY_API_COUNT);
   const protocol = normalizeProtocol(options.protocol || url.searchParams.get('proto') || 'http');
@@ -231,7 +263,7 @@ function normalize711ApiUrl(value, options = {}) {
 
 function normalizeB2ProxyApiUrl(value, options = {}) {
   const url = parseUrl(value);
-  if (!isB2ProxyApiUrl(url.toString())) throw new Error('Only B2Proxy rotating GB API URLs are supported');
+  if (!isB2ProxyApiUrl(url.toString(), options)) throw new Error('Only B2Proxy rotating GB API URLs are supported');
   const countryCode = normalizeCountryCode(options.countryCode || url.searchParams.get('region') || 'US');
   if (countryCode === GLOBAL_COUNTRY_CODE) throw new Error('B2Proxy requires a two-letter country code');
   const count = normalizeB2ProxyCount(options.count, url.searchParams.get('count') || B2PROXY_DEFAULT_COUNT);
@@ -264,7 +296,7 @@ function normalizeB2ProxyApiUrl(value, options = {}) {
 function normalizeRegionalProxyApiUrl(value, options = {}, provider) {
   const url = parseUrl(value);
   const label = PROXY_API_LABELS[provider];
-  const valid = provider === '1024proxy' ? is1024ApiUrl(url.toString()) : isCliProxyApiUrl(url.toString());
+  const valid = provider === '1024proxy' ? is1024ApiUrl(url.toString(), options) : isCliProxyApiUrl(url.toString(), options);
   if (!valid) throw new Error(`Only ${label} whitelist API URLs are supported`);
   const countryCode = normalizeCountryCode(options.countryCode || url.searchParams.get('region') || 'US');
   if (countryCode === GLOBAL_COUNTRY_CODE) throw new Error(`${label} requires a two-letter country code`);
@@ -299,8 +331,12 @@ function normalizeRegionalProxyApiUrl(value, options = {}, provider) {
 }
 
 function normalizeProxyApiUrl(value, options = {}) {
+  const url = parseUrl(value);
+  if (url.username || url.password || url.hash) throw new Error('代理提取 API 不支持 URL 账号密码或片段');
   const detected = proxyApiProviderFromHost(value);
   const provider = String(options.provider || detected || '').toLowerCase();
+  if (detected && detected !== provider) throw new Error('Proxy API provider does not match the URL host');
+  if (options.apiBaseUrl !== undefined) options = { ...options, apiBaseUrl: normalizeProviderBaseUrl(provider, options.apiBaseUrl) };
   if (provider === '711proxy') return { provider, ...normalize711ApiUrl(value, options) };
   if (provider === 'b2proxy') {
     if (detected && detected !== provider) throw new Error('Proxy API provider does not match the URL host');
@@ -317,7 +353,10 @@ function buildProxyApiUrl(provider, options = {}) {
   const normalizedProvider = String(provider || '').toLowerCase();
   const template = PROXY_API_TEMPLATES[normalizedProvider];
   if (!template) throw new Error(`Unsupported dynamic proxy API provider: ${provider}`);
-  return normalizeProxyApiUrl(template, { ...options, provider: normalizedProvider });
+  const apiBaseUrl = normalizeProviderBaseUrl(normalizedProvider, options.apiBaseUrl);
+  const url = new URL(apiBaseUrl);
+  url.search = new URL(template).search;
+  return normalizeProxyApiUrl(url.href, { ...options, apiBaseUrl, provider: normalizedProvider });
 }
 
 function emptyProxyCatalog() {
@@ -386,6 +425,7 @@ function normalizeProxyCatalog(input = {}) {
         count: rawSource.count,
         protocol: rawSource.protocol,
         sessionMinutes: rawSource.sessionMinutes,
+        apiBaseUrl: rawSource.apiBaseUrl || catalog.providerSettings[rawSource.provider]?.apiBaseUrl,
       });
       // Recomputed rather than trusted, so catalogs written under the old
       // URL-derived scheme collapse their duplicate sources on the next read.
@@ -421,6 +461,7 @@ function normalizeProxyCatalog(input = {}) {
       sources.push({
         id,
         ...normalized,
+        apiBaseUrl: apiBaseUrlOf(normalized.url),
         entries,
         lastPulledAt: rawSource.lastPulledAt || '',
         lastPullCount: Number(rawSource.lastPullCount || entries.length),
@@ -457,10 +498,12 @@ function parseDynamicContent(content, options = {}) {
     const override = overrides.get(line) || {};
     try {
       let item;
-      if (isProxyApiHost(text)) {
+      const provider = override.provider || proxyApiProviderFromHost(text, options.providerSettings);
+      if (provider) {
         const source = normalizeProxyApiUrl(text, {
-          ...options.providerSettings?.[proxyApiProviderFromHost(text)],
+          ...options.providerSettings?.[provider],
           ...override,
+          provider,
           // Provider defaults are more reliable than the generic dynamic
           // import default for API responses that contain only host:port.
           defaultProtocol: options.defaultProtocol,
@@ -507,6 +550,9 @@ function flattenedPoolEntries(pool) {
 }
 
 module.exports = {
+  apiBaseUrlOf,
+  PROXY_API_BASE_URLS,
+  normalizeProviderBaseUrl,
   PROXY_SESSION_DEFAULTS,
   normalizeSessionMinutes,
   normalizeProviderSettings,

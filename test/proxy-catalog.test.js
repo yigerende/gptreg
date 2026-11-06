@@ -165,6 +165,71 @@ test('proxy API templates keep provider-specific contracts and default to 600 en
   ]);
 });
 
+test('provider base URLs replace the complete prefix and keep supplier query parameters', () => {
+  for (const provider of ['711proxy', 'b2proxy', '1024proxy', 'cliproxy']) {
+    const apiBaseUrl = 'https://custom-api.example:9443/v2/extract';
+    const source = buildProxyApiUrl(provider, { apiBaseUrl, countryCode: 'JP', count: 7, protocol: 'http', sessionMinutes: 30 });
+    const url = new URL(source.url);
+    assert.equal(url.origin + url.pathname, apiBaseUrl);
+    assert.equal(url.searchParams.get('region'), 'JP');
+    assert.equal(url.searchParams.get('num') || url.searchParams.get('count'), '7');
+    assert.equal(url.searchParams.get('time') || url.searchParams.get('sessTime'), '30');
+    const parsed = parseDynamicContent(source.url, { providerSettings: { [provider]: { apiBaseUrl } } });
+    assert.equal(parsed.errors.length, 0);
+    assert.equal(parsed.items[0].provider, provider);
+    for (const invalid of ['', 'custom-api.example/gen', 'ftp://custom-api.example/gen', 'http://user:secret@custom-api.example/gen', apiBaseUrl + '?num=5', apiBaseUrl + '#hash']) {
+      assert.throws(() => buildProxyApiUrl(provider, { apiBaseUrl: invalid, countryCode: 'US' }), /API 地址/);
+    }
+  }
+  const current711 = GLOBAL_711.replace('global.rotgbapi.711proxy.com', 'global.rotgbapi.trustsource.live');
+  assert.equal(parseDynamicContent(current711).items[0].provider, '711proxy');
+});
+
+test('saving a new API address migrates all existing countries and keeps it across imports and restarts', async t => {
+  const { configService } = workspace(t), requests = [];
+  let fail = false;
+  const fetch = async url => { requests.push(new URL(url)); return { ok: !fail, status: fail ? 503 : 200, text: async () => 'cached.example:8080' }; };
+  const service = new ProxyService(configService, { fetch });
+  for (const countryCode of ['JP', 'US']) await service.buildAndPullApi({ provider: '711proxy', countryCode, count: 1 });
+  await service.buildAndPullApi({ provider: '1024proxy', countryCode: 'US', count: 2 });
+  const other = service.readCatalog().countryPools.US.sources.find(s => s.provider === '1024proxy');
+  requests.length = 0;
+  const apiBaseUrl = 'http://global.rotgbapi.trustsource.live:8089/gen';
+  service.saveProviderSettings({ provider: '711proxy', count: 3, protocol: 'http', sessionMinutes: 10, apiBaseUrl });
+  await service.settingsRefreshFlight;
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every(u => u.origin + u.pathname === apiBaseUrl));
+  assert.equal(service.settingsRefresh.result.succeeded, 2);
+  assert.deepEqual(service.readCatalog().countryPools.US.sources.find(s => s.provider === '1024proxy'), other);
+  const restarted = new ProxyService(configService, { fetch });
+  assert.equal(restarted.list().dynamic.providerSettings['711proxy'].apiBaseUrl, apiBaseUrl);
+  assert.equal(restarted.preview({ scope: 'dynamic', content: requests[0].href }).items[0].provider, '711proxy');
+  await restarted.buildAndPullApi({ provider: '711proxy', countryCode: 'JP' });
+  assert.equal(restarted.readCatalog().countryPools.JP.sources.length, 1);
+  assert.equal(requests.at(-1).origin + requests.at(-1).pathname, apiBaseUrl);
+  // Old clients omitting the new field must not reset the selected address.
+  restarted.saveProviderSettings({ provider: '711proxy', count: 4, protocol: 'http', sessionMinutes: 15 });
+  await restarted.settingsRefreshFlight;
+  assert.equal(restarted.list().dynamic.providerSettings['711proxy'].apiBaseUrl, apiBaseUrl);
+  const before = restarted.readCatalog().countryPools.JP.sources[0];
+  fail = true;
+  const changedUrl = 'https://custom-api.example:9443/v2/extract';
+  restarted.saveProviderSettings({ provider: '711proxy', count: 4, protocol: 'http', sessionMinutes: 15, apiBaseUrl: changedUrl });
+  await restarted.settingsRefreshFlight;
+  const after = restarted.readCatalog().countryPools.JP.sources[0];
+  assert.equal(after.entries[0].url, before.entries[0].url);
+  assert.equal(after.lastPulledAt, before.lastPulledAt);
+  assert.equal(after.lastPulledSettings.apiBaseUrl, apiBaseUrl);
+  assert.equal(after.apiBaseUrl, changedUrl);
+  assert.equal(restarted.settingsRefresh.status, 'failed');
+  assert.ok(requests.slice(-2).every(u => u.origin + u.pathname === changedUrl));
+  fail = false;
+  const again = new ProxyService(configService, { fetch });
+  await again.pullAll();
+  assert.equal(again.readCatalog().countryPools.JP.sources[0].lastPulledSettings.apiBaseUrl, changedUrl);
+  assert.equal(again.preview({ scope: 'dynamic', content: requests.findLast(u => u.hostname === 'custom-api.example').href }).items[0].provider, '711proxy');
+});
+
 test('local proxy parser accepts a bare port as localhost', () => {
   assert.equal(parseProxyLine('4001').url, 'http://127.0.0.1:4001');
 });
@@ -414,7 +479,7 @@ test('saving provider settings persists all fields and refreshes only its existi
   service.importDynamic({ content: 'socks5://manual.example:9000', overrides: [{ line: 1, countryCode: 'JP' }] });
   const before = service.readCatalog();
   requests.length = 0;
-  const settings = { count: 2, protocol: 'http', sessionMinutes: 45 };
+  const settings = { count: 2, protocol: 'http', sessionMinutes: 45, apiBaseUrl: 'https://white.1024proxy.com/white/api' };
   service.saveProviderSettings({ provider: '1024proxy', ...settings });
   assert.equal(service.list().dynamic.settingsRefresh.status, 'running');
   await service.settingsRefreshFlight;
@@ -483,6 +548,9 @@ test('provider settings API rejects invalid or racing writes and exposes backgro
   assert.equal((await save({ ...defaults, provider: '711proxy', count: 901 })).statusCode, 400);
   assert.equal((await save({ ...defaults, provider: 'unsupported' })).statusCode, 400);
   assert.equal((await save({ ...defaults, protocol: 'invalid' })).statusCode, 400);
+  for (const apiBaseUrl of ['', 'white.1024proxy.com', 'file:///tmp/proxies', 'https://white.1024proxy.com/white/api?num=1']) {
+    assert.equal((await save({ ...defaults, apiBaseUrl })).statusCode, 400);
+  }
   assert.equal((await save({ provider: '1024proxy' })).statusCode, 400);
   assert.equal(fs.readFileSync(configService.proxyCatalogPath(), 'utf8'), before);
   const pulling = service.pullAll();
@@ -493,7 +561,7 @@ test('provider settings API rejects invalid or racing writes and exposes backgro
   assert.equal(saved.statusCode, 200);
   assert.equal(saved.json().refresh.status, 'running');
   const page = (await app.inject('/api/v1/proxies?paged=1')).json();
-  assert.deepEqual(page.dynamic.providerSettings['1024proxy'], { count: 2, protocol: 'http', sessionMinutes: 60 });
+  assert.deepEqual(page.dynamic.providerSettings['1024proxy'], { count: 2, protocol: 'http', sessionMinutes: 60, apiBaseUrl: 'https://white.1024proxy.com/white/api' });
   assert.equal(page.dynamic.settingsRefresh.status, 'running');
   assert.equal((await save({ ...defaults, sessionMinutes: 30 })).statusCode, 409);
   const queuedFullRefresh = service.pullAll();

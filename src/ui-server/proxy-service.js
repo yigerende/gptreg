@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const { executePureHttpUrl } = require('../pure-url');
 const {
   PROXY_API_LABELS,
+  apiBaseUrlOf,
   buildProxyApiUrl,
   emptyProxyCatalog,
   flattenedPoolEntries,
@@ -332,6 +333,7 @@ class ProxyService {
         const protocolChanged = existing.protocol !== item.protocol;
         Object.assign(existing, {
           provider: item.provider,
+          apiBaseUrl: apiBaseUrlOf(item.url),
           url: item.url,
           countryCode: item.countryCode,
           count: item.count,
@@ -352,6 +354,7 @@ class ProxyService {
       pool.sources.push({
         id,
         provider: item.provider,
+        apiBaseUrl: apiBaseUrlOf(item.url),
         url: item.url,
         countryCode: item.countryCode,
         count: item.count,
@@ -532,7 +535,7 @@ class ProxyService {
         sourceId: found.source.id,
       }));
       found.source.entries = entries;
-      found.source.lastPulledSettings = { count: found.source.count, protocol: found.source.protocol, sessionMinutes: found.source.sessionMinutes };
+      found.source.lastPulledSettings = { count: found.source.count, protocol: found.source.protocol, sessionMinutes: found.source.sessionMinutes, apiBaseUrl: apiBaseUrlOf(found.source.url) };
       found.source.lastPulledAt = new Date().toISOString();
       found.source.lastPullCount = entries.length;
       found.source.lastError = parsed.errors.length
@@ -726,6 +729,7 @@ class ProxyService {
         count: payload.count ?? defaults.count,
         protocol: payload.protocol ?? defaults.protocol,
         sessionMinutes: payload.sessionMinutes ?? defaults.sessionMinutes,
+        apiBaseUrl: payload.apiBaseUrl ?? defaults.apiBaseUrl,
       });
     } catch (error) {
       throw new HttpError(400, error.message);
@@ -734,7 +738,7 @@ class ProxyService {
       mode: 'append',
       content: source.url,
       defaultProtocol: source.protocol,
-      overrides: [{ line: 1, count: source.count, protocol: source.protocol, sessionMinutes: source.sessionMinutes }],
+      overrides: [{ line: 1, provider: source.provider, apiBaseUrl: apiBaseUrlOf(source.url), count: source.count, protocol: source.protocol, sessionMinutes: source.sessionMinutes }],
     });
     return this.pull(proxyApiSourceId(source), { timeoutMs: payload.timeoutMs });
   }
@@ -745,25 +749,32 @@ class ProxyService {
     try {
       if (!Number.isSafeInteger(payload.count) || payload.count < 1) throw new Error('请填写有效的代理条数');
       if (payload.sessionMinutes === undefined || payload.protocol === undefined) throw new Error('请填写协议和会话粘性时间');
-      settings = normalizeProviderSettings(payload.provider, payload);
+      settings = normalizeProviderSettings(payload.provider, {
+        ...payload,
+        apiBaseUrl: payload.apiBaseUrl ?? this.catalogSnapshot().providerSettings[payload.provider]?.apiBaseUrl,
+      });
+      for (const [provider, config] of Object.entries(this.catalogSnapshot().providerSettings)) {
+        if (provider !== payload.provider && config.apiBaseUrl === settings.apiBaseUrl) throw new Error('此 API 地址已用于其他代理厂商');
+      }
     }
     catch (error) { throw new HttpError(400, error.message); }
     const catalog = this.readCatalog();
     catalog.providerSettings[payload.provider] = settings;
-    let total = 0;
     for (const pool of Object.values(catalog.countryPools)) {
       for (const source of pool.sources) {
         if (source.provider !== payload.provider) continue;
         // Cached endpoints keep their actual protocol until a successful pull.
         // Changing preferences cannot change an already issued upstream lease.
         if (!source.lastPulledSettings && source.lastPulledAt) {
-          source.lastPulledSettings = { count: source.count, protocol: source.protocol, sessionMinutes: source.sessionMinutes };
+          source.lastPulledSettings = { count: source.count, protocol: source.protocol, sessionMinutes: source.sessionMinutes, apiBaseUrl: apiBaseUrlOf(source.url) };
         }
-        Object.assign(source, normalizeProxyApiUrl(source.url, { provider: source.provider, countryCode: pool.countryCode, ...settings }));
-        total += 1;
+        const url = new URL(settings.apiBaseUrl);
+        url.search = new URL(source.url).search;
+        Object.assign(source, normalizeProxyApiUrl(url.href, { provider: source.provider, countryCode: pool.countryCode, ...settings }), { apiBaseUrl: settings.apiBaseUrl });
       }
     }
-    this.writeCatalog(catalog);
+    const updated = this.writeCatalog(catalog);
+    const total = Object.values(updated.countryPools).reduce((sum, pool) => sum + pool.sources.filter(source => source.provider === payload.provider).length, 0);
     const job = { provider: payload.provider, status: 'running', done: 0, total, startedAt: new Date().toISOString(), finishedAt: '', result: null, error: '' };
     this.settingsRefresh = job;
     const controller = new AbortController();

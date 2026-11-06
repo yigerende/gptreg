@@ -1115,7 +1115,7 @@ export type ProxyCatalogSnapshot = {
   proxies: ProxyRecord[];
 };
 
-export type ProxyProviderSettings = { count: number; protocol: string; sessionMinutes: number };
+export type ProxyProviderSettings = { count: number; protocol: string; sessionMinutes: number; apiBaseUrl?: string };
 export type ProxySettingsRefresh = {
   provider: string;
   status: 'running' | 'success' | 'partial' | 'failed';
