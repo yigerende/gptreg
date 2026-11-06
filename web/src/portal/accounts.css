@@ -303,3 +303,5 @@
     padding: 14px 12px;
   }
 }
+.p-account-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.p-account-actions > .p-button { flex: 0 0 auto; padding: 7px 10px; min-height: 34px; font-size: 12px; line-height: 18px; white-space: nowrap; }

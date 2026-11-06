@@ -112,17 +112,17 @@ export default function AdminAccounts({
             {
               title: "操作",
               render: (r) => (
-                <div className="p-record-actions">
+                <div className="p-account-actions">
                   <button
-                    className="p-link"
+                    className="p-button secondary"
                     disabled={a.busy}
                     onClick={() => reveal(r.id)}
                   >
                     查看凭据
                   </button>
-                  <button className="p-link" onClick={() => setDevice(r)}>查看设备指纹</button>
+                  <button className="p-button secondary" onClick={() => setDevice(r)}>查看设备指纹</button>
                   <button
-                    className="p-link"
+                    className="p-button secondary"
                     disabled={a.busy}
                     onClick={() => exported("json", [r.id])}
                   >

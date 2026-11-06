@@ -148,14 +148,16 @@ function AccountTable({
                 <Expiry value={r.download_expires_at} now={now} />
               </td>
               <td data-label="操作">
+                <div className="p-account-actions">
                 <button
-                  className="p-link"
+                  className="p-button secondary"
                   disabled={busy}
                   onClick={() => reveal(r)}
                 >
                   查看凭据
                 </button>
-                <button className="p-link" disabled={busy} onClick={() => device(r)}>查看设备指纹</button>
+                <button className="p-button secondary" disabled={busy} onClick={() => device(r)}>查看设备指纹</button>
+                </div>
               </td>
             </tr>
           ))}
