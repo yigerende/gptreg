@@ -11,7 +11,7 @@ const terminalRun = state => ["complete", "partial", "failed", "cancelled"].incl
 
 // Persist only operational facts. Never copy checkpoint objects, addresses,
 // telephone numbers, provider responses, OTPs or arbitrary error messages.
-function resourceRecords(state, summary) {
+function resourceRecords(state, summary, options = {}) {
   const mail = (state.mailboxes || []).filter(m => m.rented).map((m, index) => {
     const jobs = (state.jobs || []).filter(j => String(j.mailboxId) === String(m.id));
     const cost = mailRentalCost(m, state), cleanup = m.rentalCleanup || {};
@@ -67,7 +67,8 @@ function resourceRecords(state, summary) {
       counted: Boolean(r.record),
     };
   }));
-  return { mail, sms };
+  const resources = { mail, sms };
+  return options.suppliers ? { resources, suppliers: require("./supplier-facts").supplierRecords(state, resources, ledgers) } : resources;
 }
 
 function emptyUsage() {

@@ -8,7 +8,7 @@ const bucket = (confirmed = 0, pending = 0, refunded = 0) => ({ confirmed: amoun
 // Store amounts and sanitized resource facts; never persist checkpoints here.
 function costSnapshot(state) {
   const s = summarizeBranchState(state), c = s.costs, b = s.billing;
-  const records = resourceRecords(state, s);
+  const {resources:records,suppliers} = resourceRecords(state, s, {suppliers:true});
   const resources = Object.fromEntries(["mail", "sms"].map(kind => [kind, summarizeResources(records[kind])]));
   const kind_pending = { mail: resources.mail.billing_pending > 0, sms: !b.billingComplete };
   const sms = {};
@@ -19,6 +19,8 @@ function costSnapshot(state) {
   return {
     version: 2,
     calculation_version: 3,
+    supplier_version: 1,
+    supplier_records: suppliers,
     mail: { USD: bucket(c.mail, c.mailUnresolved) }, sms,
     resources, resource_records: records, kind_pending,
     complete: c.complete && !kind_pending.mail && !kind_pending.sms,
@@ -82,7 +84,8 @@ async function syncAttemptCosts(db, manager, runId, state) {
 async function backfillCosts(db, manager) {
   const rows = (await db.query(`SELECT a.run_id FROM platform_attempts a JOIN platform_items i ON i.id=a.item_id
     WHERE i.status NOT IN ('running','review') AND (a.cost_snapshot IS NULL OR a.cost_snapshot->>'complete'='false'
-      OR a.cost_snapshot->>'version' IS DISTINCT FROM '2' OR a.cost_snapshot->>'calculation_version' IS DISTINCT FROM '3')
+      OR a.cost_snapshot->>'version' IS DISTINCT FROM '2' OR a.cost_snapshot->>'calculation_version' IS DISTINCT FROM '3'
+      OR a.cost_snapshot->>'supplier_version' IS DISTINCT FROM '1')
     AND (a.cost_checked_at IS NULL OR a.cost_checked_at<now()-interval '5 minutes')
     ORDER BY a.cost_checked_at NULLS FIRST,a.created_at LIMIT 20`)).rows;
   for (const row of rows) await syncAttemptCosts(db, manager, row.run_id);

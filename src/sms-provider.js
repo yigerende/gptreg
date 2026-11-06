@@ -838,6 +838,7 @@ class SmsBowerProvider {
         number: String(rawPhoneNumber ?? ''),
         service,
         country,
+        countryName: String(candidate?.chn || candidate?.name || candidate?.eng || ''),
         countryCode: dialingCode,
         providerCountryCode,
         cost: Number.isFinite(Number(payload.activationCost ?? payload.activation_cost ?? payload.cost))
@@ -859,6 +860,7 @@ class SmsBowerProvider {
       number,
       service,
       country,
+      countryName: String(candidate?.chn || candidate?.name || candidate?.eng || ''),
       countryCode: dialingCode,
       providerCountryCode,
       cost: Number.isFinite(Number(payload.activationCost ?? payload.activation_cost ?? payload.cost))

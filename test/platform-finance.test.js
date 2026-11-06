@@ -2,6 +2,7 @@
 const {test}=require("node:test"),assert=require("node:assert/strict"),fs=require("node:fs"),crypto=require("node:crypto");
 const {Database}=require("../src/platform/db"),{Orders,ledger}=require("../src/platform/orders");
 const {cipher,id,digest}=require("../src/platform/security"),{buildPlatform}=require("../src/platform/app");
+const {economics}=require('../src/platform/economics');
 const {financeQuery}=require("../src/platform/finance");
 test("finance dates and periods reject invalid or unbounded input",()=>{
   for(const query of [{start:'2026-02-30'},{start:'2026-11-06',end:'2026-11-05'},{period:'minute'},{include_admin:'yes'},{start:'2000-01-01',end:'2026-01-01'}])assert.throws(()=>financeQuery(query));
@@ -23,6 +24,7 @@ test("finance uses Beijing dates, excludes admins consistently, separates curren
   await db.tx(q=>ledger(q,admin.id,'credit','redeem',9000,0,'管理员充值'));
   const order=(await orders.create(user,{quantity:2},id(),'web')).order;
   const items=(await orders.detail(user.id,order.id)).items;
+  await db.query("UPDATE platform_orders SET created_at='2026-11-04 16:00:00+00' WHERE id=$1",[order.id]);
   await orders.finish(items[0].id,{asset_id:id(),email:'delivered@example.test',password:'fake',totp_secret:'fake'});
   await orders.finish(items[1].id,null);
   await db.query("UPDATE platform_ledger SET created_at='2026-11-04 16:00:00+00'");
@@ -35,6 +37,7 @@ test("finance uses Beijing dates, excludes admins consistently, separates curren
   assert.deepEqual(d.totals,{credited:1000,spent:50,adjusted:0,released:50,entries:4});
   assert.equal(d.current.balance,975);assert.equal(d.current.frozen,0);assert.equal(d.users_total,1);
   assert.equal(d.users[0].balance,975);assert.equal(d.trend[0].period,'2026-11-05');
+  assert.equal(d.economics.revenue_cny,5);assert.equal(d.economics.cost_cny,.7278);assert.equal(d.economics.profit_cny,4.2722);assert.equal(d.economics.margin_percent,85.444);
   assert.equal(d.execution_cost.mail.USD.confirmed,.034);assert.equal(d.execution_cost.sms.CNY.confirmed,.5);
   assert.equal((await get(base+'&include_admin=true')).json().totals.credited,10000);
   assert.equal((await get(base+'&q=absent')).json().users_total,0);
@@ -47,4 +50,20 @@ test("finance uses Beijing dates, excludes admins consistently, separates curren
   r=await get('/api/admin/v1/finance/export?start=2026-11-05&end=2026-11-05');assert.equal(r.statusCode,200,r.body);
   assert.ok(r.body.startsWith('\ufeff'));assert.match(r.body,/'=FORMULA\(\)/);assert.match(r.body,/USD/);assert.match(r.body,/CNY/);assert.ok(!r.body.includes('admin@example.test'));
   assert.equal((await get(base+'&start=not-a-date')).statusCode,400);
+  // Next-day retries remain attached to the original order cohort; no next-day revenue is fabricated.
+  await db.query("INSERT INTO platform_attempts(id,item_id,run_id,stage,created_at,cost_snapshot) VALUES($1,$2,$3,'register','2026-11-05 16:00:00+00',$4)",[id(),items[1].id,id(),{version:1,complete:true,mail:{USD:{confirmed:.017,pending:0,refunded:0}},sms:{}}]);
+  const updated=(await get(base)).json();assert.equal(updated.economics.revenue_cny,5);assert.equal(updated.economics.cost_cny,.8417);assert.equal(updated.users[0].economics.profit_cny,4.1583);
+  const tomorrow=(await get('/api/admin/v1/finance?start=2026-11-06&end=2026-11-06')).json();assert.equal(tomorrow.economics.revenue_cny,0);assert.equal(tomorrow.economics.cost_cny,0);
+  await db.query("INSERT INTO platform_attempts(id,item_id,run_id,stage) VALUES($1,$2,$3,'register')",[id(),items[1].id,id()]);
+  assert.equal((await get(base)).json().economics.complete,false);
+
+});
+
+test('profit converts saved consumption with fixed rates, preserves losses, and flags missing currency or records',()=>{
+ const e=economics(590,{mail:{USD:{confirmed:1.717}},sms:{USD:{confirmed:.22}}});
+ assert.equal(e.cost_cny,12.9779);assert.equal(e.profit_cny,46.0221);assert.equal(e.revenue_cny,59);
+ assert.equal(economics(0,{mail:{USD:{confirmed:1}}}).margin_percent,null);
+ assert.equal(economics(0,{mail:{USD:{confirmed:1}}}).profit_cny,-6.7);
+ assert.equal(economics(10,{missing:1}).complete,false);
+ assert.equal(economics(10,{sms:{EUR:{confirmed:2}}}).complete,false);
 });

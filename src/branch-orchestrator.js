@@ -5373,6 +5373,7 @@ async function waitEmailCode(job, recipient, boundary, context, runnerState = nu
     if (found?.code) {
       job.emailMessageId = found.messageId || '';
       const mailbox = (context.state.mailboxes || []).find(m => job.mailboxId != null && String(m.id) === String(job.mailboxId));
+      if (mailbox) mailbox.mailCodeReceivedAt ||= nowIso(context);
       if (mailbox?.rented && found.source === 'smsbower_mail') {
         mailbox.billingRule = 'on_code';
         mailbox.mailCodeReceivedAt ||= nowIso(context);

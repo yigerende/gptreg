@@ -34,6 +34,7 @@ const { registerCustomerCenter } = require("./customer-center");
 const { availableAccount } = require("./account-retention");
 const { registerAccountDevice } = require("./account-device");
 function registerApi(app, db, orders, crypt) {
+  require("./suppliers").registerSuppliers(app,db);
   registerAccountDevice(app, db, crypt);
   registerMail(app, db, crypt);
   registerAdminAccounts(app, db, crypt);

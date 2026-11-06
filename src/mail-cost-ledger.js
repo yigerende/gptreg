@@ -29,4 +29,4 @@ function mailRentalCost(mailbox = {}, state = {}) {
   return { confirmed, pending, refunded: 0, billingPending: received ? mailbox.quotedPriceUsd == null && !confirmed : uncertain || !status };
 }
 
-module.exports = { mailRentalCost };
+module.exports = { mailRentalCost, receivedMailCode };

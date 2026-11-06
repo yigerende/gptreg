@@ -19,6 +19,7 @@ import CustomPage from "./CustomPage";
 import AdminEntry from "./AdminEntry";
 import type { Row } from "./client";
 const AdminRisk = lazy(() => import("./AdminRisk"));
+const AdminSuppliers = lazy(() => import("./AdminSuppliers"));
 const groups: NavGroup[] = [
   {
     label: "运营洞察",
@@ -27,6 +28,7 @@ const groups: NavGroup[] = [
       { path: "/admin/orders", name: "订单监控", icon: Activity },
       { path: "/admin/risk", name: "风控监控", icon: ShieldCheck },
       { path: "/admin/finance", name: "财务报表", icon: ChartNoAxesCombined },
+      { path: "/admin/suppliers", name: "供应商统计", icon: ChartNoAxesCombined },
     ],
   },
   {
@@ -86,6 +88,8 @@ export default function AdminChrome({
         <Suspense fallback={<div className="p-loading">正在打开风控监控…</div>}>
           <AdminRisk />
         </Suspense>
+      ) : path === "/admin/suppliers" ? (
+        <Suspense fallback={<div className="p-loading">正在打开供应商统计…</div>}><AdminSuppliers /></Suspense>
       ) : current ? (
         <AdminPlatform
           key={path + search}

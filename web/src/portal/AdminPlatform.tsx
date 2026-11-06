@@ -93,7 +93,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                 overview: "掌握客户、交付与积分流转，让每一笔业务都有据可查。",
                 orders: "查看全部客户订单，跟踪执行进度与异常处理。",
                 users: "管理客户状态、查询业务记录与调整账户积分。",
-                finance: "按时间与账户核对入账、消费和余额，默认排除管理员。",
+                finance: "收入、成本与利润统一折算为人民币，默认统计客户订单。",
                 accounts: "查询已交付账号及其客户和订单归属。",
                 products: "设置两种注册服务的单价、限额及执行模板。",
                 codes: "发行积分兑换码，跟踪使用与停用状态。",

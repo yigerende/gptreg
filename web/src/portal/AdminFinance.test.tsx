@@ -12,12 +12,13 @@ it("finance defaults to members, keeps raw points, applies time/account filters 
   vi.spyOn(globalThis,"fetch").mockImplementation(async input=>{
     const url=String(input);paths.push(url);
     if(url.includes('/export'))return new Response('账户,余额\nclient@example.test,975');
-    return new Response(JSON.stringify({start:'2026-11-01',end:'2026-11-05',totals:{credited:1000,spent:50,adjusted:25,released:50},current:{balance:975,frozen:0},trend:[{period:'2026-11-05',credited:1000,spent:50}],users:[{id:'u',email:'client@example.test',name:'客户',balance:975,frozen:0,execution_cost:cost}],users_total:1,items:[],total:0,execution_cost:cost}));
+    return new Response(JSON.stringify({start:'2026-11-01',end:'2026-11-05',economics:{revenue_points:590,revenue_cny:59,mail_cny:11.5039,sms_cny:1.474,cost_cny:12.9779,profit_cny:46.0221,margin_percent:78.003559,orders:13,delivered:98,open_orders:0,complete:true,unsupported_currencies:[]},totals:{credited:1000,spent:50,adjusted:25,released:50},current:{balance:975,frozen:0},trend:[{period:'2026-11-05',credited:1000,spent:50}],users:[{id:'u',email:'client@example.test',name:'客户',balance:975,frozen:0,execution_cost:cost}],users_total:1,items:[],total:0,execution_cost:cost}));
   });
   const download=vi.spyOn(client,'download').mockImplementation(()=>{});
   q=new QueryClient({defaultOptions:{queries:{retry:false}}});
   render(<QueryClientProvider client={q}><AdminFinance/></QueryClientProvider>);
   await screen.findByText('每位客户的资金明细');
+  const profit=within(screen.getByLabelText('收入成本利润'));expect(profit.getByText('¥12.9779')).toBeVisible();expect(profit.getAllByText('¥46.0221')).toHaveLength(2);expect(profit.getByText('78.0%')).toBeVisible();
   expect(paths[0]).toContain('include_admin=false');expect(screen.getAllByText('975').length).toBeGreaterThan(0);
   expect(screen.getAllByText('0.017 USD').length).toBeGreaterThan(0);
   const metrics = document.querySelector('.p-finance-metrics')!;
@@ -27,7 +28,7 @@ it("finance defaults to members, keeps raw points, applies time/account filters 
   expect(within(metrics as HTMLElement).getByText('0.017 USD')).toBeVisible();
   expect(within(metrics as HTMLElement).getByText('0.2 CNY')).toBeVisible();
   expect(within(metrics as HTMLElement).getByText('0.03 USD')).toBeVisible();
-  expect(within(metrics as HTMLElement).getByText('待核对 0.05 CNY')).toBeVisible();
+  expect(within(metrics as HTMLElement).getByText('未计入的报价 0.05 CNY')).toBeVisible();
   fireEvent.click(screen.getByRole('button',{name:'每月'}));await waitFor(()=>expect(paths.at(-1)).toContain('period=month'));
   fireEvent.click(screen.getByLabelText('包含管理员'));await waitFor(()=>expect(paths.at(-1)).toContain('include_admin=true'));
   fireEvent.change(screen.getByLabelText('搜索账户'),{target:{value:'client@example.test'}});
