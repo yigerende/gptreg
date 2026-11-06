@@ -136,7 +136,16 @@ function requestFeature(path, method) {
   if (p.startsWith("/keys")) return "keys";
   return null;
 }
+function customerNavigation(s, role) {
+  const paths = ["/", "/register", "/orders", "/accounts", "/wallet", "/keys", "/docs", "/partners", "/profile"];
+  return paths.filter(path => {
+    if (path === "/partners" && !s.invitations?.enabled) return false;
+    const feature = path === "/" ? "home" : path.slice(1);
+    return role === "admin" || s.features[feature] !== false;
+  });
+}
 module.exports = {
+  customerNavigation,
   features,
   validateControls,
   activeAnnouncements,

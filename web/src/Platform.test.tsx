@@ -28,6 +28,7 @@ const pub = {
   orders_open: true,
 };
 const member = {
+  navigation: ["/", "/register", "/orders", "/accounts", "/wallet", "/keys", "/docs", "/partners", "/profile"],
   id: "member",
   name: "演示用户",
   role: "member",
@@ -78,6 +79,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("portal refresh behavior", () => {
+  it("uses server navigation even for administrators in the customer workspace", async () => {
+    window.history.replaceState({}, "", "/");
+    mockFetch({...member,role:"admin",navigation:member.navigation.filter(path=>path!=="/partners")});
+    mount();
+    await within(await screen.findByRole("banner")).findByRole("link", {name:"运营控制台 ↗"});
+    expect(screen.queryByRole("link", {name:"伙伴计划"})).toBeNull();
+    expect(screen.getAllByRole("link", {name:"个人设置"}).length).toBeGreaterThan(0);
+  });
   it("shows the engine entry only on the operations header and opens a new tab", async () => {
     window.history.replaceState({}, "", "/admin");
     mockFetch({ ...member, role: "admin" });

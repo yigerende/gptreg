@@ -51,6 +51,15 @@ test('partner stages, transactional grants, registration binding and login slide
    assert.equal(ok(await req('GET','/api/user/v1/partners',undefined,cookie)).total,0);
    const login=await req('POST','/api/auth/login',{email:'inviter@example.test',password:'MemberPassword123!'});ok(login);const view=ok(await req('GET','/api/user/v1/partners',undefined,login.headers['set-cookie'].split(';')[0]));assert.equal(view.total,11);assert.ok(view.items.every(row=>row.email.includes('***@')&&row.inviter===null));
    const adminView=ok(await req('GET','/api/admin/v1/invites?q=new%40example.test',undefined,adminCookie));assert.equal(adminView.items[0].email,'new@example.test');assert.ok(adminView.items[0].created_at);
+   for (const enabled of [false,true]) {
+    ok(await req('PUT','/api/admin/v1/invites',{...rules,enabled},adminCookie));
+    assert.equal(ok(await req('GET','/api/public')).features.partners,enabled);
+    for (const identity of [cookie,adminCookie]) {
+     assert.equal(ok(await req('GET','/api/user/v1/me',undefined,identity)).navigation.includes('/partners'),enabled);
+     assert.equal((await req('GET','/api/user/v1/partners',undefined,identity)).statusCode,enabled?200:403);
+    }
+    ok(await req('GET','/api/admin/v1/invites',undefined,adminCookie));
+   }
    assert.equal((await req('PUT','/api/admin/v1/invites',{...rules,stages:[rules.stages[0],rules.stages[0],rules.stages[2]]},adminCookie)).statusCode,400);
    await settings({features:{...(await db.settings()).features,partners:false}});assert.equal((await req('GET','/api/user/v1/partners',undefined,cookie)).statusCode,403);
   });

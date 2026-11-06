@@ -73,6 +73,8 @@ function buildPlatform({
       if (admin) fail(r.user.role === "admin", "需要管理员权限", 403);
       const settings = await db.settings();
       const feature = requestFeature(pathname, r.method);
+      if (!admin && feature === "partners")
+        fail(settings.invitations.enabled, "伙伴计划暂未开放", 403);
       if (!admin && r.user.role !== "admin") {
         fail(
           !feature || settings.features[feature] !== false,

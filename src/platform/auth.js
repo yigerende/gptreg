@@ -1,7 +1,7 @@
 "use strict";
 const crypto = require("node:crypto");
 const { sendMail } = require("./mail");
-const { activeAnnouncements } = require("./site-controls");
+const { activeAnnouncements, customerNavigation } = require("./site-controls");
 const {
   id,
   token,
@@ -101,7 +101,7 @@ function registerAuth(app, db, crypt, { publicOrigin = "", secureCookies = false
       brand: publicBrand(s.brand),
       announcement: s.announcement,
       announcements: activeAnnouncements(s),
-      features: s.features,
+      features: {...s.features, partners: s.features.partners !== false && s.invitations.enabled},
       registration_open: s.registration_open,
       login_slider_enabled:s.login_slider_enabled,
       email_verify_enabled: s.email_verify_enabled,
@@ -303,7 +303,7 @@ function registerAuth(app, db, crypt, { publicOrigin = "", secureCookies = false
     fail(!error, error);
     return { message: "密码已重置，请重新登录。原登录会话和 API 密钥已失效。" };
   });
-  app.get("/api/user/v1/me", async (r) => userView(r.user));
+  app.get("/api/user/v1/me", async (r) => ({...userView(r.user), navigation: customerNavigation(await db.settings(), r.user.role)}));
   app.patch("/api/user/v1/me", async (r) => {
     const v = r.body || {},
       name = String(v.name || "").trim();

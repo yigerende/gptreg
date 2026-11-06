@@ -1,13 +1,15 @@
 import {useEffect,useState} from 'react';
+import {useQueryClient} from '@tanstack/react-query';
 import {call,copy,date,type Row} from './client';
 import {Table} from './Workspace';
 import './partners.css';
 export default function PartnerPage({admin=false}:{admin?:boolean}){
+ const query=useQueryClient();
  const [data,setData]=useState<Row>({items:[],stats:{}}),[rules,setRules]=useState<Row|null>(null),[page,setPage]=useState(1),[search,setSearch]=useState(''),[busy,setBusy]=useState(false),[saving,setSaving]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
  const path=admin?'/api/admin/v1/invites':'/api/user/v1/partners';
  async function load(initial=false){setBusy(true);setError('');try{const v=await call(`${path}?page=${page}&q=${encodeURIComponent(search)}`);setData(v);if(initial)setRules(structuredClone(v.rules))}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
  useEffect(()=>{void load(true)},[page,admin]);
- async function save(e:React.FormEvent){e.preventDefault();setSaving(true);setError('');try{await call(path,'PUT',rules);setMessage('规则已保存，仅影响新建订单');await load(true)}catch(e){setError((e as Error).message)}finally{setSaving(false)}}
+ async function save(e:React.FormEvent){e.preventDefault();setSaving(true);setError('');try{await call(path,'PUT',rules);setMessage('规则已保存，仅影响新建订单');await load(true);await query.invalidateQueries({queryKey:['public']});await query.invalidateQueries({queryKey:['me']})}catch(e){setError((e as Error).message)}finally{setSaving(false)}}
  function field(i:number,key:string,value:number){setRules(r=>({...r,stages:r!.stages.map((s:Row,n:number)=>n===i?{...s,[key]:value}:s)}))}
  const link=location.origin+'/?invite='+encodeURIComponent(data.invite_code||'');
  return <div className="p-partners"><header className="p-card"><span className="p-eyebrow">PARTNERS / REWARDS</span><h1>{admin?'邀请管理':'伙伴计划'}</h1><p>邀请伙伴，获得可用于平台消费的积分。</p></header>

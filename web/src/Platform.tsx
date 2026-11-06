@@ -142,10 +142,7 @@ export default function Platform() {
   const visibleGroups = customerGroups.map((g) => ({
     ...g,
     items: g.items.filter(
-      (i) =>
-        me.data.role === "admin" ||
-        pub.data.features?.[i.path === "/" ? "home" : i.path.slice(1)] !==
-          false,
+      (i) => me.data.navigation?.includes(i.path),
     ),
   }));
   const current = visibleGroups
