@@ -7,6 +7,7 @@ import { Copy, Download } from "lucide-react";
 import { call, copy, date, download, type Row } from "./client";
 import { Feedback, Modal, Table, useAction } from "./Workspace";
 import { ExportProgress, selectFilteredAccounts } from "./AccountExport";
+import AccountDevice from "./AccountDevice";
 
 function ExpandedAccounts({ orderId, filters, render }: { orderId: string; filters: Row; render: (rows: Row[]) => ReactNode }) {
   const [offset, setOffset] = useState(0);
@@ -31,6 +32,7 @@ export default function AdminAccounts({
   const [expanded, setExpanded] = useState<string[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [secret, setSecret] = useState<Row | null>(null);
+  const [device, setDevice] = useState<Row | null>(null);
   const a = useAction();
   const ids = selected;
   const [exporting, setExporting] = useState("");
@@ -117,6 +119,7 @@ export default function AdminAccounts({
                   >
                     查看全部资料
                   </button>
+                  <button className="p-link" onClick={() => setDevice(r)}>设备指纹</button>
                   <button
                     className="p-link"
                     disabled={a.busy}
@@ -141,13 +144,14 @@ export default function AdminAccounts({
         {label}
         <div className="p-inline">
           {multiline ? (
-            <textarea readOnly value={text} rows={3} placeholder="未保存该凭据" />
+            <textarea readOnly value={text} rows={3} />
           ) : (
             <input readOnly value={text} />
           )}
           <button
             className="p-button secondary"
             aria-label={`复制${label}`}
+            disabled={!text || a.busy}
             onClick={() => a.run(() => copy(text), "已复制")}
           >
             <Copy size={15} />
@@ -287,6 +291,8 @@ export default function AdminAccounts({
           {credential("当前验证码", secret.totp_code)}
           {credential("网页登录 AT", secret.access_token, true)}
           {credential("完整 Session Token", secret.session_token, true)}
+          {credential("OAuth AT", secret.oauth?.access_token, true)}
+          {credential("RT（Refresh Token）", secret.oauth?.refresh_token, true)}
           <p className="p-muted">
             验证码每 30 秒变化；读取时剩余 {secret.totp_expires_in} 秒。
             网页登录 AT 与下方 OAuth AT 独立；Session 为完整登录 Cookie Token，导出不刷新有效期。
@@ -300,7 +306,7 @@ export default function AdminAccounts({
           </button>
           <h3 className="p-secret-heading">OAuth 授权资料</h3>
           {secret.oauth ? (
-            Object.entries(secret.oauth).map(([key, value]) =>
+            Object.entries(secret.oauth).filter(([key]) => !["access_token", "refresh_token"].includes(key)).map(([key, value]) =>
               credential(key, value, true),
             )
           ) : (
@@ -334,6 +340,7 @@ export default function AdminAccounts({
           </div>
         </Modal>
       )}
+      {device && <AccountDevice account={device} admin onClose={() => setDevice(null)} />}
     </>
   );
 }

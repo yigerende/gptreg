@@ -10,3 +10,5 @@
 - 指纹哈希和设备 ID 分别比较；设备 ID 不同不代表浏览器指纹不同。注册地区来自资产保存的代理配置，不作为实际出口 IP 的证明。
 
 验证：`test/device-fingerprints.test.js`、`web/src/DeviceFingerprintsPage.test.tsx`，以及 `test/platform.test.js` 中页面/API 的匿名和成员访问限制。
+
+用户“我的账号”和运营“账号交付”也提供逐账号的“设备指纹”弹窗。交付时保存白名单设备快照；历史资料按资产 ID 和邮箱匹配补齐，不重新生成指纹。用户接口 `GET /api/user/v1/accounts/:id/device-fingerprint` 校验归属及 72 小时领取期，管理员接口 `/api/admin/v1/accounts/:id/device-fingerprint` 保留历史访问。两端只返回该账号的设备信息，不暴露全库重复统计、其他账号、内部任务、代理 URL 或凭据；没有保存的字段留空。

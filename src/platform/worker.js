@@ -5,6 +5,7 @@ const { id, fail } = require("./security");
 const { executionFailure } = require("./execution-failure");
 const { syncAttemptCosts, backfillCosts } = require("./execution-costs");
 const { loginTokens, backfillAccountTokens } = require("./account-tokens");
+const { accountDevice } = require("./account-device");
 const { TERMINAL, ITEM_TERMINAL, expired, creationUncertain, cleanupRuns } = require("./order-recovery");
 class OrderWorker {
   constructor(db, orders, manager) {
@@ -157,6 +158,7 @@ class OrderWorker {
     }
     return {
       asset_id: asset.id,
+      device_fingerprint: accountDevice(asset),
       email: asset.email,
       password: asset.password,
       totp_secret: asset.totpSecret,

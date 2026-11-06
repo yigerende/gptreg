@@ -13,6 +13,7 @@ import { ApiError, call, copy, download, type Row } from "./client";
 import { Modal } from "./Workspace";
 import { Filters, Pagination } from "./Insights";
 import { ExportProgress } from "./AccountExport";
+import AccountDevice from "./AccountDevice";
 import {
   isAvailable,
   mergeSelection,
@@ -81,6 +82,7 @@ type AccountTableProps = {
   busy: boolean;
   toggle: (rows: Row[]) => void;
   reveal: (row: Row) => void;
+  device: (row: Row) => void;
 };
 function AccountTable({
   rows,
@@ -89,6 +91,7 @@ function AccountTable({
   busy,
   toggle,
   reveal,
+  device,
 }: AccountTableProps) {
   const ids = new Set(selected.map((r) => r.id));
   const visible = rows.filter((r) => isAvailable(r as AccountChoice, now));
@@ -151,6 +154,7 @@ function AccountTable({
                 >
                   查看凭据
                 </button>
+                <button className="p-link" disabled={busy} onClick={() => device(r)}>设备指纹</button>
               </td>
             </tr>
           ))}
@@ -225,6 +229,7 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
   const [expanded, setExpanded] = useState<string[]>([]);
   const [selected, setSelected] = useState<AccountChoice[]>([]);
   const [secret, setSecret] = useState<Row | null>(null);
+  const [device, setDevice] = useState<Row | null>(null);
   const secretRequest = useRef(0);
   const [busy, setBusy] = useState("");
   const lock = useRef(false);
@@ -270,6 +275,7 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
   const deadlines = [
     data?.next_expires_at,
     secret?.download_expires_at,
+    device?.download_expires_at,
     ...selected.map((r) => r.download_expires_at),
   ]
     .filter(Boolean)
@@ -296,6 +302,7 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
     setSecret((current) =>
       current && !isAvailable(current as AccountChoice, now) ? null : current,
     );
+    setDevice(current => current && !isAvailable(current as AccountChoice, now) ? null : current);
   }, [now]);
   async function run(text: string, action: () => Promise<void>) {
     if (lock.current) return;
@@ -401,7 +408,7 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
   const rows: Row[] = data?.items || [];
   const validSecret =
     secret && isAvailable(secret as AccountChoice, now) ? secret : null;
-  const tableProps = { selected, now, busy: Boolean(busy), toggle, reveal };
+  const tableProps = { selected, now, busy: Boolean(busy), toggle, reveal, device: setDevice };
   return (
     <div className="p-customer-accounts">
       <div className="p-page-heading">
@@ -720,12 +727,14 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
             ["当前验证码", validSecret.totp_code],
             ["网页登录 AT", validSecret.access_token],
             ["完整 Session Token", validSecret.session_token],
+            ["OAuth AT", validSecret.oauth?.access_token],
+            ["RT（Refresh Token）", validSecret.oauth?.refresh_token],
           ].map(([label, value]) => (
             <label key={label}>
               {label}
               <div className="p-inline">
-                {label === "网页登录 AT" || label === "完整 Session Token"
-                  ? <textarea readOnly value={value || ""} rows={3} placeholder="未保存该凭据" />
+                {["网页登录 AT", "完整 Session Token", "OAuth AT", "RT（Refresh Token）"].includes(label)
+                  ? <textarea readOnly value={value || ""} rows={3} />
                   : <input readOnly value={value || ""} />}
                 <button
                   aria-label={`复制${label}`}
@@ -776,6 +785,7 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
           </div>
         </Modal>
       )}
+      {device && isAvailable(device as AccountChoice, now) && <AccountDevice key={`${userId}-${device.id}`} account={device} onClose={() => setDevice(null)} />}
     </div>
   );
 }

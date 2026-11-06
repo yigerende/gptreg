@@ -1,4 +1,5 @@
 "use strict";
+const { accountDevice } = require("./account-device");
 
 function loginTokens(asset) {
   return {
@@ -20,7 +21,7 @@ async function backfillAccountTokens(db, crypt, manager) {
     try {
       const credentials = crypt.decrypt(row.credentials);
       if (credentials.asset_id !== row.asset_id || String(credentials.email || "").toLowerCase() !== row.email.toLowerCase()) continue;
-      if (credentials.access_token && credentials.session_token) {
+      if (credentials.access_token && credentials.session_token && credentials.device_fingerprint) {
         await db.query("UPDATE platform_accounts SET login_tokens_synced_at=now() WHERE id=$1 AND credentials=$2", [row.id, row.credentials]);
         continue;
       }
@@ -29,7 +30,8 @@ async function backfillAccountTokens(db, crypt, manager) {
       const tokens = loginTokens(asset);
       const next = { ...credentials,
         access_token: credentials.access_token || tokens.access_token,
-        session_token: credentials.session_token || tokens.session_token };
+        session_token: credentials.session_token || tokens.session_token,
+        device_fingerprint: credentials.device_fingerprint || accountDevice(asset) };
       updated += (await db.query(`UPDATE platform_accounts SET credentials=$2,login_tokens_synced_at=now()
         WHERE id=$1 AND credentials=$3`, [row.id, crypt.encrypt(next), row.credentials])).rowCount;
     } catch {

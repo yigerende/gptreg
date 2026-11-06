@@ -82,4 +82,4 @@ function deviceFingerprintPage(store, query = {}) {
   return { ...pageRows(filtered, query), summary };
 }
 
-module.exports = { deviceFingerprintPage };
+module.exports = { deviceFingerprintPage, deviceRow };

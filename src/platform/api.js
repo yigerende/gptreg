@@ -32,7 +32,9 @@ const { registerRedeemCodes, redeemTransaction } = require("./redeem-codes");
 const { oauthExport, tokenExport } = require("./account-export");
 const { registerCustomerCenter } = require("./customer-center");
 const { availableAccount } = require("./account-retention");
+const { registerAccountDevice } = require("./account-device");
 function registerApi(app, db, orders, crypt) {
+  registerAccountDevice(app, db, crypt);
   registerMail(app, db, crypt);
   registerAdminAccounts(app, db, crypt);
   registerCustomerCenter(app, db);

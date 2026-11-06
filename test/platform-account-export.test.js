@@ -81,7 +81,7 @@ test("delivery token backfill matches asset ownership, preserves existing encryp
   for(const [i,item] of items.entries()) {
     const creds={asset_id:'asset-'+i,email:`token-${i}@gmail.com`,password:'keep-password',totp_secret:'JBSWY3DPEHPK3PXP',...(i===0?{access_token:'keep-existing-at'}:{})};
     await orders.finish(item.id,creds);
-    assets.set(creds.asset_id,{id:creds.asset_id,email:i===1?'wrong-owner@gmail.com':creds.email,accessToken:'web-at-'+i,sessionToken:'FULL_SESSION_'+'x'.repeat(18000),password:creds.password,totpSecret:creds.totp_secret,security:{passwordStatus:'configured',totpStatus:'configured'}});
+    assets.set(creds.asset_id,{id:creds.asset_id,email:i===1?'wrong-owner@gmail.com':creds.email,accessToken:'web-at-'+i,sessionToken:'FULL_SESSION_'+'x'.repeat(18000),password:creds.password,totpSecret:creds.totp_secret,security:{passwordStatus:'configured',totpStatus:'configured'},clientProfileFingerprint:'fingerprint-'+i,oaiDid:'device-'+i,sourceProxy:{countryCode:'PH',url:'http://proxy-secret@example.test'},clientProfile:{browser:'firefox',userAgent:'fixture UA',password:'profile-secret',hardwareConcurrency:8,screen:{width:1920,height:1080}}});
   }
   const manager={sessionAssets:()=>({get:assetId=>{if(assetId==='asset-2')throw new Error('pruned');return assets.get(assetId);}})};
   const before=await db.one('SELECT count(*)::int AS n FROM platform_ledger');
@@ -89,11 +89,31 @@ test("delivery token backfill matches asset ownership, preserves existing encryp
   const rows=(await db.query('SELECT * FROM platform_accounts ORDER BY email')).rows;
   const revealed=crypt.decrypt(rows[0].credentials);assert.equal(revealed.access_token,'keep-existing-at');assert.equal(revealed.session_token.length,18013);
   assert.equal(revealed.password,'keep-password');assert.ok(!rows[0].credentials.includes('FULL_SESSION_'));
+  assert.equal(revealed.device_fingerprint.fingerprint,'fingerprint-0');
+  assert.equal(revealed.device_fingerprint.profile.hardwareConcurrency,8);
+  assert.ok(!JSON.stringify(revealed.device_fingerprint).includes('secret'));
   for(const row of rows.slice(1)){assert.equal(crypt.decrypt(row.credentials).session_token,undefined);assert.equal(row.login_tokens_synced_at,null);}
   assert.deepEqual(await backfillAccountTokens(db,crypt,manager),{checked:0,updated:0});
   assert.deepEqual(await db.one('SELECT count(*)::int AS n FROM platform_ledger'),before);
   const worker=new OrderWorker(db,orders,manager),newCredentials=worker.credentials(assets.get('asset-0'),false);
   assert.equal(newCredentials.access_token,'web-at-0');assert.equal(newCredentials.session_token,assets.get('asset-0').sessionToken);assert.equal(newCredentials.oauth,undefined);
+  assert.deepEqual(newCredentials.device_fingerprint,revealed.device_fingerprint);
+  const {buildPlatform}=require('../src/platform/app'),{digest}=require('../src/platform/security');
+  const app=buildPlatform({db,orders,crypt,secrets:{internal:'test'},proxy:false});t.after(()=>app.close());
+  const other=await db.one("INSERT INTO platform_users(id,email,name,password_hash,role) VALUES($1,'other@example.test','Other','unused','member') RETURNING *",[id()]);
+  const admin=await db.one("INSERT INTO platform_users(id,email,name,password_hash,role) VALUES($1,'admin@example.test','Admin','unused','admin') RETURNING *",[id()]);
+  for(const u of [user,other,admin]) await db.query("INSERT INTO platform_sessions(hash,user_id,expires_at) VALUES($1,$2,now()+interval '1 hour')",[digest(u.id),u.id]);
+  const get=(u,adminRoute=false,accountId=rows[0].id)=>app.inject({url:`/api/${adminRoute?'admin':'user'}/v1/accounts/${accountId}/device-fingerprint`,headers:u?{cookie:`gptreg_session=${u.id}`}:{}});
+  assert.equal((await get(null)).statusCode,401);
+  assert.equal((await get(other)).statusCode,404);
+  assert.equal((await get(user,true)).statusCode,403);
+  const own=await get(user);assert.equal(own.statusCode,200,own.body);
+  assert.equal(own.json().device_fingerprint.deviceId,'device-0');assert.ok(own.json().download_expires_at);
+  for(const secret of ['keep-password','FULL_SESSION','proxy-secret','profile-secret','web-at','other@example'])assert.ok(!own.body.includes(secret));
+  assert.equal((await get(user,false,rows[1].id)).json().device_fingerprint,null);
+  await db.query("UPDATE platform_accounts SET created_at=now()-interval '73 hours' WHERE id=$1",[rows[0].id]);
+  assert.equal((await get(user)).statusCode,404);
+  assert.equal((await get(admin,true)).json().device_fingerprint.fingerprint,'fingerprint-0');
 });
 test("CPA single JSON and 1000-account ZIP contain isolated importer objects without portal secrets", () => {
   const one = oauthExport([account(0)], "cpa");

@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Router } from "../router";
@@ -13,6 +14,22 @@ function mount(node: React.ReactNode) {
 }
 const group=(id:string)=>({id,order_id:id,owner_email:"customer@example.test",available_count:600,need_oauth:true});
 const cost={attempts:2,missing:0,pending:true,mail:{USD:{confirmed:.034,pending:.017}},sms:{CNY:{confirmed:.25,pending:0}}};
+it.each([true,false])('admin credentials display complete AT Session RT and device details, OAuth present=%s',async hasOAuth=>{
+  const token='full-session-'+'x'.repeat(12000);
+  vi.spyOn(client,'call').mockImplementation(async path=>{
+    if(path.endsWith('/credentials'))return {email:'one@gmail.com',access_token:'WEB_AT',session_token:token,oauth:hasOAuth?{access_token:'OAUTH_AT',refresh_token:'FULL_RT'}:undefined,delivery:{id:'a',order_id:'one',owner_email:'owner@example.test'}};
+    if(path.endsWith('/device-fingerprint'))return {device_fingerprint:{fingerprint:'ADMIN_FP',profile:{}}};
+    return {total:1,items:[{id:'a',email:'one@gmail.com',order_id:'one'}]};
+  });
+  mount(<AdminAccounts rows={[group('one')]} onOrder={()=>{}}/>);
+  fireEvent.click(screen.getByRole('button',{name:/订单 one/}));await screen.findByText('one@gmail.com');
+  fireEvent.click(screen.getByRole('button',{name:'设备指纹'}));expect(await screen.findByDisplayValue('ADMIN_FP')).toBeVisible();
+  fireEvent.click(screen.getByRole('button',{name:'关闭'}));
+  fireEvent.click(screen.getByRole('button',{name:'查看全部资料'}));
+  expect(await screen.findByDisplayValue(token)).toHaveValue(token);
+  expect(screen.getByRole('textbox',{name:'网页登录 AT'})).toHaveValue('WEB_AT');
+  expect(screen.getByRole('textbox',{name:'RT（Refresh Token）'})).toHaveValue(hasOAuth?'FULL_RT':'');
+});
 it("delivery groups lazily load accounts, keep cross-order selection capped at 1000 and export exact selected IDs",async()=>{
   const exported=vi.spyOn(client,"download").mockImplementation(()=>{});
   const calls: string[]=[];

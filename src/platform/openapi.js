@@ -234,6 +234,12 @@ const schemas = {
         "OAuth 数据，仅含 OAuth 的交付提供；可能有额外元数据，请保留完整对象",
     },
   ),
+  DeviceFingerprint: obj({
+    fingerprint: str("注册时保存的完整浏览器指纹哈希，未记录时为空"),
+    deviceId: str("保存的设备 ID，未记录时为空"),
+    countryCode: str("记录的注册地区代码，不代表已核验的出口 IP"),
+    profile: { type: "object", description: "白名单设备配置：browser/browserVersion/userAgent/platform/oscpu/language/languages/acceptLanguage/timeZone/hardwareConcurrency/maxTouchPoints/storageQuotaBytes/screen/viewport/gpu/schemaVersion；不含密码、Cookie 或代理凭据", additionalProperties: true },
+  }),
   StoredCredentials: obj(
     {
       asset_id: str("交付资产参考标识；查询接口使用 Account.id"),
@@ -242,6 +248,7 @@ const schemas = {
       totp_secret: str("2FA 的 Base32 密钥，请妥善保管"),
       access_token: str("网页登录态 Access Token，标准/OAuth 账号均可返回；与 oauth.access_token 独立。仅新增可选字段，未采集或历史未补齐时为空或省略，不保证仍有效"),
       session_token: str("完整 Session Token（登录 Cookie 的值，原平台已合并分片），不截断；不是 /api/auth/session 的 JSON。标准/OAuth 均可返回，未保存时为空或省略，读取不触发刷新"),
+      device_fingerprint: { ...ref("DeviceFingerprint"), description: "可选设备快照。历史未补齐时可省略；只对应当前交付账号，不包含全库统计或其他账号" },
       oauth: ref("OAuth"),
     },
     ["asset_id", "email", "password", "totp_secret"],

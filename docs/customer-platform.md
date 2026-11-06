@@ -169,6 +169,8 @@ node scripts/platform-preview.js
 
 标准和 OAuth 交付均新增可选 `access_token`（网页登录 AT）与 `session_token`（完整 Session Token，原引擎已拼接 Cookie 分片）。它们与 `oauth.access_token` 独立，Session 不是 `/api/auth/session` 的 JSON；不复制其它网站 Cookie，不触发刷新或登录。新交付随原凭据加密保存，历史交付通过 worker 按资产 ID 与邮箱双重核对后，每批 50 条补齐；原资料、归属、费用、交付时间和 72 小时期限不变。缺失源资产时保留原资料等待核对，不用其他账号或 OAuth AT 顶替。
 
-用户“我的账号”和管理员“账号交付”均可查看、复制完整凭据，新增“邮箱+AT”“邮箱+Session”批量导出，沿用最多 1000 条和导出进度。每行 `邮箱----完整凭据`。选择中任一账号没有对应凭据时整批返回 409，不静默跳过；不能以空值文件误报导出成功。用户领取期仍为 72 小时，管理员保留售后访问。
+用户“我的账号”和管理员“账号交付”均可查看、复制完整凭据，网页登录 AT、完整 Session、OAuth AT 与 RT 分别显示，缺失字段留空。新增“邮箱+AT”“邮箱+Session”批量导出，沿用最多 1000 条和导出进度。每行 `邮箱----完整凭据`。选择中任一账号没有对应凭据时整批返回 409，不静默跳过；不能以空值文件误报导出成功。用户领取期仍为 72 小时，管理员保留售后访问。
+
+两端新增逐账号“设备指纹”按钮，显示保存的指纹哈希、设备 ID、浏览器、语言、屏幕和 GPU 等白名单配置，不带出代理凭据、全库统计或其他账号。新交付及历史补齐保存可选 `device_fingerprint`；凭据接口与 JSON 导出也可包含该字段，旧调用参数保持兼容。用户指纹查看同样校验本人归属与 72 小时期限，管理员保留历史访问。
 
 OpenAPI 1.7.0 保持原 9 个路径、鉴权 scope、字段与默认导出行为；`GET /open/v1/accounts/{id}/credentials` 及 JSON 导出只新增上述可选字段，未保存时为空或省略。新增 `POST /open/v1/accounts/export` 的 `format=email_at` / `email_session`，返回原有 `{filename,content}` JSON 封装，正文为 UTF-8 TXT。原 txt/csv 三列、CPA/SUB 和 OAuth 对象不变。列表不返回凭据，只有受权限保护的查看/导出接口解密；日志和审计不记录 Token。
