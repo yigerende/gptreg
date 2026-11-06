@@ -362,7 +362,7 @@ test('1024 and CLI quick builders merge into one country pool and retain provide
   assert.equal(pool.entries.every((entry) => entry.protocol === 'socks5'), true);
 });
 
-test('1024 refreshes rotate the session time from 120 down to 20 and persist the cursor', async (t) => {
+test('1024 refreshes keep the saved duration across restarts and ignore legacy decrement cursors', async (t) => {
   const { configService } = workspace(t);
   const requested = [];
   let sequence = 0;
@@ -377,7 +377,7 @@ test('1024 refreshes rotate the session time from 120 down to 20 and persist the
   const first = await service.buildAndPullApi({ provider: '1024proxy', countryCode: 'vn', count: 1, protocol: 'http' });
   const sourceId = first.dynamic.countryPools[0].sources[0].id;
   assert.equal(requested[0].searchParams.get('time'), '120');
-  assert.equal(first.dynamic.countryPools[0].sources[0].nextPullTime, 119);
+  assert.equal(first.dynamic.countryPools[0].sources[0].lastPulledSettings.sessionMinutes, 120);
 
   const restartedService = new ProxyService(configService, {
     fetch: async (url) => {
@@ -387,15 +387,147 @@ test('1024 refreshes rotate the session time from 120 down to 20 and persist the
     },
   });
   const second = await restartedService.pull(sourceId);
-  assert.equal(requested[1].searchParams.get('time'), '119');
-  assert.equal(second.dynamic.countryPools[0].sources[0].nextPullTime, 118);
+  assert.equal(requested[1].searchParams.get('time'), '120');
+  assert.equal(second.dynamic.countryPools[0].sources[0].lastPulledSettings.sessionMinutes, 120);
 
   const catalog = restartedService.readCatalog();
   catalog.countryPools.VN.sources[0].nextPullTime = 20;
-  restartedService.writeCatalog(catalog);
-  const wrapped = await restartedService.pull(sourceId);
-  assert.equal(requested[2].searchParams.get('time'), '20');
-  assert.equal(wrapped.dynamic.countryPools[0].sources[0].nextPullTime, 120);
+  fs.writeFileSync(configService.proxyCatalogPath(), JSON.stringify(catalog));
+  restartedService.saveProviderSettings({ provider: '1024proxy', count: 1, protocol: 'http', sessionMinutes: 45 });
+  await restartedService.settingsRefreshFlight;
+  const wrapped = restartedService.list();
+  assert.equal(requested[2].searchParams.get('time'), '45');
+  assert.equal(wrapped.dynamic.countryPools[0].sources[0].lastPulledSettings.sessionMinutes, 45);
+  assert.equal(wrapped.dynamic.countryPools[0].sources[0].nextPullTime, undefined);
+});
+
+test('saving provider settings persists all fields and refreshes only its existing countries on every save', async t => {
+  const { configService } = workspace(t), requests = [];
+  const fetch = async url => {
+    requests.push(new URL(url));
+    return { ok: true, status: 200, text: async () => 'cached.example:2001\nother.example:2002\n' };
+  };
+  const service = new ProxyService(configService, { fetch });
+  for (const provider of ['711proxy', 'b2proxy', '1024proxy', 'cliproxy']) {
+    for (const countryCode of ['JP', 'US']) await service.buildAndPullApi({ provider, countryCode, count: 1 });
+  }
+  service.importDynamic({ content: 'socks5://manual.example:9000', overrides: [{ line: 1, countryCode: 'JP' }] });
+  const before = service.readCatalog();
+  requests.length = 0;
+  const settings = { count: 2, protocol: 'http', sessionMinutes: 45 };
+  service.saveProviderSettings({ provider: '1024proxy', ...settings });
+  assert.equal(service.list().dynamic.settingsRefresh.status, 'running');
+  await service.settingsRefreshFlight;
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every(u => u.hostname === 'white.1024proxy.com' && u.searchParams.get('num') === '2' && u.searchParams.get('time') === '45'));
+  const stored = service.readCatalog();
+  for (const [country, pool] of Object.entries(stored.countryPools)) {
+    assert.deepEqual(pool.manualEntries, before.countryPools[country].manualEntries);
+    for (const source of pool.sources) {
+      const old = before.countryPools[country].sources.find(s => s.id === source.id);
+      assert.ok(old, 'source identities remain stable');
+      if (source.provider === '1024proxy') {
+        assert.equal(source.sessionMinutes, 45);
+        assert.equal(source.count, 2);
+        assert.equal(source.protocol, 'http');
+        assert.equal(source.entries.length, 2);
+        assert.ok(source.entries.every(e => e.protocol === 'http'));
+        assert.deepEqual(source.lastPulledSettings, settings);
+      } else assert.deepEqual(source, old);
+    }
+  }
+  const status = service.list().dynamic.settingsRefresh;
+  assert.equal(status.status, 'success');
+  assert.equal(status.done, 2);
+  assert.equal(status.result.succeeded, 2);
+  service.saveProviderSettings({ provider: '1024proxy', ...settings });
+  await service.settingsRefreshFlight;
+  assert.equal(requests.length, 4, 'unchanged preferences still trigger a new refresh');
+  const restarted = new ProxyService(configService, { fetch });
+  assert.deepEqual(restarted.list().dynamic.providerSettings['1024proxy'], settings);
+  assert.equal(restarted.preview({ scope: 'dynamic', content: API_1024 }).items[0].sessionMinutes, 45);
+  for (const [provider, sessionMinutes] of [['711proxy', 90], ['b2proxy', 30], ['cliproxy', 60]]) {
+    restarted.saveProviderSettings({ provider, count: 2, protocol: 'socks5', sessionMinutes });
+    await restarted.settingsRefreshFlight;
+  }
+  requests.length = 0;
+  await restarted.pullAll();
+  assert.deepEqual(requests.map(u => Number(u.searchParams.get('time') || u.searchParams.get('sessTime'))).sort((a,b)=>a-b), [30,30,45,45,60,60,90,90]);
+  await restarted.buildAndPullApi({ provider: '1024proxy', countryCode: 'DE' });
+  assert.equal(requests.at(-1).searchParams.get('time'), '45');
+  assert.equal(requests.at(-1).searchParams.get('num'), '2');
+  restarted.importDynamic({ mode: 'replace', content: API_1024 });
+  assert.equal(restarted.list().dynamic.countryPools[0].sources[0].sessionMinutes, 45);
+  restarted.clear({ scope: 'dynamic' });
+  assert.deepEqual(restarted.list().dynamic.providerSettings['1024proxy'], settings);
+  restarted.saveProviderSettings({ provider: '1024proxy', ...settings });
+  await restarted.settingsRefreshFlight;
+  assert.equal(restarted.settingsRefresh.status, 'success');
+  assert.equal(restarted.settingsRefresh.total, 0);
+});
+
+test('provider settings API rejects invalid or racing writes and exposes background progress', async t => {
+  const { cwd, configService } = workspace(t);
+  let release, delayed = true;
+  const response = { ok: true, status: 200, text: async () => 'cached.example:2001' };
+  const service = new ProxyService(configService, { fetch: () => delayed ? new Promise(resolve => { release = () => resolve(response); }) : Promise.resolve(response) });
+  service.importDynamic({ content: API_1024 });
+  const { buildApp } = require('../src/ui-server/app');
+  const app = buildApp({ cwd, configService, proxyService: service, deferBootMaintenance: true, robotService: { start() {}, shutdown: async () => {} } });
+  t.after(() => app.close());
+  const save = payload => app.inject({ method: 'PUT', url: '/api/v1/proxies/provider-settings', payload });
+  const defaults = { provider: '1024proxy', count: 2, protocol: 'http', sessionMinutes: 60 };
+  const before = fs.readFileSync(configService.proxyCatalogPath(), 'utf8');
+  for (const sessionMinutes of [0, -1, 121, 1.5, '60', null]) assert.equal((await save({ ...defaults, sessionMinutes })).statusCode, 400);
+  for (const count of [0, -1, 1.5, '2', null]) assert.equal((await save({ ...defaults, count })).statusCode, 400);
+  assert.equal((await save({ ...defaults, provider: '711proxy', count: 901 })).statusCode, 400);
+  assert.equal((await save({ ...defaults, provider: 'unsupported' })).statusCode, 400);
+  assert.equal((await save({ ...defaults, protocol: 'invalid' })).statusCode, 400);
+  assert.equal((await save({ provider: '1024proxy' })).statusCode, 400);
+  assert.equal(fs.readFileSync(configService.proxyCatalogPath(), 'utf8'), before);
+  const pulling = service.pullAll();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await save(defaults)).statusCode, 409);
+  release(); await pulling;
+  const saved = await save(defaults);
+  assert.equal(saved.statusCode, 200);
+  assert.equal(saved.json().refresh.status, 'running');
+  const page = (await app.inject('/api/v1/proxies?paged=1')).json();
+  assert.deepEqual(page.dynamic.providerSettings['1024proxy'], { count: 2, protocol: 'http', sessionMinutes: 60 });
+  assert.equal(page.dynamic.settingsRefresh.status, 'running');
+  assert.equal((await save({ ...defaults, sessionMinutes: 30 })).statusCode, 409);
+  const queuedFullRefresh = service.pullAll();
+  delayed = false;
+  release(); await service.settingsRefreshFlight; await queuedFullRefresh;
+  assert.equal(service.settingsRefresh.status, 'success');
+  assert.equal(service.readCatalog().countryPools.US.sources[0].sessionMinutes, 60);
+});
+
+test('failed provider refresh retains actual cached protocol and saved preferences for retry', async t => {
+  const { configService } = workspace(t);
+  let failed = false;
+  const service = new ProxyService(configService, { fetch: async url => ({ ok: !(failed && new URL(url).searchParams.get('region') === 'JP'), status: failed ? 503 : 200, text: async () => 'cached.example:2001' }) });
+  for (const countryCode of ['JP', 'US']) await service.buildAndPullApi({ provider: '1024proxy', countryCode, count: 1, protocol: 'http' });
+  const before = service.readCatalog();
+  for (const pool of Object.values(before.countryPools)) delete pool.sources[0].lastPulledSettings;
+  fs.writeFileSync(configService.proxyCatalogPath(), JSON.stringify(before));
+  failed = true;
+  service.saveProviderSettings({ provider: '1024proxy', count: 2, protocol: 'socks5', sessionMinutes: 60 });
+  await service.settingsRefreshFlight;
+  const after = service.readCatalog();
+  assert.equal(service.settingsRefresh.status, 'partial');
+  assert.equal(service.settingsRefresh.result.failed, 1);
+  assert.equal(service.settingsRefresh.result.succeeded, 1);
+  assert.deepEqual(after.countryPools.JP.sources[0].entries, before.countryPools.JP.sources[0].entries);
+  assert.equal(after.countryPools.JP.sources[0].lastPulledSettings.protocol, 'http');
+  assert.equal(after.countryPools.JP.sources[0].protocol, 'socks5');
+  assert.match(after.countryPools.JP.sources[0].lastError, /503/);
+  assert.equal(after.countryPools.US.sources[0].entries[0].protocol, 'socks5');
+  failed = false;
+  const restarted = new ProxyService(configService, { fetch: service.fetch });
+  await restarted.pullAll();
+  assert.equal(restarted.readCatalog().countryPools.JP.sources[0].entries[0].protocol, 'socks5');
+  assert.equal(restarted.readCatalog().countryPools.JP.sources[0].lastError, '');
 });
 
 test('changing a host-only API source protocol replaces stale cached entries instead of duplicating the source', async (t) => {
@@ -454,6 +586,7 @@ test('run snapshots bind fixed local endpoints and country pools to Worker slots
     proxyService: service,
     logStore: { append() {} },
   });
+  t.after(() => manager.shutdown());
   const snapshot = manager.proxySnapshot({
     schemaVersion: 2,
     workerConcurrency: 2,
@@ -486,6 +619,7 @@ test('legacy OAuth plans without a pool require explicit proxy selection', (t) =
     proxyService: new ProxyService(configService),
     logStore: { append() {} },
   });
+  t.after(() => manager.shutdown());
   const plan = {
     schemaVersion: 1,
     taskKind: 'oauth',
@@ -537,6 +671,7 @@ test('fixed local assignments reserve duplicate endpoints ahead of country pools
     proxyService: service,
     logStore: { append() {} },
   });
+  t.after(() => manager.shutdown());
   const snapshot = manager.proxySnapshot({
     schemaVersion: 2,
     workerConcurrency: 2,

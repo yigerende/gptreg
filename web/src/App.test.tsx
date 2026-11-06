@@ -394,7 +394,7 @@ describe('console shell', () => {
     expect(screen.getByRole('heading', { name: '本地端口' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '国家代理池' })).toBeInTheDocument();
     expect(await screen.findByText(/global\.rotgbapi\.711proxy\.com/)).toBeInTheDocument();
-    expect(await screen.findByText('2 条 · 固定 180 分钟 · 不提前换 IP')).toBeInTheDocument();
+    expect(await screen.findByText('2 条 · 粘性 180 分钟')).toBeInTheDocument();
     expect(document.querySelector('.proxy-split-workspace')).toBeInTheDocument();
   });
 
@@ -1275,6 +1275,65 @@ describe('console shell', () => {
     expect(within(dialog).getByRole('checkbox', { name: /美国/ })).toBeChecked();
   });
 
+  it('saves quantity, protocol and duration per provider, restores them after remount, and reports refresh progress', async () => {
+    window.history.replaceState(null, '', '/proxies');
+    const settings: Record<string, any> = { '1024proxy': { count: 12, protocol: 'http', sessionMinutes: 30 } };
+    let progress: any = null;
+    const saves: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost');
+      let payload: any = payloads[url.pathname] || {};
+      if (url.pathname === '/api/v1/proxies/provider-settings') {
+        const { provider, ...saved } = JSON.parse(String(init?.body));
+        saves.push({ provider, ...saved }); settings[provider] = saved;
+        progress = { provider, status: 'running', done: 0, total: 2, result: null };
+        payload = { ok: true, provider };
+      }
+      if (url.pathname === '/api/v1/proxies') payload = { ...payload, dynamic: { ...payload.dynamic, providerSettings: settings, settingsRefresh: progress } };
+      return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const makeClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    let client = makeClient();
+    const view = () => <QueryClientProvider client={client}><Tooltip.Provider><Router><App /></Router></Tooltip.Provider></QueryClientProvider>;
+    let rendered = render(view());
+    const chooseProvider = async (label: string) => {
+      fireEvent.click(await screen.findByRole('combobox', { name: '代理商' }));
+      fireEvent.click(await screen.findByRole('option', { name: label }));
+    };
+    await chooseProvider('1024 Proxy');
+    await waitFor(() => expect(screen.getByLabelText('数量')).toHaveValue(12));
+    expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(30);
+    expect(screen.getByRole('combobox', { name: '协议' })).toHaveTextContent('HTTP');
+    fireEvent.change(screen.getByLabelText('数量'), { target: { value: '18' } });
+    fireEvent.blur(screen.getByLabelText('数量'));
+    fireEvent.change(screen.getByLabelText('会话粘性时间（分钟）'), { target: { value: '45' } });
+    fireEvent.click(screen.getByRole('combobox', { name: '协议' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'SOCKS5' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(saves).toEqual([{ provider: '1024proxy', count: 18, protocol: 'socks5', sessionMinutes: 45 }]));
+    expect(await screen.findByRole('progressbar', { name: '国家池更新进度' })).toHaveAttribute('max', '2');
+    expect(screen.getByRole('button', { name: '更新中' })).toBeDisabled();
+    progress = { ...progress, status: 'partial', done: 2, result: { succeeded: 1, failed: 1, pulled: 18, results: [{ sourceId: 'jp', countryCode: 'JP', ok: false, error: '服务暂不可用' }] } };
+    await act(async () => { await client.invalidateQueries({ queryKey: ['proxies'] }); });
+    expect(await screen.findByText('成功 1 · 失败 1 · 拉取 18 条')).toBeInTheDocument();
+    expect(screen.getByText(/JP：服务暂不可用/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
+    await chooseProvider('B2Proxy');
+    expect(screen.getByLabelText('数量')).toHaveValue(600);
+    expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(60);
+    await chooseProvider('1024 Proxy');
+    expect(screen.getByLabelText('数量')).toHaveValue(18);
+    expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(45);
+    rendered.unmount(); client.clear(); client = makeClient(); rendered = render(view());
+    await chooseProvider('1024 Proxy');
+    await waitFor(() => expect(screen.getByLabelText('数量')).toHaveValue(18));
+    expect(screen.getByRole('combobox', { name: '协议' })).toHaveTextContent('SOCKS5');
+    expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(45);
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    rendered.unmount(); client.clear();
+  });
+
   it('switches proxy API providers and builds the selected source from country, count, and protocol controls', async () => {
     window.history.replaceState(null, '', '/proxies');
     let buildRequest: any = null;
@@ -1300,24 +1359,24 @@ describe('console shell', () => {
     expect(screen.getByRole('combobox', { name: '国家' })).toHaveTextContent(/US/);
     expect(screen.getByRole('combobox', { name: '协议' })).toBeEnabled();
     expect(screen.getByRole('combobox', { name: '协议' })).toHaveTextContent('SOCKS5');
-    expect(screen.getByText(/协议 · 120 分钟/)).toBeInTheDocument();
+    expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(120);
     fireEvent.click(screen.getByRole('combobox', { name: '代理商' }));
     fireEvent.click(await screen.findByRole('option', { name: 'B2Proxy' }));
     expect(screen.getByRole('combobox', { name: '国家' })).toHaveTextContent(/US/);
     expect(screen.getByRole('combobox', { name: '协议' })).toHaveTextContent('SOCKS5');
     expect(screen.getByLabelText('数量')).toHaveValue(600);
-    expect(screen.getByText(/协议 · 60 分钟/)).toBeInTheDocument();
+    expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(60);
     fireEvent.click(screen.getByRole('combobox', { name: '代理商' }));
     fireEvent.click(await screen.findByRole('option', { name: 'CLI Proxy' }));
     expect(screen.getByRole('combobox', { name: '协议' })).toHaveTextContent('HTTP');
-    expect(screen.getByText(/协议 · 15 分钟/)).toBeInTheDocument();
+    expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(15);
     const count = screen.getByLabelText('数量');
     fireEvent.focus(count);
     fireEvent.change(count, { target: { value: '3' } });
     fireEvent.blur(count);
     fireEvent.click(screen.getByRole('button', { name: '构建并拉取' }));
 
-    await waitFor(() => expect(buildRequest).toEqual({ provider: 'cliproxy', countryCode: 'US', count: 3, protocol: 'http' }));
+    await waitFor(() => expect(buildRequest).toEqual({ provider: 'cliproxy', countryCode: 'US', count: 3, protocol: 'http', sessionMinutes: 15 }));
     expect(await screen.findByText('已拉取 US 国家池，目标 3 条')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('已拉取 US 国家池，目标 3 条')).not.toBeInTheDocument(), { timeout: 4000 });
   });

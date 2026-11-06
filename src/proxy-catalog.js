@@ -12,7 +12,7 @@ const DEFAULT_PROXY_API_COUNT = 600;
 const B2PROXY_DEFAULT_COUNT = DEFAULT_PROXY_API_COUNT;
 const B2PROXY_SESSION_MINUTES = 60;
 const MAX_1024_SESSION_MINUTES = 120;
-const MIN_1024_REFRESH_MINUTES = 20;
+const PROXY_SESSION_DEFAULTS = Object.freeze({ '711proxy': 180, b2proxy: 60, '1024proxy': 120, cliproxy: 15 });
 const DEFAULT_711_API_TEMPLATE = `http://global.rotgbapi.711proxy.com:8089/gen?zone=custom&ptype=1&count=${DEFAULT_PROXY_API_COUNT}&proto=http&stype=text&split=%5Cr%5Cn&sessType=sticky&sessTime=180&sessAuto=0`;
 const DEFAULT_B2PROXY_API_TEMPLATE = `http://global.rrp.bestgo.work:8089/gen?zone=custom&ptype=1&region=US&count=${B2PROXY_DEFAULT_COUNT}&proto=socks5&stype=txt&split=%5Cr%5Cn&sessType=sticky&sessTime=${B2PROXY_SESSION_MINUTES}&sessAuto=1`;
 const DEFAULT_1024_API_TEMPLATE = `https://white.1024proxy.com/white/api?region=US&num=${DEFAULT_PROXY_API_COUNT}&time=${MAX_1024_SESSION_MINUTES}&format=1&type=txt`;
@@ -98,16 +98,27 @@ function normalizeProxyApiCount(value, fallback = DEFAULT_PROXY_API_COUNT, provi
   return count;
 }
 
-function normalize1024PullTime(value, fallback = MAX_1024_SESSION_MINUTES) {
-  const time = Number(value);
-  return Number.isInteger(time) && time >= MIN_1024_REFRESH_MINUTES && time <= MAX_1024_SESSION_MINUTES
-    ? time
-    : fallback;
+function normalizeSessionMinutes(provider, value = PROXY_SESSION_DEFAULTS[provider]) {
+  if (!Object.hasOwn(PROXY_SESSION_DEFAULTS, provider)) throw new Error('不支持的代理厂商');
+  const max = provider === '1024proxy' ? MAX_1024_SESSION_MINUTES : 1440;
+  if (!Number.isInteger(value) || value < 1 || value > max) {
+    throw new Error(`${PROXY_API_LABELS[provider]} 会话粘性时间须为 1～${max} 分钟的整数`);
+  }
+  return value;
 }
 
-function next1024PullTime(value) {
-  const current = normalize1024PullTime(value);
-  return current <= MIN_1024_REFRESH_MINUTES ? MAX_1024_SESSION_MINUTES : current - 1;
+function normalizeProviderSettings(provider, value = {}) {
+  if (!Object.hasOwn(PROXY_SESSION_DEFAULTS, provider)) throw new Error('不支持的代理厂商');
+  const count = provider === '711proxy' ? normalize711Count(value.count)
+    : provider === 'b2proxy' ? normalizeB2ProxyCount(value.count)
+      : normalizeProxyApiCount(value.count, DEFAULT_PROXY_API_COUNT, provider);
+  const protocol = value.protocol ?? DEFAULT_PROXY_API_PROTOCOLS[provider];
+  if (!['http', 'socks5'].includes(protocol)) throw new Error('协议只支持 HTTP 或 SOCKS5');
+  return { count, protocol, sessionMinutes: normalizeSessionMinutes(provider, value.sessionMinutes) };
+}
+
+function providerSettingsSnapshot(settings = {}) {
+  return Object.fromEntries(Object.keys(PROXY_SESSION_DEFAULTS).map(provider => [provider, normalizeProviderSettings(provider, settings[provider])]));
 }
 
 function parseUrl(value) {
@@ -193,6 +204,7 @@ function normalize711ApiUrl(value, options = {}) {
   const countryCode = normalizeCountryCode(options.countryCode || url.searchParams.get('region') || GLOBAL_COUNTRY_CODE);
   const count = normalize711Count(options.count, url.searchParams.get('count') || DEFAULT_PROXY_API_COUNT);
   const protocol = normalizeProtocol(options.protocol || url.searchParams.get('proto') || 'http');
+  const sessionMinutes = normalizeSessionMinutes('711proxy', options.sessionMinutes);
 
   url.searchParams.set('zone', url.searchParams.get('zone') || 'custom');
   url.searchParams.set('ptype', url.searchParams.get('ptype') || '1');
@@ -203,7 +215,7 @@ function normalize711ApiUrl(value, options = {}) {
   url.searchParams.set('stype', 'text');
   url.searchParams.set('split', '\\r\\n');
   url.searchParams.set('sessType', 'sticky');
-  url.searchParams.set('sessTime', '180');
+  url.searchParams.set('sessTime', String(sessionMinutes));
   url.searchParams.set('sessAuto', '0');
 
   return {
@@ -212,7 +224,7 @@ function normalize711ApiUrl(value, options = {}) {
     count,
     protocol,
     sessionType: 'sticky',
-    sessionMinutes: 180,
+    sessionMinutes,
     earlyRotation: false,
   };
 }
@@ -224,6 +236,7 @@ function normalizeB2ProxyApiUrl(value, options = {}) {
   if (countryCode === GLOBAL_COUNTRY_CODE) throw new Error('B2Proxy requires a two-letter country code');
   const count = normalizeB2ProxyCount(options.count, url.searchParams.get('count') || B2PROXY_DEFAULT_COUNT);
   const protocol = normalizeProtocol(options.protocol || url.searchParams.get('proto') || DEFAULT_PROXY_API_PROTOCOLS.b2proxy);
+  const sessionMinutes = normalizeSessionMinutes('b2proxy', options.sessionMinutes);
 
   url.searchParams.set('zone', url.searchParams.get('zone') || 'custom');
   url.searchParams.set('ptype', url.searchParams.get('ptype') || '1');
@@ -233,7 +246,7 @@ function normalizeB2ProxyApiUrl(value, options = {}) {
   url.searchParams.set('stype', 'txt');
   url.searchParams.set('split', '\\r\\n');
   url.searchParams.set('sessType', 'sticky');
-  url.searchParams.set('sessTime', String(B2PROXY_SESSION_MINUTES));
+  url.searchParams.set('sessTime', String(sessionMinutes));
   url.searchParams.set('sessAuto', '1');
 
   return {
@@ -243,7 +256,7 @@ function normalizeB2ProxyApiUrl(value, options = {}) {
     count,
     protocol,
     sessionType: 'sticky',
-    sessionMinutes: B2PROXY_SESSION_MINUTES,
+    sessionMinutes,
     earlyRotation: false,
   };
 }
@@ -265,7 +278,7 @@ function normalizeRegionalProxyApiUrl(value, options = {}, provider) {
         ? DEFAULT_PROXY_API_PROTOCOLS[provider]
         : options.defaultProtocol || DEFAULT_PROXY_API_PROTOCOLS[provider]),
   );
-  const sessionMinutes = provider === '1024proxy' ? MAX_1024_SESSION_MINUTES : 15;
+  const sessionMinutes = normalizeSessionMinutes(provider, options.sessionMinutes);
 
   url.searchParams.set('region', countryCode);
   url.searchParams.set('num', String(count));
@@ -308,7 +321,7 @@ function buildProxyApiUrl(provider, options = {}) {
 }
 
 function emptyProxyCatalog() {
-  return { schemaVersion: CATALOG_SCHEMA_VERSION, countryPools: {} };
+  return { schemaVersion: CATALOG_SCHEMA_VERSION, providerSettings: {}, countryPools: {} };
 }
 
 function normalizeCachedEntry(entry, countryCode, sourceId) {
@@ -348,6 +361,9 @@ function normalizeProxyCatalog(input = {}) {
     throw new Error(`Unsupported proxy catalog schemaVersion: ${input.schemaVersion}`);
   }
   const catalog = emptyProxyCatalog();
+  for (const [provider, settings] of Object.entries(input.providerSettings || {})) {
+    catalog.providerSettings[provider] = normalizeProviderSettings(provider, settings);
+  }
   for (const [rawCode, rawPool] of Object.entries(input.countryPools || {})) {
     const countryCode = normalizeCountryCode(rawCode);
     const retiredEntries = normalizeRetiredEntries(rawPool?.retiredEntries);
@@ -369,6 +385,7 @@ function normalizeProxyCatalog(input = {}) {
         countryCode,
         count: rawSource.count,
         protocol: rawSource.protocol,
+        sessionMinutes: rawSource.sessionMinutes,
       });
       // Recomputed rather than trusted, so catalogs written under the old
       // URL-derived scheme collapse their duplicate sources on the next read.
@@ -383,12 +400,6 @@ function normalizeProxyCatalog(input = {}) {
         entries.push(entry);
       }
       const previous = sourceIds.has(id) ? sources.find((source) => source.id === id) : null;
-      const defaultNextPullTime = normalized.provider === '1024proxy'
-        ? (rawSource.lastPulledAt ? next1024PullTime(normalized.sessionMinutes) : normalized.sessionMinutes)
-        : undefined;
-      const nextPullTime = normalized.provider === '1024proxy'
-        ? normalize1024PullTime(rawSource.nextPullTime, defaultNextPullTime)
-        : undefined;
       if (previous) {
         // Two records for one source: keep the fresher pull and union the
         // cached proxies rather than dropping whichever came second.
@@ -402,7 +413,6 @@ function normalizeProxyCatalog(input = {}) {
           previous.lastPulledAt = String(rawSource.lastPulledAt || '');
           previous.lastPullCount = Number(rawSource.lastPullCount || previous.entries.length);
           previous.lastError = String(rawSource.lastError || '');
-          if (normalized.provider === '1024proxy') previous.nextPullTime = nextPullTime;
         }
         previous.count = Math.max(Number(previous.count || 0), Number(normalized.count || 0));
         continue;
@@ -415,7 +425,7 @@ function normalizeProxyCatalog(input = {}) {
         lastPulledAt: rawSource.lastPulledAt || '',
         lastPullCount: Number(rawSource.lastPullCount || entries.length),
         lastError: String(rawSource.lastError || ''),
-        ...(normalized.provider === '1024proxy' ? { nextPullTime } : {}),
+        lastPulledSettings: rawSource.lastPulledSettings || null,
       });
     }
     if (manualEntries.length || sources.length || retiredEntries.length) {
@@ -449,6 +459,7 @@ function parseDynamicContent(content, options = {}) {
       let item;
       if (isProxyApiHost(text)) {
         const source = normalizeProxyApiUrl(text, {
+          ...options.providerSettings?.[proxyApiProviderFromHost(text)],
           ...override,
           // Provider defaults are more reliable than the generic dynamic
           // import default for API responses that contain only host:port.
@@ -496,6 +507,10 @@ function flattenedPoolEntries(pool) {
 }
 
 module.exports = {
+  PROXY_SESSION_DEFAULTS,
+  normalizeSessionMinutes,
+  normalizeProviderSettings,
+  providerSettingsSnapshot,
   proxyApiSourceId,
   PROXY_API_LABELS,
   buildProxyApiUrl,
@@ -503,9 +518,7 @@ module.exports = {
   flattenedPoolEntries,
   normalizeB2ProxyApiUrl,
   normalize711ApiUrl,
-  next1024PullTime,
   normalizeProxyApiUrl,
-  normalize1024PullTime,
   normalizeProxyCatalog,
   parseDynamicContent,
   stableId,

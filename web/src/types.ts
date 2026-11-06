@@ -1081,7 +1081,7 @@ export type ProxyApiSource = {
   earlyRotation: false;
   entries: DynamicProxyEntry[];
   cachedCount: number;
-  nextPullTime?: number;
+  lastPulledSettings?: ProxyProviderSettings | null;
   lastPulledAt: string;
   lastPullCount: number;
   lastError: string;
@@ -1110,9 +1110,21 @@ export type ProxyRefreshSummary = {
 export type ProxyCatalogSnapshot = {
   total: number;
   local: { total: number; errors: unknown[]; proxies: ProxyRecord[] };
-  dynamic: { total: number; countryPools: CountryProxyPool[] };
+  dynamic: { total: number; countryPools: CountryProxyPool[]; providerSettings?: Record<string, ProxyProviderSettings>; settingsRefresh?: ProxySettingsRefresh | null };
   errors: unknown[];
   proxies: ProxyRecord[];
+};
+
+export type ProxyProviderSettings = { count: number; protocol: string; sessionMinutes: number };
+export type ProxySettingsRefresh = {
+  provider: string;
+  status: 'running' | 'success' | 'partial' | 'failed';
+  done: number;
+  total: number;
+  startedAt: string;
+  finishedAt: string;
+  result: ProxyRefreshSummary | null;
+  error: string;
 };
 
 export type LogRecord = {

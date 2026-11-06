@@ -8,9 +8,10 @@ const {
   buildProxyApiUrl,
   emptyProxyCatalog,
   flattenedPoolEntries,
-  next1024PullTime,
+  normalizeProviderSettings,
+  providerSettingsSnapshot,
+  normalizeProxyApiUrl,
   normalizeProxyCatalog,
-  normalize1024PullTime,
   parseDynamicContent,
   proxyApiSourceId,
 } = require('../proxy-catalog');
@@ -57,13 +58,6 @@ function sourceInCatalog(catalog, sourceId) {
   return null;
 }
 
-function sourcePullUrl(source) {
-  if (source.provider !== '1024proxy') return source.url;
-  const url = new URL(source.url);
-  url.searchParams.set('time', String(normalize1024PullTime(source.nextPullTime)));
-  return url.toString();
-}
-
 function countryCodesFromOptions(options = {}) {
   const countryCodes = Array.isArray(options.countryCodes)
     ? options.countryCodes
@@ -86,6 +80,9 @@ class ProxyService {
     this.pendingRetirements = [];
     // Normalized catalog, keyed by the catalog file's mtime and size.
     this.catalogCache = null;
+    this.settingsRefresh = null;
+    this.settingsRefreshController = null;
+    this.settingsRefreshFlight = null;
   }
 
   async fetchApiSource(url, options = {}) {
@@ -237,6 +234,8 @@ class ProxyService {
       .sort((left, right) => left.countryCode === 'GLOBAL' ? -1 : right.countryCode === 'GLOBAL' ? 1 : left.countryCode.localeCompare(right.countryCode));
     return {
       total: countryPools.reduce((sum, pool) => sum + pool.total, 0),
+      providerSettings: providerSettingsSnapshot(catalog.providerSettings),
+      settingsRefresh: this.settingsRefresh ? clone(this.settingsRefresh) : null,
       countryPools,
     };
   }
@@ -256,6 +255,7 @@ class ProxyService {
   preview(payload = {}) {
     if (payload.scope === 'dynamic') {
       const parsed = parseDynamicContent(payload.content, {
+        providerSettings: this.catalogSnapshot().providerSettings,
         defaultProtocol: payload.defaultProtocol,
         overrides: payload.overrides,
       });
@@ -304,11 +304,13 @@ class ProxyService {
   importDynamic(payload = {}) {
     if (this.catalogBusy) throw new HttpError(409, 'A dynamic proxy source is currently being refreshed');
     const incoming = parseDynamicContent(payload.content, {
+      providerSettings: this.catalogSnapshot().providerSettings,
       defaultProtocol: payload.defaultProtocol,
       overrides: payload.overrides,
     });
     if (incoming.errors.length) throw new HttpError(400, 'Dynamic proxy import contains invalid lines', incoming.errors);
     const catalog = payload.mode === 'replace' ? emptyProxyCatalog() : this.readCatalog();
+    if (payload.mode === 'replace') catalog.providerSettings = clone(this.catalogSnapshot().providerSettings);
     for (const item of incoming.items) {
       const pool = poolFor(catalog, item.countryCode);
       if (item.kind === 'proxy') {
@@ -343,6 +345,7 @@ class ProxyService {
           existing.lastPulledAt = '';
           existing.lastPullCount = 0;
           existing.lastError = '';
+          existing.lastPulledSettings = null;
         }
         continue;
       }
@@ -356,7 +359,6 @@ class ProxyService {
         sessionType: item.sessionType,
         sessionMinutes: item.sessionMinutes,
         earlyRotation: item.earlyRotation,
-        ...(item.provider === '1024proxy' ? { nextPullTime: item.sessionMinutes } : {}),
         entries: [],
         lastPulledAt: '',
         lastPullCount: 0,
@@ -467,7 +469,7 @@ class ProxyService {
     const scope = typeof payload === 'string' ? payload : payload.scope || 'local';
     if (scope === 'dynamic') {
       if (this.catalogBusy) throw new HttpError(409, 'A dynamic proxy source is currently being refreshed');
-      this.writeCatalog(emptyProxyCatalog());
+      this.writeCatalog({ ...emptyProxyCatalog(), providerSettings: clone(this.catalogSnapshot().providerSettings) });
       return this.list();
     }
     atomicWriteText(this.configService.proxyFilePath(), '# Local proxy pool intentionally empty.\n');
@@ -510,7 +512,7 @@ class ProxyService {
     else callerSignal?.addEventListener?.('abort', abortFromCaller, { once: true });
     const providerLabel = PROXY_API_LABELS[found.source.provider] || 'Dynamic proxy';
     try {
-      const response = await this.fetchApiSource(sourcePullUrl(found.source), { signal: controller.signal, timeoutMs });
+      const response = await this.fetchApiSource(found.source.url, { signal: controller.signal, timeoutMs });
       if (!response.ok) throw new Error(`${providerLabel} API returned HTTP ${response.status}`);
       const content = await response.text();
       const parsed = parseProxyContent(content, { defaultProtocol: found.source.protocol });
@@ -530,9 +532,7 @@ class ProxyService {
         sourceId: found.source.id,
       }));
       found.source.entries = entries;
-      if (found.source.provider === '1024proxy') {
-        found.source.nextPullTime = next1024PullTime(found.source.nextPullTime);
-      }
+      found.source.lastPulledSettings = { count: found.source.count, protocol: found.source.protocol, sessionMinutes: found.source.sessionMinutes };
       found.source.lastPulledAt = new Date().toISOString();
       found.source.lastPullCount = entries.length;
       found.source.lastError = parsed.errors.length
@@ -630,7 +630,7 @@ class ProxyService {
   async pullAll(options = {}) {
     return this.runCatalogRefresh(() => this.pullAllOnce(options), {
       ...options,
-      shareable: true,
+      shareable: !options.provider,
     });
   }
 
@@ -643,9 +643,9 @@ class ProxyService {
       const allTargets = Object.values(catalog.countryPools || {})
         .flatMap((pool) => (pool.sources || []).map((source) => ({ pool, source })))
         .sort((left, right) => left.pool.countryCode.localeCompare(right.pool.countryCode));
-      const targets = requestedCountries?.size
-        ? allTargets.filter(({ pool }) => requestedCountries.has(String(pool.countryCode || '').toUpperCase()))
-        : allTargets;
+      const targets = allTargets.filter(({ pool, source }) =>
+        (!requestedCountries || requestedCountries.has(String(pool.countryCode || '').toUpperCase()))
+        && (!options.provider || source.provider === options.provider));
       if (!targets.length) {
         if (!options.allowEmpty) throw new HttpError(400, 'No dynamic proxy API source to refresh');
         return {
@@ -720,10 +720,12 @@ class ProxyService {
   async buildAndPullApi(payload = {}) {
     let source;
     try {
+      const defaults = this.catalogSnapshot().providerSettings[payload.provider || '711proxy'] || {};
       source = buildProxyApiUrl(payload.provider || '711proxy', {
         countryCode: payload.countryCode || 'GLOBAL',
-        count: payload.count,
-        protocol: payload.protocol,
+        count: payload.count ?? defaults.count,
+        protocol: payload.protocol ?? defaults.protocol,
+        sessionMinutes: payload.sessionMinutes ?? defaults.sessionMinutes,
       });
     } catch (error) {
       throw new HttpError(400, error.message);
@@ -732,8 +734,62 @@ class ProxyService {
       mode: 'append',
       content: source.url,
       defaultProtocol: source.protocol,
+      overrides: [{ line: 1, count: source.count, protocol: source.protocol, sessionMinutes: source.sessionMinutes }],
     });
     return this.pull(proxyApiSourceId(source), { timeoutMs: payload.timeoutMs });
+  }
+
+  saveProviderSettings(payload = {}) {
+    if (this.catalogBusy || this.catalogRefreshFlight || this.settingsRefreshFlight) throw new HttpError(409, '代理正在刷新，请刷新完成后保存');
+    let settings;
+    try {
+      if (!Number.isSafeInteger(payload.count) || payload.count < 1) throw new Error('请填写有效的代理条数');
+      if (payload.sessionMinutes === undefined || payload.protocol === undefined) throw new Error('请填写协议和会话粘性时间');
+      settings = normalizeProviderSettings(payload.provider, payload);
+    }
+    catch (error) { throw new HttpError(400, error.message); }
+    const catalog = this.readCatalog();
+    catalog.providerSettings[payload.provider] = settings;
+    let total = 0;
+    for (const pool of Object.values(catalog.countryPools)) {
+      for (const source of pool.sources) {
+        if (source.provider !== payload.provider) continue;
+        // Cached endpoints keep their actual protocol until a successful pull.
+        // Changing preferences cannot change an already issued upstream lease.
+        if (!source.lastPulledSettings && source.lastPulledAt) {
+          source.lastPulledSettings = { count: source.count, protocol: source.protocol, sessionMinutes: source.sessionMinutes };
+        }
+        Object.assign(source, normalizeProxyApiUrl(source.url, { provider: source.provider, countryCode: pool.countryCode, ...settings }));
+        total += 1;
+      }
+    }
+    this.writeCatalog(catalog);
+    const job = { provider: payload.provider, status: 'running', done: 0, total, startedAt: new Date().toISOString(), finishedAt: '', result: null, error: '' };
+    this.settingsRefresh = job;
+    const controller = new AbortController();
+    this.settingsRefreshController = controller;
+    // A non-shareable operation ensures each save performs a fresh pull. The
+    // existing refresh lock serializes it with scheduled and manual refreshes.
+    this.settingsRefreshFlight = this.runCatalogRefresh(() => this.pullAllOnce({
+      provider: payload.provider, allowEmpty: true, signal: controller.signal,
+      onProgress: ({ done, total: targetCount }) => { job.done = done; job.total = targetCount; },
+    })).then(snapshot => {
+      job.result = snapshot.refresh;
+      job.status = snapshot.refresh.failed ? (snapshot.refresh.succeeded ? 'partial' : 'failed') : 'success';
+    }).catch(error => {
+      job.status = 'failed';
+      job.error = error.message;
+    }).finally(() => {
+      job.finishedAt = new Date().toISOString();
+      this.settingsRefreshFlight = null;
+      this.settingsRefreshController = null;
+    });
+    return { ok: true, provider: payload.provider, settings, refresh: clone(job) };
+  }
+
+  async shutdown() {
+    this.settingsRefreshController?.abort();
+    await this.settingsRefreshFlight;
   }
 
   async buildAndPull711(payload = {}) {

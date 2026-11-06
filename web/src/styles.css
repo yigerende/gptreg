@@ -668,12 +668,16 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .proxy-composer .segmented button { min-width: 60px; }
 .proxy-composer textarea { min-height: 92px; max-height: 180px; padding: 9px 10px; resize: vertical; font: 11px/1.5 Consolas, "Cascadia Code", monospace; }
 .dynamic-composer textarea { min-height: 76px; }
-.proxy-quick-builder { display: grid; grid-template-columns: minmax(118px, 1fr) minmax(92px, .8fr) 72px 104px auto; align-items: end; gap: 7px; margin-bottom: 9px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.proxy-quick-builder { display: grid; grid-template-columns: minmax(118px, 1fr) minmax(92px, .8fr) 72px 104px; align-items: end; gap: 7px; margin-bottom: 9px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 .proxy-quick-builder > label, .proxy-quick-builder > .quick-field { min-width: 0; display: grid; gap: 4px; }
 .proxy-quick-builder > label > span, .proxy-quick-builder > .quick-field > span { color: var(--faint); font-size: 8px; font-weight: 600; }
 .proxy-quick-builder input, .proxy-quick-builder .app-select-trigger { height: 32px; padding: 0 7px; font-size: 10px; }
 .proxy-quick-builder .button { height: 32px; padding: 0 9px; white-space: nowrap; }
 .proxy-quick-builder .app-select { min-width: 0; }
+.proxy-session-controls { grid-column: 1 / -1; display: flex; align-items: end; gap: 7px; flex-wrap: wrap; }
+.proxy-session-controls > label { display: grid; gap: 4px; flex: 1; min-width: 130px; }
+.proxy-session-controls > label > span { color: var(--faint); font-size: 10px; font-weight: 600; }
+.proxy-session-help { grid-column: 1 / -1; margin: 0; color: var(--faint); font-size: 10px; line-height: 1.5; }
 .import-protocol-select { width: 150px; flex: 0 0 150px; }
 .composer-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 8px; }
 .proxy-pane-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
@@ -2495,3 +2499,6 @@ html { scroll-behavior: smooth; }
 
 .app-shell .sessions-workspace { grid-template-rows: auto; align-items: start; }
 .app-shell .session-list-panel { grid-template-rows: auto; }
+
+.proxy-settings-progress { grid-column: 1 / -1; display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.proxy-settings-progress progress { width: 100%; height: 6px; accent-color: var(--accent); }

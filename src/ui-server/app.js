@@ -215,6 +215,7 @@ function buildApp(options = {}) {
   // once at boot, then opportunistically as events arrive.
   try { logStore.sweep({ protect: runManager.activeRunIds?.() || [] }); } catch { /* Boot must not fail on maintenance. */ }
   app.addHook('onClose', async () => { await robotService.shutdown(); });
+  app.addHook('onClose', async () => { await proxyService.shutdown?.(); });
   const sessionAssetProbe = options.sessionAssetProbe || probeSessionAssets;
   const sessionAssetTrialCheck = options.sessionAssetTrialCheck || checkSessionAssetTrials;
   const smsBalanceReader = options.smsBalanceReader || readSmsBalance;
@@ -1197,6 +1198,10 @@ function buildApp(options = {}) {
   app.post('/api/v1/proxies/preview', async (request) => proxyService.preview(request.body || {}));
   app.post('/api/v1/proxies/import', async (request) => proxyService.import(request.body || {}));
   app.post('/api/v1/proxies/api/build-pull', async (request) => proxyService.buildAndPullApi(request.body || {}));
+  app.put('/api/v1/proxies/provider-settings', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return proxyService.saveProviderSettings(request.body || {});
+  });
   app.post('/api/v1/proxies/711/build-pull', async (request) => proxyService.buildAndPull711(request.body || {}));
   app.post('/api/v1/proxies/sources/pull-all', async (request) => proxyService.pullAll(request.body || {}));
   app.post('/api/v1/proxies/sources/:sourceId/pull', async (request) => proxyService.pull(

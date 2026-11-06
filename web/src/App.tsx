@@ -3650,7 +3650,7 @@ function ManualProxyEntries({ country, onRemove }: { country: string; onRemove: 
 function ProxyPage() {
   const client = useQueryClient();
   const [proxyOffset, setProxyOffset] = useState(0);
-  const proxies = useQuery({ queryKey: ['proxies', 'page', proxyOffset], queryFn: () => endpoints.proxiesPage(proxyOffset) });
+  const proxies = useQuery({ queryKey: ['proxies', 'page', proxyOffset], queryFn: () => endpoints.proxiesPage(proxyOffset), refetchInterval: query => query.state.data?.dynamic?.settingsRefresh?.status === 'running' ? 1500 : false });
   const [localContent, setLocalContent] = useState('');
   const [dynamicContent, setDynamicContent] = useState('');
   const [localProtocol, setLocalProtocol] = useState('http');
@@ -3659,8 +3659,7 @@ function ProxyPage() {
   const [dynamicMode, setDynamicMode] = useState<'append' | 'replace'>('append');
   const [quickProvider, setQuickProvider] = useState('711proxy');
   const [quickCountry, setQuickCountry] = useState('GLOBAL');
-  const [quickCount, setQuickCount] = useState(DEFAULT_PROXY_API_COUNT);
-  const [quickProtocol, setQuickProtocol] = useState('http');
+  const [providerDrafts, setProviderDrafts] = useState<Record<string, { count?: number; protocol?: string; sessionText?: string }>>({});
   const [localPreview, setLocalPreview] = useState<any>(null);
   const [dynamicPreview, setDynamicPreview] = useState<any>(null);
   const [dynamicOverrides, setDynamicOverrides] = useState<Array<{ line: number; countryCode: string; count?: number; protocol: string }>>([]);
@@ -3704,12 +3703,32 @@ function ProxyPage() {
     onError: (error) => { setNotice({ tone: 'danger', text: errorMessage(error) }); refresh(); },
   });
   const quickProviderMeta = PROXY_API_PROVIDER_META[quickProvider];
+  const savedSettings = proxies.data?.dynamic?.providerSettings?.[quickProvider];
+  const draft = providerDrafts[quickProvider] || {};
+  const quickCount = draft.count ?? savedSettings?.count ?? quickProviderMeta.defaultCount ?? DEFAULT_PROXY_API_COUNT;
+  const quickProtocol = draft.protocol ?? savedSettings?.protocol ?? quickProviderMeta.defaultProtocol;
+  const sessionText = draft.sessionText ?? String(savedSettings?.sessionMinutes ?? quickProviderMeta.sessionMinutes);
+  const updateProviderDraft = (patch: typeof draft) => setProviderDrafts(current => ({ ...current, [quickProvider]: { ...current[quickProvider], ...patch } }));
+  const sessionMinutes = Number(sessionText);
+  const maxSessionMinutes = quickProvider === '1024proxy' ? 120 : 1440;
+  const validSessionMinutes = !!sessionText.trim() && Number.isInteger(sessionMinutes) && sessionMinutes >= 1 && sessionMinutes <= maxSessionMinutes;
+  const settingsRefresh = proxies.data?.dynamic?.settingsRefresh;
+  const settingsRefreshing = settingsRefresh?.status === 'running';
+  const saveSettings = useMutation({
+    mutationFn: (value: { provider: string; count: number; protocol: string; sessionMinutes: number }) => endpoints.saveProxyProviderSettings(value),
+    onSuccess: async (data) => {
+      await refresh();
+      setProviderDrafts(previous => { const next = { ...previous }; delete next[data.provider]; return next; });
+      setDynamicPreview(null);
+      setNotice({ tone: 'success', text: `${PROXY_API_PROVIDER_META[data.provider].label} 条数、协议和粘性时间已保存，正在更新该厂商已有国家池。` });
+    },
+    onError: error => setNotice({ tone: 'danger', text: errorMessage(error) }),
+  });
   const quickPull = useMutation({
-    mutationFn: () => endpoints.buildAndPullProxyApi({ provider: quickProvider, countryCode: quickCountry, count: quickCount, protocol: quickProtocol }),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: ['proxies'] });
+    mutationFn: () => endpoints.buildAndPullProxyApi({ provider: quickProvider, countryCode: quickCountry, count: quickCount, protocol: quickProtocol, sessionMinutes }),
+    onSuccess: async () => {
       setNotice({ tone: 'success', text: `已拉取 ${quickCountry === 'GLOBAL' ? '全球' : quickCountry} 国家池，目标 ${quickCount} 条` });
-      refresh();
+      await refresh();
     },
     onError: (error) => { setNotice({ tone: 'danger', text: errorMessage(error) }); refresh(); },
   });
@@ -3750,12 +3769,10 @@ function ProxyPage() {
     setDynamicOverrides((current) => current.map((item) => item.line === line ? { ...item, ...patch } : item));
   };
   const updateQuickProvider = (provider: string) => {
+    if (saveSettings.isPending || quickPull.isPending) return;
     const meta = PROXY_API_PROVIDER_META[provider];
     setQuickProvider(provider);
-    if (meta?.defaultCount) setQuickCount(meta.defaultCount);
-    else if (provider === '711proxy') setQuickCount((current) => Math.min(900, Math.max(1, current)));
     if (meta?.regionalOnly && quickCountry === 'GLOBAL') setQuickCountry('US');
-    if (meta) setQuickProtocol(meta.defaultProtocol);
   };
   const local = proxies.data?.local?.proxies || proxies.data?.proxies || [];
   const pools = proxies.data?.dynamic?.countryPools || [];
@@ -3791,14 +3808,25 @@ function ProxyPage() {
       </section>
 
       <section className="proxy-pane proxy-dynamic-pane">
-        <div className="proxy-pane-header"><div><span className="pane-kicker">DYNAMIC</span><h2>国家代理池</h2><p>普通代理与代理商 API 可在同一批次粘贴</p></div><Button tone="quiet" title="按国家顺序逐个重新拉取全部 API 来源" icon={pullAll.pending ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} onClick={() => pullAll.trigger.mutate()} disabled={pullAll.pending || pull.isPending || !apiSourceCount}><span>{pullAll.pending ? '刷新中' : '刷新全部'}</span></Button><ConfirmDialog trigger={<IconButton label="清空国家池"><Trash2 size={16} /></IconButton>} title="清空全部国家池" description="API 来源和已拉取代理都会删除，活动任务快照不受影响。" danger confirmLabel="清空" onConfirm={() => clear.mutate('dynamic')} /></div>
+        <div className="proxy-pane-header"><div><span className="pane-kicker">DYNAMIC</span><h2>国家代理池</h2><p>普通代理与代理商 API 可在同一批次粘贴</p></div><Button tone="quiet" title="按国家顺序逐个重新拉取全部 API 来源" icon={pullAll.pending ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} onClick={() => pullAll.trigger.mutate()} disabled={settingsRefreshing || pullAll.pending || pull.isPending || !apiSourceCount}><span>{pullAll.pending ? '刷新中' : '刷新全部'}</span></Button><ConfirmDialog trigger={<IconButton label="清空国家池"><Trash2 size={16} /></IconButton>} title="清空全部国家池" description="API 来源和已拉取代理都会删除，活动任务快照不受影响。" danger confirmLabel="清空" onConfirm={() => clear.mutate('dynamic')} /></div>
         <div className="proxy-composer dynamic-composer">
           <div className="proxy-quick-builder">
             <div className="quick-field quick-provider-field"><span>代理商</span><AppSelect ariaLabel="代理商" value={quickProvider} onValueChange={updateQuickProvider} options={PROXY_API_PROVIDER_OPTIONS} /></div>
             <div className="quick-field"><span>国家</span><ProxyCountrySelect value={quickCountry} onValueChange={setQuickCountry} includeGlobal={!quickProviderMeta.regionalOnly} /></div>
-            <label><span>数量</span><ConfigNumberInput min={1} max={quickProviderMeta.maxCount || (quickProvider === '711proxy' ? 900 : undefined)} value={quickCount} onValueChange={setQuickCount} /></label>
-            <div className="quick-field"><span>协议 · {quickProviderMeta.sessionMinutes} 分钟</span><AppSelect ariaLabel="协议" value={quickProtocol} onValueChange={setQuickProtocol} options={[{ value: 'http', label: 'HTTP' }, { value: 'socks5', label: 'SOCKS5' }]} /></div>
-            <Button tone="primary" icon={quickPull.isPending ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} onClick={() => quickPull.mutate()} disabled={quickPull.isPending || !(quickProviderMeta.regionalOnly ? /^[A-Z]{2}$/.test(quickCountry) : /^(GLOBAL|[A-Z]{2})$/.test(quickCountry))}>{quickPull.isPending ? '拉取中' : '构建并拉取'}</Button>
+            <label><span>数量</span><ConfigNumberInput min={1} max={quickProviderMeta.maxCount || (quickProvider === '711proxy' ? 900 : undefined)} value={quickCount} disabled={saveSettings.isPending || quickPull.isPending} onValueChange={count => updateProviderDraft({ count })} /></label>
+            <div className="quick-field"><span>协议</span><AppSelect ariaLabel="协议" value={quickProtocol} disabled={saveSettings.isPending || quickPull.isPending} onValueChange={protocol => updateProviderDraft({ protocol })} options={[{ value: 'http', label: 'HTTP' }, { value: 'socks5', label: 'SOCKS5' }]} /></div>
+            <div className="proxy-session-controls">
+              <label><span>会话粘性时间（分钟）</span><input type="number" aria-label="会话粘性时间（分钟）" min={1} max={maxSessionMinutes} step={1} value={sessionText} disabled={saveSettings.isPending || quickPull.isPending || proxies.isLoading || !!proxies.error} onChange={event => updateProviderDraft({ sessionText: event.target.value })} /></label>
+              <Button icon={saveSettings.isPending || settingsRefreshing ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />} disabled={saveSettings.isPending || settingsRefreshing || quickPull.isPending || pullAll.pending || pull.isPending || proxies.isLoading || !!proxies.error || !validSessionMinutes} onClick={() => saveSettings.mutate({ provider: quickProvider, count: quickCount, protocol: quickProtocol, sessionMinutes })}>{saveSettings.isPending ? '保存中' : settingsRefreshing ? '更新中' : '保存'}</Button>
+              <Button tone="primary" icon={quickPull.isPending ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} onClick={() => quickPull.mutate()} disabled={quickPull.isPending || saveSettings.isPending || settingsRefreshing || pullAll.pending || pull.isPending || proxies.isLoading || !!proxies.error || !validSessionMinutes || !(quickProviderMeta.regionalOnly ? /^[A-Z]{2}$/.test(quickCountry) : /^(GLOBAL|[A-Z]{2})$/.test(quickCountry))}>{quickPull.isPending ? '拉取中' : '构建并拉取'}</Button>
+            </div>
+            <p className="proxy-session-help">保存条数、协议和粘性时间，并重新拉取该厂商全部已有国家池；各国家保持不变。构建并拉取仅更新所选国家。</p>
+            {settingsRefresh && <div className="proxy-settings-progress" role="status">
+              <strong>{PROXY_API_PROVIDER_META[settingsRefresh.provider]?.label || settingsRefresh.provider} · {settingsRefreshing ? `更新国家池 ${settingsRefresh.done}/${settingsRefresh.total}` : settingsRefresh.status === 'success' ? '保存并更新完成' : '参数已保存，部分代理未更新'}</strong>
+              {settingsRefreshing ? <progress aria-label="国家池更新进度" value={settingsRefresh.done} max={settingsRefresh.total || 1} /> : <span>{settingsRefresh.total ? `成功 ${settingsRefresh.result?.succeeded ?? 0} · 失败 ${settingsRefresh.result?.failed ?? settingsRefresh.total} · 拉取 ${settingsRefresh.result?.pulled ?? 0} 条` : '暂无已有国家池，可选择国家后构建并拉取。'}</span>}
+              {settingsRefresh.error && <span className="source-error">{settingsRefresh.error}</span>}
+              {settingsRefresh.result?.results.filter(item => !item.ok).map(item => <span className="source-error" key={item.sourceId}>{item.countryCode}：{item.error}；保留原缓存，可再次保存重试。</span>)}
+            </div>}
           </div>
           <div className="import-toolbar"><div className="segmented"><button className={dynamicMode === 'append' ? 'selected' : ''} onClick={() => setDynamicMode('append')}>追加</button><button className={dynamicMode === 'replace' ? 'selected' : ''} onClick={() => setDynamicMode('replace')}>替换</button></div><AppSelect className="import-protocol-select" ariaLabel="动态代理默认协议" value={dynamicProtocol} onValueChange={setDynamicProtocol} options={[{ value: 'http', label: '普通代理默认 HTTP' }, { value: 'socks5', label: '普通代理默认 SOCKS5' }]} /></div>
           <textarea value={dynamicContent} onChange={(event) => { setDynamicContent(event.target.value); setDynamicPreview(null); setDynamicOverrides([]); }} placeholder={'host:port:user:pass\nhttps://white.1024proxy.com/white/api?...\nhttps://api.cliproxy.io/white/api?...\nhttp://global.rotgbapi.711proxy.com:8089/gen?...'} />
@@ -3806,7 +3834,7 @@ function ProxyPage() {
           <div className="composer-actions"><Button onClick={previewDynamic} disabled={!dynamicContent.trim()}>识别并预览</Button><Button tone="primary" icon={importMutation.isPending ? <LoaderCircle className="spin" size={16} /> : dynamicPreview?.items?.some((item: any) => item.kind === 'api') ? <RefreshCw size={16} /> : <Upload size={16} />} onClick={() => importMutation.mutate({ scope: 'dynamic', content: dynamicContent, mode: dynamicMode, defaultProtocol: dynamicProtocol, overrides: dynamicOverrides, autoPull: dynamicPreview?.items?.some((item: any) => item.kind === 'api') })} disabled={!dynamicPreview || dynamicPreview.invalid > 0 || importMutation.isPending}>{dynamicPreview?.items?.some((item: any) => item.kind === 'api') ? '导入并拉取' : '合并到国家池'}</Button></div>
         </div>
         <div className="proxy-pane-scroll country-pool-scroll">
-          {pools.length ? pools.map((pool) => <div className="country-pool" key={pool.countryCode}><div className="country-pool-heading"><div><span className="country-code">{pool.countryCode === 'GLOBAL' ? '全球' : pool.countryCode}</span><div><strong>{pool.total} 条代理</strong><small>{pool.manualCount} 手工 · {pool.sources.length} API</small></div></div><ConfirmDialog trigger={<IconButton label="删除此国家池"><Trash2 size={15} /></IconButton>} title={`删除 ${pool.countryCode} 代理池`} description="该国家池的手工代理、API 来源和缓存都会删除。" danger confirmLabel="删除" onConfirm={() => removeDynamic.mutate({ countryCode: pool.countryCode })} /></div>{pool.sources.map((source) => { const provider = PROXY_API_PROVIDER_META[source.provider]; return <div className="proxy-source" key={source.id}><div className="source-meta"><div><strong>{provider?.label || source.provider} · {source.protocol.toUpperCase()}</strong><span>{source.count} 条 · 固定 {source.sessionMinutes} 分钟 · 不提前换 IP</span></div><StatusBadge status={source.lastError ? 'failed' : source.lastPulledAt ? 'healthy' : 'unknown'} /></div><code>{source.url}</code><div className="source-footer"><span>{source.lastPulledAt ? `${formatTime(source.lastPulledAt)} · ${source.cachedCount} 条` : '尚未拉取'}</span>{source.lastError && <span className="source-error">{source.lastError}</span>}<div><Button icon={pull.isPending && pull.variables === source.id ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} onClick={() => pull.mutate(source.id)} disabled={pull.isPending}>{source.lastPulledAt ? '刷新' : '拉取'}</Button><ConfirmDialog trigger={<IconButton label="删除 API 来源"><Trash2 size={15} /></IconButton>} title="删除 API 来源" description="只删除此 URL 及其上次拉取结果。" danger confirmLabel="删除" onConfirm={() => removeDynamic.mutate({ countryCode: pool.countryCode, sourceId: source.id })} /></div></div></div>; })}{pool.manualCount > 0 && <ManualProxyEntries country={pool.countryCode} onRemove={(entryId) => removeDynamic.mutate({ countryCode: pool.countryCode, entryId })} />}</div>) : <EmptyState icon={<Network size={25} />} title="没有国家代理池" detail="未识别国家的代理会自动归入全球池。" />}
+          {pools.length ? pools.map((pool) => <div className="country-pool" key={pool.countryCode}><div className="country-pool-heading"><div><span className="country-code">{pool.countryCode === 'GLOBAL' ? '全球' : pool.countryCode}</span><div><strong>{pool.total} 条代理</strong><small>{pool.manualCount} 手工 · {pool.sources.length} API</small></div></div><ConfirmDialog trigger={<IconButton label="删除此国家池"><Trash2 size={15} /></IconButton>} title={`删除 ${pool.countryCode} 代理池`} description="该国家池的手工代理、API 来源和缓存都会删除。" danger confirmLabel="删除" onConfirm={() => removeDynamic.mutate({ countryCode: pool.countryCode })} /></div>{pool.sources.map((source) => { const provider = PROXY_API_PROVIDER_META[source.provider]; return <div className="proxy-source" key={source.id}><div className="source-meta"><div><strong>{provider?.label || source.provider} · {source.protocol.toUpperCase()}</strong><span>{source.count} 条 · 粘性 {source.sessionMinutes} 分钟</span></div><StatusBadge status={source.lastError ? 'failed' : source.lastPulledAt ? 'healthy' : 'unknown'} /></div><code>{source.url}</code><div className="source-footer"><span>{source.lastPulledAt ? `${formatTime(source.lastPulledAt)} · ${source.cachedCount} 条` : '尚未拉取'}</span>{source.lastError && <span className="source-error">{source.lastError}；当前保留上次缓存</span>}{source.lastPulledSettings && (source.lastPulledSettings.protocol !== source.protocol || source.lastPulledSettings.sessionMinutes !== source.sessionMinutes || source.lastPulledSettings.count !== source.count) && <span>上次缓存：{source.lastPulledSettings.protocol.toUpperCase()} · 粘性 {source.lastPulledSettings.sessionMinutes} 分钟</span>}<div><Button icon={pull.isPending && pull.variables === source.id ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} onClick={() => pull.mutate(source.id)} disabled={settingsRefreshing || pull.isPending}>{source.lastPulledAt ? '刷新' : '拉取'}</Button><ConfirmDialog trigger={<IconButton label="删除 API 来源"><Trash2 size={15} /></IconButton>} title="删除 API 来源" description="只删除此 URL 及其上次拉取结果。" danger confirmLabel="删除" onConfirm={() => removeDynamic.mutate({ countryCode: pool.countryCode, sourceId: source.id })} /></div></div></div>; })}{pool.manualCount > 0 && <ManualProxyEntries country={pool.countryCode} onRemove={(entryId) => removeDynamic.mutate({ countryCode: pool.countryCode, entryId })} />}</div>) : <EmptyState icon={<Network size={25} />} title="没有国家代理池" detail="未识别国家的代理会自动归入全球池。" />}
         </div>
       </section>
     </div>
