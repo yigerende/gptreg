@@ -9,6 +9,19 @@ const {
   summarizeSmsCosts,
 } = require('../src/sms-cost-ledger');
 const { REPLACE_PHONE_CODES } = require('../src/branch-orchestrator');
+test('SMSBower acknowledged cancellation without a code costs zero, but received or explicitly billed numbers still cost money', () => {
+  const base={id:'cancel',provider:'smsbower',status:'cancelled',providerStatus:'ACCESS_CANCEL',cost:.03};
+  const summary=r=>summarizeSmsCost({sms:{attempts:[r]}});
+  for(const providerStatus of ['ACCESS_CANCEL','STATUS_CANCEL']) {
+    const s=summary({...base,providerStatus});
+    assert.equal(s.confirmedConsumedUsd,0);assert.equal(s.unresolvedUsd,0);assert.equal(s.refundedUsd,0);assert.equal(s.billingComplete,true);
+  }
+  for(const evidence of [{codeReceived:true},{chargedCost:.03}]) {
+    const s=summary({...base,...evidence});assert.equal(s.confirmedConsumedUsd,.03);assert.equal(s.unresolvedUsd,0);
+  }
+  assert.equal(summary({...base,provider:'other'}).unresolvedUsd,.03);
+  assert.equal(summary({...base,providerStatus:''}).unresolvedUsd,.03);
+});
 
 test('a cancelled activation is excluded from confirmed consumption and retained for review', () => {
   const ledger = summarizeSmsCost({

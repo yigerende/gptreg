@@ -14,7 +14,7 @@ const terminalRun = state => ["complete", "partial", "failed", "cancelled"].incl
 function resourceRecords(state, summary) {
   const mail = (state.mailboxes || []).filter(m => m.rented).map((m, index) => {
     const jobs = (state.jobs || []).filter(j => String(j.mailboxId) === String(m.id));
-    const cost = mailRentalCost(m), cleanup = m.rentalCleanup || {};
+    const cost = mailRentalCost(m, state), cleanup = m.rentalCleanup || {};
     let outcome = jobs.some(j => j.status === "complete") ? "succeeded"
       : jobs.some(j => !isTerminalJobStatus(j.status)) && !terminalRun(state) ? "active"
       : jobs.length || m.rentalClosed === "cancelled" ? "failed" : "unknown";

@@ -66,7 +66,7 @@ async function financeData(db, query = {}, exporting = false) {
 }
 function financeCsv(data) {
   const cell = v => { let s=String(v??""); if (/^[=+\-@\t\r\n]/.test(s))s="'"+s; return '"'+s.replaceAll('"','""')+'"'; };
-  const cost=(u,kind)=>Object.entries(u.execution_cost[kind]).map(([c,v])=>`${c}: 已确认 ${v.confirmed}; 待核对 ${v.pending}; 已退 ${v.refunded}`).join(" | ");
+  const cost=(u,kind)=>Object.entries(u.execution_cost[kind]).map(([c,v])=>`${c}: 总成本 ${v.confirmed}; 未计入的报价 ${v.pending}; 已退 ${v.refunded}`).join(" | ");
   const rows=[["账户","称呼","区间充值积分","区间消费积分","人工调整积分","未交付退回积分","当前可用积分","当前冻结积分","区间订单","邮箱消耗","短信消耗","缺失费用记录","开始日期","结束日期"]];
   for(const u of data.users)rows.push([u.email,u.name,u.credited,u.spent,u.adjusted,u.released,u.balance,u.frozen,u.orders,cost(u,"mail"),cost(u,"sms"),u.execution_cost.missing,data.start,data.end]);
   return "\ufeff"+rows.map(row=>row.map(cell).join(",")).join("\r\n");

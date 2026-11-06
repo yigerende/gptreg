@@ -63,7 +63,7 @@ it.each([["邮箱+AT","email_at"],["邮箱+Session","email_session"]])("exports 
   const save=vi.spyOn(client,'download').mockImplementation(()=>{});
   const calls=vi.spyOn(client,'call').mockImplementation(async(path,method)=>{
     if(method==='POST')return new Promise(resolve=>{finish=resolve;});
-    if(path.includes('/credentials'))return {...row,password:'test',access_token:'WEB_AT',session_token:token,oauth:format==='email_at'?{access_token:'OAUTH_AT',refresh_token:'FULL_RT'}:undefined};
+    if(path.includes('/credentials'))return {...row,password:'test',totp_secret:'TEST_2FA',totp_code:'123456',access_token:'WEB_AT',session_token:token,oauth:format==='email_at'?{access_token:'OAUTH_AT',refresh_token:'FULL_RT'}:undefined};
     if(path.includes('account-orders'))return page([group('one',1)],1,{accounts_total:1});
     return page([row]);
   });
@@ -79,6 +79,17 @@ it.each([["邮箱+AT","email_at"],["邮箱+Session","email_session"]])("exports 
   expect(await screen.findByDisplayValue(token)).toHaveValue(token);expect(screen.getByDisplayValue('WEB_AT')).toBeVisible();
   expect(screen.getByRole('textbox',{name:'RT（Refresh Token）'})).toHaveValue(format==='email_at'?'FULL_RT':'');
   expect(screen.getByRole('textbox',{name:'OAuth AT'})).toHaveValue(format==='email_at'?'OAUTH_AT':'');
+  expect(screen.getByRole('textbox',{name:'邮箱'})).toHaveValue(row.email);
+  expect(screen.getByRole('textbox',{name:'密码'})).toHaveValue('test');
+  expect(screen.getByRole('textbox',{name:'2FA 密钥'})).toHaveValue('TEST_2FA');
+  expect(screen.getByRole('textbox',{name:'当前验证码'})).toHaveValue('123456');
+  expect(screen.getByRole('button',{name:'刷新验证码'})).toBeVisible();
+  const copied=vi.spyOn(client,'copy').mockResolvedValue();
+  fireEvent.click(screen.getByRole('button',{name:'复制完整 Session Token'}));
+  await waitFor(()=>expect(copied).toHaveBeenCalledWith(token));
+  fireEvent.click(screen.getByRole('button',{name:'展开完整 Session Token'}));
+  expect(screen.getByRole('textbox',{name:'完整 Session Token完整内容'})).toHaveValue(token);
+
 });
 
 it('opens only the selected account device without fetching credentials',async()=>{
@@ -90,7 +101,7 @@ it('opens only the selected account device without fetching credentials',async()
   });
   mount();await screen.findByRole('button',{name:'展开订单 one'});
   fireEvent.click(screen.getByRole('button',{name:'按账号'}));await screen.findByText(row.email);
-  fireEvent.click(screen.getByRole('button',{name:'设备指纹'}));
+  fireEvent.click(screen.getByRole('button',{name:'查看设备指纹'}));
   expect(await screen.findByDisplayValue('FULL_FINGERPRINT')).toBeVisible();
   expect(calls).toHaveBeenCalledWith('/api/user/v1/accounts/device/device-fingerprint');
   expect(calls.mock.calls.some(([path])=>path.includes('/credentials'))).toBe(false);

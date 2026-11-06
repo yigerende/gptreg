@@ -320,13 +320,18 @@ function summarizeRecord(record, options = {}) {
   const refunded = Math.min(base ?? 0, Math.max(0, refundAmount(record, base)));
   const consumed = isConsumed(record, status, state);
   const cancelled = isCancelled(record, status, state);
+  // SMSBower explicitly accepted cancellation without delivering a code. The
+  // allocation quote is not consumption and must not remain an unpaid charge.
+  const providerCancelledFree = !consumed && cancelled
+    && ['smsbower', 'sms-bower'].includes(readText(record, ['provider','providerName']).toLowerCase())
+    && ['ACCESS_CANCEL','STATUS_CANCEL'].includes(String(record.providerStatus || '').toUpperCase());
   const terminal = isTerminal(record, status, state);
   const grossConsumed = consumed ? (charged ?? quoted ?? 0) : 0;
   const netConsumed = Math.max(0, grossConsumed - refunded);
-  const unresolved = consumed || (cancelled && refunded >= (base ?? 0))
+  const unresolved = consumed || providerCancelledFree || (cancelled && refunded >= (base ?? 0))
     ? 0
     : Math.max(0, (base ?? 0) - refunded);
-  const billingUnresolved = consumed
+  const billingUnresolved = providerCancelledFree ? false : consumed
     ? base === null
     : cancelled
       ? (base === null ? !hasFullRefundFlag(record) : refunded < base)

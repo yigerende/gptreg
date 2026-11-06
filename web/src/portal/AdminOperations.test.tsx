@@ -17,18 +17,29 @@ const cost={attempts:2,missing:0,pending:true,mail:{USD:{confirmed:.034,pending:
 it.each([true,false])('admin credentials display complete AT Session RT and device details, OAuth present=%s',async hasOAuth=>{
   const token='full-session-'+'x'.repeat(12000);
   vi.spyOn(client,'call').mockImplementation(async path=>{
-    if(path.endsWith('/credentials'))return {email:'one@gmail.com',access_token:'WEB_AT',session_token:token,oauth:hasOAuth?{access_token:'OAUTH_AT',refresh_token:'FULL_RT'}:undefined,delivery:{id:'a',order_id:'one',owner_email:'owner@example.test'}};
+    if(path.endsWith('/credentials'))return {email:'one@gmail.com',password:'test',totp_secret:'TEST_2FA',totp_code:'123456',access_token:'WEB_AT',session_token:token,oauth:hasOAuth?{access_token:'OAUTH_AT',refresh_token:'FULL_RT'}:undefined,delivery:{id:'a',order_id:'one',owner_email:'owner@example.test'}};
     if(path.endsWith('/device-fingerprint'))return {device_fingerprint:{fingerprint:'ADMIN_FP',profile:{}}};
     return {total:1,items:[{id:'a',email:'one@gmail.com',order_id:'one'}]};
   });
   mount(<AdminAccounts rows={[group('one')]} onOrder={()=>{}}/>);
   fireEvent.click(screen.getByRole('button',{name:/订单 one/}));await screen.findByText('one@gmail.com');
-  fireEvent.click(screen.getByRole('button',{name:'设备指纹'}));expect(await screen.findByDisplayValue('ADMIN_FP')).toBeVisible();
+  fireEvent.click(screen.getByRole('button',{name:'查看设备指纹'}));expect(await screen.findByDisplayValue('ADMIN_FP')).toBeVisible();
   fireEvent.click(screen.getByRole('button',{name:'关闭'}));
-  fireEvent.click(screen.getByRole('button',{name:'查看全部资料'}));
+  fireEvent.click(screen.getByRole('button',{name:'查看凭据'}));
   expect(await screen.findByDisplayValue(token)).toHaveValue(token);
   expect(screen.getByRole('textbox',{name:'网页登录 AT'})).toHaveValue('WEB_AT');
   expect(screen.getByRole('textbox',{name:'RT（Refresh Token）'})).toHaveValue(hasOAuth?'FULL_RT':'');
+  expect(screen.getByRole('textbox',{name:'邮箱'})).toHaveValue('one@gmail.com');
+  expect(screen.getByRole('textbox',{name:'密码'})).toHaveValue('test');
+  expect(screen.getByRole('textbox',{name:'2FA 密钥'})).toHaveValue('TEST_2FA');
+  expect(screen.getByRole('textbox',{name:'当前验证码'})).toHaveValue('123456');
+  expect(screen.getByRole('button',{name:'刷新验证码'})).toBeVisible();
+  const copied=vi.spyOn(client,'copy').mockResolvedValue();
+  fireEvent.click(screen.getByRole('button',{name:'复制完整 Session Token'}));
+  await waitFor(()=>expect(copied).toHaveBeenCalledWith(token));
+  fireEvent.click(screen.getByRole('button',{name:'展开完整 Session Token'}));
+  expect(screen.getByRole('textbox',{name:'完整 Session Token完整内容'})).toHaveValue(token);
+
 });
 it("delivery groups lazily load accounts, keep cross-order selection capped at 1000 and export exact selected IDs",async()=>{
   const exported=vi.spyOn(client,"download").mockImplementation(()=>{});

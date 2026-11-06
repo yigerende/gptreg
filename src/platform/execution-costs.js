@@ -18,6 +18,7 @@ function costSnapshot(state) {
   if (!Object.keys(sms).length) sms[b.currency || "USD"] = bucket(b.confirmedConsumedUsd, b.unresolvedUsd, b.refundedUsd);
   return {
     version: 2,
+    calculation_version: 3,
     mail: { USD: bucket(c.mail, c.mailUnresolved) }, sms,
     resources, resource_records: records, kind_pending,
     complete: c.complete && !kind_pending.mail && !kind_pending.sms,
@@ -81,7 +82,7 @@ async function syncAttemptCosts(db, manager, runId, state) {
 async function backfillCosts(db, manager) {
   const rows = (await db.query(`SELECT a.run_id FROM platform_attempts a JOIN platform_items i ON i.id=a.item_id
     WHERE i.status NOT IN ('running','review') AND (a.cost_snapshot IS NULL OR a.cost_snapshot->>'complete'='false'
-      OR a.cost_snapshot->>'version' IS DISTINCT FROM '2')
+      OR a.cost_snapshot->>'version' IS DISTINCT FROM '2' OR a.cost_snapshot->>'calculation_version' IS DISTINCT FROM '3')
     AND (a.cost_checked_at IS NULL OR a.cost_checked_at<now()-interval '5 minutes')
     ORDER BY a.cost_checked_at NULLS FIRST,a.created_at LIMIT 20`)).rows;
   for (const row of rows) await syncAttemptCosts(db, manager, row.run_id);

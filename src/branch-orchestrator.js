@@ -3539,7 +3539,7 @@ async function rentOneMailbox(context, pending, options = {}) {
     reservation: { effect: null, attempts: 1, completedAt: nowIso(context), lastError: null },
     workerId: '',
     rented: true,
-    // Quoted at rent, charged only once the rental is settled.
+    // A quote becomes a cost once the rental delivers a code.
     quotedPriceUsd: Number(rented.quotedPrice || 0),
     costUsd: 0,
     targetCount: context.plan.aliasCount,
@@ -4038,8 +4038,8 @@ function markRentalCleanupClosed(mailbox, action, produced, context, details = {
   mailbox.rentalError = '';
   delete mailbox.rentalBillingUncertain;
   delete mailbox.rentalUnresolvedUsd;
-  // Settling is the moment the provider bills; a cancelled rental is free.
-  mailbox.costUsd = action === 'settle' ? Number(mailbox.quotedPriceUsd || 0) : 0;
+  mailbox.costUsd = Math.max(mailRentalCost(mailbox, context.state).confirmed,
+    action === 'settle' ? Number(mailbox.quotedPriceUsd || 0) : 0);
   if (details.providerMissing === true) mailbox.rentalCloseReason = 'provider_missing';
   else if (details.settleInferred === true) mailbox.rentalCloseReason = 'settle_landed_before_timeout';
   else delete mailbox.rentalCloseReason;
@@ -5372,6 +5372,12 @@ async function waitEmailCode(job, recipient, boundary, context, runnerState = nu
     }, context);
     if (found?.code) {
       job.emailMessageId = found.messageId || '';
+      const mailbox = (context.state.mailboxes || []).find(m => job.mailboxId != null && String(m.id) === String(job.mailboxId));
+      if (mailbox?.rented && found.source === 'smsbower_mail') {
+        mailbox.billingRule = 'on_code';
+        mailbox.mailCodeReceivedAt ||= nowIso(context);
+        mailbox.costUsd = mailRentalCost(mailbox, context.state).confirmed;
+      }
       if (options.reportDelivery !== false) await reportMailDelivery(context, recipient, true);
       await context.checkpoint('email_otp_received');
       return found;
@@ -12655,46 +12661,41 @@ async function runBranchOrchestrator(har, state, config, options = {}) {
 /**
  * What the rented mailboxes on a run actually cost.
  *
- * Only a settled rental is billed — the provider charges on `status=3`, and a
- * mailbox that produced nothing is cancelled instead — so an in-flight or
- * cancelled one contributes zero rather than its quote.
+ * Code delivery incurs the rental cost even when the account never completes.
+ * An unused, successfully cancelled rental costs zero.
  */
-function summarizeMailRentalCosts(mailboxes = [], jobs = []) {
+function summarizeMailRentalCosts(mailboxes = [], jobs = [], state = {}) {
   const rentals = (mailboxes || []).filter((mailbox) => mailbox?.rented);
   const wastedMailboxIds = new Set((jobs || [])
     .filter(wastedRegistrationOutcome)
     .map((job) => String(job.mailboxId || '').trim())
     .filter(Boolean));
-  const total = rentals.reduce((sum, mailbox) => sum + Number(mailbox.costUsd || 0), 0);
+  const confirmedAmount = mailbox => mailRentalCost(mailbox, { ...state, jobs }).confirmed;
+  const total = rentals.reduce((sum, mailbox) => sum + confirmedAmount(mailbox), 0);
   const wasted = rentals.reduce((sum, mailbox) => (
     wastedMailboxIds.has(String(mailbox.id || '').trim())
-      ? sum + Number(mailbox.costUsd || 0)
+      ? sum + confirmedAmount(mailbox)
       : sum
   ), 0);
-  const unresolvedAmount = (mailbox) => mailRentalCost(mailbox).pending;
+  const unresolvedAmount = (mailbox) => mailRentalCost(mailbox, { ...state, jobs }).pending;
   const unresolved = rentals.reduce((sum, mailbox) => sum + unresolvedAmount(mailbox), 0);
-  // A wasted outcome whose close never confirmed a charge is still waste: the
-  // address took a code, so the provider will not refund it. Counting only
-  // settled rentals left those at $0 and out of 浪费 altogether. Booked at the
-  // unresolved amount and kept apart from the confirmed figure, so `mail`
-  // (what was billed) is not inflated by a charge nobody has confirmed.
-  //
-  // Refused cancellations remain uncertain; never label the quote a charge.
+  // Without code delivery or billing evidence, an unresolved quote remains
+  // separate. A failed rental with a received code is already in `wasted`.
   const wastedUnresolvedAmount = unresolvedAmount;
   const wastedUnresolved = rentals.filter((mailbox) => (
     wastedMailboxIds.has(String(mailbox.id || '').trim())
-    && !(Number(mailbox.costUsd || 0) > 0)
+    && !(confirmedAmount(mailbox) > 0)
     && wastedUnresolvedAmount(mailbox) > 0
   ));
   return {
     rented: rentals.length,
-    settled: rentals.filter((mailbox) => Number(mailbox.costUsd || 0) > 0).length,
+    settled: rentals.filter((mailbox) => confirmedAmount(mailbox) > 0).length,
     cancelled: rentals.filter((mailbox) => mailbox.rentalClosed === 'cancelled').length,
     totalUsd: Number(total.toFixed(6)),
     wastedUsd: Number(wasted.toFixed(6)),
     wastedRentals: rentals.filter((mailbox) => (
       wastedMailboxIds.has(String(mailbox.id || '').trim())
-      && Number(mailbox.costUsd || 0) > 0
+      && confirmedAmount(mailbox) > 0
     )).length,
     wastedUnresolvedUsd: Number(wastedUnresolved
       .reduce((sum, mailbox) => sum + wastedUnresolvedAmount(mailbox), 0).toFixed(6)),
@@ -12784,7 +12785,7 @@ function summarizeBranchState(state, options = {}) {
     state.balanceReconciliation,
     cancellationDetails,
   );
-  const mailBilling = summarizeMailRentalCosts(state.mailboxes, sourceJobs);
+  const mailBilling = summarizeMailRentalCosts(state.mailboxes, sourceJobs, state);
   const wastedBreakdown = summarizeWastedBreakdown(smsBilling, mailBilling);
   const ledgers = new Map(smsBilling.ledgers.map(({ job, ledger }) => [job.id, ledger]));
   const jobs = sourceJobs.map((job) => {
@@ -12887,7 +12888,7 @@ function summarizeBranchState(state, options = {}) {
         wastedSms: smsBilling.wastedConsumedUsd,
         wastedSmsAttempts: smsBilling.wastedActivationCount,
       } : {}),
-      // Rented mailboxes bill on settle, so only closed-and-accepted ones count.
+      // Include paid code deliveries even if the registration later failed.
       mail: mailBilling.totalUsd,
       mailRentals: mailBilling.settled,
       ...(mailBilling.wastedUsd > 0 ? {

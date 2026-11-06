@@ -6,6 +6,23 @@ const { Orders } = require('../src/platform/orders');
 const { buildPlatform } = require('../src/platform/app');
 const { cipher, id, digest } = require('../src/platform/security');
 const state = (cost = .017, rentalId = id()) => ({ taskKind: 'register_session', status: 'complete', workers: [], jobs: [], mailboxes: [{ id:rentalId, rented:true, rentalClosed:'settled', costUsd:cost }] });
+test('SMSBower code delivery incurs a cost once per rental even after failure or cancellation', () => {
+  const { mailRentalCost } = require('../src/mail-cost-ledger');
+  const input = {...state(), runPlan:{mailProvider:'smsbower'}, status:'failed', runId:'received-failures'};
+  input.mailboxes = ['refused','settle-failed','received-cancelled','unused'].map(id => ({id,rented:true,quotedPriceUsd:.017,costUsd:0,
+    rentalClosed:id==='refused'?'cleanup_manual_review':id==='settle-failed'?'settlement_unknown':'cancelled'}));
+  input.jobs = input.mailboxes.map(m=>({id:'j-'+m.id,mailboxId:m.id,status:'failed',error:{code:'EMAIL_OTP_TIMEOUT'}}));
+  input.jobs[0].emailMessageId='received';
+  input.events=[{type:'email_otp_received',jobId:'j-settle-failed'},{type:'email_otp_received',jobId:'j-settle-failed'}];
+  input.mailboxes[2].mailCodeReceivedAt='2026-11-06T00:00:00Z';
+  const s=costSnapshot(input);
+  assert.equal(s.calculation_version,3); assert.equal(s.mail.USD.confirmed,.051);assert.equal(s.mail.USD.pending,0);
+  assert.equal(s.resources.mail.failed,4);assert.equal(s.resources.mail.failed_cost.USD.confirmed,.051);
+  assert.equal(s.kind_pending.mail,false); assert.equal(sumCosts([s,s]).mail.USD.confirmed,.051);
+  assert.equal(mailRentalCost(input.mailboxes[3],input).confirmed,0,'another rental receiving a code does not bill this one');
+  assert.equal(mailRentalCost({...input.mailboxes[0],provider:'different'},input).confirmed,0,'provider billing rules are not inferred');
+  assert.equal(mailRentalCost({quotedPriceUsd:.017},{runPlan:{mailProvider:'smsbower'},jobs:[{emailMessageId:'unlinked'}]}).confirmed,0);
+});
 test('cost snapshots separate confirmed rental spend, uncertain quotes and currencies without credentials', () => {
   const input = state(); input.mailboxes.push({ id:'uncertain', rented:true, rentalClosed:'settlement_unknown', quotedPriceUsd:.03 });
   input.password = 'NEVER_STORE_ME';

@@ -8,6 +8,7 @@ import { call, copy, date, download, type Row } from "./client";
 import { Feedback, Modal, Table, useAction } from "./Workspace";
 import { ExportProgress, selectFilteredAccounts } from "./AccountExport";
 import AccountDevice from "./AccountDevice";
+import TokenCredentials from "./TokenCredentials";
 
 function ExpandedAccounts({ orderId, filters, render }: { orderId: string; filters: Row; render: (rows: Row[]) => ReactNode }) {
   const [offset, setOffset] = useState(0);
@@ -117,9 +118,9 @@ export default function AdminAccounts({
                     disabled={a.busy}
                     onClick={() => reveal(r.id)}
                   >
-                    查看全部资料
+                    查看凭据
                   </button>
-                  <button className="p-link" onClick={() => setDevice(r)}>设备指纹</button>
+                  <button className="p-link" onClick={() => setDevice(r)}>查看设备指纹</button>
                   <button
                     className="p-link"
                     disabled={a.busy}
@@ -144,9 +145,9 @@ export default function AdminAccounts({
         {label}
         <div className="p-inline">
           {multiline ? (
-            <textarea readOnly value={text} rows={3} />
+            <textarea aria-label={label} readOnly value={text} rows={3} />
           ) : (
-            <input readOnly value={text} />
+            <input aria-label={label} readOnly value={text} />
           )}
           <button
             className="p-button secondary"
@@ -284,18 +285,13 @@ export default function AdminAccounts({
               <code>{secret.delivery.order_id}</code>
             </div>
           </div>
-          <AdminCosts cost={secret.delivery.execution_cost} title="此账号执行成本" />
+          <h3 className="p-secret-heading">账号凭据</h3>
           {credential("邮箱", secret.email)}
           {credential("密码", secret.password)}
           {credential("2FA 密钥", secret.totp_secret)}
           {credential("当前验证码", secret.totp_code)}
-          {credential("网页登录 AT", secret.access_token, true)}
-          {credential("完整 Session Token", secret.session_token, true)}
-          {credential("OAuth AT", secret.oauth?.access_token, true)}
-          {credential("RT（Refresh Token）", secret.oauth?.refresh_token, true)}
           <p className="p-muted">
             验证码每 30 秒变化；读取时剩余 {secret.totp_expires_in} 秒。
-            网页登录 AT 与下方 OAuth AT 独立；Session 为完整登录 Cookie Token，导出不刷新有效期。
           </p>
           <button
             className="p-button secondary"
@@ -304,9 +300,10 @@ export default function AdminAccounts({
           >
             刷新验证码
           </button>
+          <TokenCredentials value={secret} busy={a.busy} onCopy={value => { void a.run(() => copy(value), "已复制"); }} />
           <h3 className="p-secret-heading">OAuth 授权资料</h3>
           {secret.oauth ? (
-            Object.entries(secret.oauth).filter(([key]) => !["access_token", "refresh_token"].includes(key)).map(([key, value]) =>
+            Object.entries(secret.oauth).map(([key, value]) =>
               credential(key, value, true),
             )
           ) : (
@@ -338,6 +335,7 @@ export default function AdminAccounts({
               </button>
             )}
           </div>
+          <details className="p-full-record"><summary>查看该账号成本</summary><AdminCosts cost={secret.delivery.execution_cost} title="此账号执行成本" /></details>
         </Modal>
       )}
       {device && <AccountDevice account={device} admin onClose={() => setDevice(null)} />}

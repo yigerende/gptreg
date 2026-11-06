@@ -14,6 +14,7 @@ import { Modal } from "./Workspace";
 import { Filters, Pagination } from "./Insights";
 import { ExportProgress } from "./AccountExport";
 import AccountDevice from "./AccountDevice";
+import TokenCredentials from "./TokenCredentials";
 import {
   isAvailable,
   mergeSelection,
@@ -154,7 +155,7 @@ function AccountTable({
                 >
                   查看凭据
                 </button>
-                <button className="p-link" disabled={busy} onClick={() => device(r)}>设备指纹</button>
+                <button className="p-link" disabled={busy} onClick={() => device(r)}>查看设备指纹</button>
               </td>
             </tr>
           ))}
@@ -725,17 +726,11 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
             ["密码", validSecret.password],
             ["2FA 密钥", validSecret.totp_secret],
             ["当前验证码", validSecret.totp_code],
-            ["网页登录 AT", validSecret.access_token],
-            ["完整 Session Token", validSecret.session_token],
-            ["OAuth AT", validSecret.oauth?.access_token],
-            ["RT（Refresh Token）", validSecret.oauth?.refresh_token],
           ].map(([label, value]) => (
             <label key={label}>
               {label}
               <div className="p-inline">
-                {["网页登录 AT", "完整 Session Token", "OAuth AT", "RT（Refresh Token）"].includes(label)
-                  ? <textarea readOnly value={value || ""} rows={3} />
-                  : <input readOnly value={value || ""} />}
+                <input aria-label={label} readOnly value={value || ""} />
                 <button
                   aria-label={`复制${label}`}
                   className="p-button secondary"
@@ -757,7 +752,6 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
           ))}
           <p className="p-muted">
             验证码每 30 秒变化。读取时剩余 {validSecret.totp_expires_in} 秒。
-            网页登录 AT 与 OAuth AT 独立；Session 为完整登录 Cookie Token，导出不会刷新其有效期。
           </p>
           <div className="p-inline">
             <button
@@ -783,6 +777,11 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
               </button>
             )}
           </div>
+          <TokenCredentials value={validSecret} busy={Boolean(busy)} onCopy={value => {
+            if (isAvailable(validSecret as AccountChoice, currentTime()))
+              void run("正在复制…", async () => { await copy(value); setNotice("已复制"); });
+          }} />
+          {validSecret.oauth && <details className="p-full-record"><summary>完整 OAuth 资料</summary><pre>{JSON.stringify(validSecret.oauth, null, 2)}</pre></details>}
         </Modal>
       )}
       {device && isAvailable(device as AccountChoice, now) && <AccountDevice key={`${userId}-${device.id}`} account={device} onClose={() => setDevice(null)} />}

@@ -1,3 +1,11 @@
+.p-token-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid #e5ecef; }
+.p-token-section h3 { margin: 0 0 6px; font-size: 15px; }
+.p-token-section > p { font-size: 12px; margin: 6px 0 16px; }
+.p-token-row { margin-bottom: 12px; }
+.p-token-row .p-inline { flex-wrap: nowrap; gap: 6px; }
+.p-token-row .p-inline input { min-width: 0; flex: 1; font-family: monospace; font-size: 12px; }
+.p-token-row .p-button { flex-shrink: 0; padding: 10px; }
+.p-token-row > textarea { margin-top: 6px; width: 100%; overflow-wrap: anywhere; font-family: monospace; font-size: 12px; }
 .p-retention-banner {
   display: flex;
   align-items: flex-start;
