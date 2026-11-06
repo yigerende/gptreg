@@ -21,7 +21,7 @@ import AdminAnnouncements from "./AdminAnnouncements";
 import AdminRedeemUsage from "./AdminRedeemUsage";
 import AdminCodes from "./AdminCodes";
 import AdminAccounts from "./AdminAccounts";
-import { CostAmount } from "./AdminCosts";
+import { ResourceCost } from "./AdminCosts";
 export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
   const [offset, setOffset] = useState(0),
     [filters, setFilters] = useState<Row>(() => ({
@@ -219,8 +219,8 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                 render: (r) => `${r.unit_price} / ${r.charged}`,
               },
               { title: "时间", render: (r) => date(r.created_at) },
-              { title: "邮箱消耗", render: r => <CostAmount cost={r.execution_cost} kind="mail" /> },
-              { title: "短信消耗", render: r => <CostAmount cost={r.execution_cost} kind="sms" /> },
+              { title: "邮箱数量 / 费用", render: r => <ResourceCost cost={r.execution_cost} kind="mail" /> },
+              { title: "短信数量 / 费用", render: r => <ResourceCost cost={r.execution_cost} kind="sms" /> },
               { title: "操作", render: r => <button className="p-button secondary" onClick={() => setDetail(r.id)}>订单详情</button> },
             ]}
           />

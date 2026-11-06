@@ -50,4 +50,14 @@ function oauthExport(values, format) {
     encoding: "base64",
   };
 }
-module.exports = { oauthExport };
+function tokenExport(values, format) {
+  const field = format === "email_at" ? "access_token" : "session_token";
+  const label = format === "email_at" ? "AT" : "Session";
+  const missing = values.filter(v => typeof v[field] !== "string" || !v[field]).length;
+  fail(!missing, `所选账号中有 ${missing} 个未保存${label}，请查看账号凭据或联系管理员核实；本次未导出任何账号`, 409);
+  return {
+    filename: `gptreg-email-${format === "email_at" ? "at" : "session"}.txt`,
+    content: values.map(v => `${v.email}----${v[field]}`).join("\n") + "\n",
+  };
+}
+module.exports = { oauthExport, tokenExport };

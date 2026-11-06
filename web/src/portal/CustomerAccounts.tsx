@@ -553,6 +553,8 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
           <div className="p-inline">
             {[
               ["txt", "邮箱-密码-2fa"],
+              ["email_at", "邮箱+AT"],
+              ["email_session", "邮箱+Session"],
               ["csv", "导出 CSV"],
               ["cpa", "CPA"],
               ["sub", "SUB"],
@@ -572,6 +574,7 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
         <p className="p-records-note">
           选择跨页保留，所有选择合计最多 1000 条；更改筛选会清空选择。CPA
           每号一个 JSON，多号打包 ZIP；SUB 多号合并一个 JSON，两者均需含 OAuth。
+          邮箱+AT / 邮箱+Session 为网页登录态，标准账号也可导出；每行邮箱----完整凭据，未保存时会明确提示。
         </p>
         <ExportProgress text={busy} />
         {!data && isFetching ? (
@@ -715,15 +718,19 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
             ["密码", validSecret.password],
             ["2FA 密钥", validSecret.totp_secret],
             ["当前验证码", validSecret.totp_code],
+            ["网页登录 AT", validSecret.access_token],
+            ["完整 Session Token", validSecret.session_token],
           ].map(([label, value]) => (
             <label key={label}>
               {label}
               <div className="p-inline">
-                <input readOnly value={value || ""} />
+                {label === "网页登录 AT" || label === "完整 Session Token"
+                  ? <textarea readOnly value={value || ""} rows={3} placeholder="未保存该凭据" />
+                  : <input readOnly value={value || ""} />}
                 <button
                   aria-label={`复制${label}`}
                   className="p-button secondary"
-                  disabled={Boolean(busy)}
+                  disabled={Boolean(busy) || !value}
                   onClick={() => {
                     if (
                       isAvailable(validSecret as AccountChoice, currentTime())
@@ -741,6 +748,7 @@ export default function CustomerAccounts({ userId }: { userId: string }) {
           ))}
           <p className="p-muted">
             验证码每 30 秒变化。读取时剩余 {validSecret.totp_expires_in} 秒。
+            网页登录 AT 与 OAuth AT 独立；Session 为完整登录 Cookie Token，导出不会刷新其有效期。
           </p>
           <div className="p-inline">
             <button

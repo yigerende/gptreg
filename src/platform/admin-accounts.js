@@ -2,7 +2,7 @@
 const { fail } = require("./security");
 const { audit } = require("./db");
 const { totpCode } = require("../chatgpt-session-runner");
-const { oauthExport } = require("./account-export");
+const { oauthExport, tokenExport } = require("./account-export");
 const { costsBy } = require("./execution-costs");
 
 function registerAdminAccounts(app, db, crypt) {
@@ -49,8 +49,8 @@ function registerAdminAccounts(app, db, crypt) {
       "一次选择 1～1000 个账号",
     );
     fail(
-      ["json", "txt", "csv", "cpa", "sub"].includes(format),
-      "导出格式须为 txt、csv、json、cpa 或 sub",
+      ["json", "txt", "csv", "cpa", "sub", "email_at", "email_session"].includes(format),
+      "导出格式须为 txt、csv、json、cpa、sub、email_at 或 email_session",
     );
     const unique = [...new Set(ids)];
     const rows = (
@@ -79,6 +79,7 @@ function registerAdminAccounts(app, db, crypt) {
       return '"' + text.replace(/"/g, '""') + '"';
     };
     if (["cpa", "sub"].includes(format)) return oauthExport(values, format);
+    if (["email_at", "email_session"].includes(format)) return tokenExport(values, format);
     return {
       filename: `gptreg-deliveries.${format}`,
       content:

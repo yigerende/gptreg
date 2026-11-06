@@ -1,4 +1,5 @@
 import type { PageInfo } from './components/Pagination';
+import type { DeviceFingerprintFilter, DeviceFingerprintPage } from './device-fingerprint-types';
 import type { CpaCredentialPreflight, ChainPaymentSettings, LinkOpsProxyPool, ChainDispatchResult, LinkOpsStatus, LinkOpsJobPage, LinkOpsJobDeleteResult, ChainCountryRule, ChainExtractPlan, ChainTokenHealth, ChainImportResult, ChainRecord, ChainSnapshot, ConfigSnapshot, CpaArtifact, LogRecord, MailboxOption, MailcomAliasDomains, MailcomImportProgress, MailcomStatus, MailRentalConfigureBody, PreflightSnapshot, ProxyAssignment, ProxyCatalogSnapshot, RobotRecord, RobotSnapshot, RunListSnapshot, RunPlan, RunSummary, ServiceStatus, SessionAsset, SessionAssetPage, SessionAssetProbeBatch, SessionAssetQuery, SessionAssetResolveResult, SessionAssetTrialBatch, SettableSessionAssetLifecycle, SmsMarketSnapshot, Sub2ApiDeleteResult, Sub2ApiDocument, Sub2ApiFailedAccounts, Sub2ApiPushResult, NvtokensPushResult, TaskCapacitySnapshot, CpaArtifactSelectionItem, CpaExportSelection, RebindProviders, RebindPreflight, RebindStatus, RebindStartBody, RebindStartResult, RebindQueue, RebindQueueAddResult } from './types';
 
 
@@ -79,6 +80,7 @@ function sessionAssetSearch(query: SessionAssetQuery = {}) {
 
 export const endpoints = {
   platformConfig: () => api<{ fields: import('./PlatformConfigPage').ExecutionSetting[] }>('/platform-config'),
+  deviceFingerprints: (query: { q: string; match: DeviceFingerprintFilter; offset: number; limit: number }) => api<DeviceFingerprintPage>(`/device-fingerprints?${new URLSearchParams({ q: query.q, match: query.match, offset: String(query.offset), limit: String(query.limit) })}`),
   savePlatformConfig: (values: Record<string, number | number[]>) => api<{ fields: import('./PlatformConfigPage').ExecutionSetting[] }>('/platform-config', { method: 'PUT', body: JSON.stringify({ values }) }),
   smsSettings: (provider: string) => api<any>(`/sms/settings/${encodeURIComponent(provider)}`),
   testSmsSettings: (provider: string, body: unknown) => api<any>(`/sms/settings/${encodeURIComponent(provider)}/test`, { method: 'POST', body: JSON.stringify(body) }),

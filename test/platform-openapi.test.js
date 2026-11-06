@@ -190,6 +190,8 @@ test(
         email: "docs.delivery@gmail.com",
         password: "FICTIONAL_PASSWORD",
         totp_secret: "JBSWY3DPEHPK3PXP",
+        access_token: "WEB_AT_DIFFERENT_FROM_OAUTH",
+        session_token: "full-session-" + "0123456789".repeat(1600),
         oauth: {
           access_token: "FAKE_ACCESS_TOKEN",
           refresh_token: "FAKE_REFRESH_TOKEN",
@@ -246,6 +248,12 @@ test(
       );
       assert.match(secrets.totp_code, /^\d{6}$/);
       assert.equal(secrets.oauth.extra_metadata, "retained");
+      assert.equal(secrets.access_token,credentials.access_token);assert.equal(secrets.session_token,credentials.session_token);
+      for (const [format, field] of [["email_at","access_token"],["email_session","session_token"]]) {
+        const exported=await request("POST","/open/v1/accounts/export",undefined,{ids:[account.id],format});
+        assert.equal(exported.content,`${credentials.email}----${credentials[field]}\n`);
+        assert.match(exported.filename,/\.txt$/);
+      }
       for (const format of ["json", "csv", "txt"]) {
         const exported = await request(
           "POST",

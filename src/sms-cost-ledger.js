@@ -513,7 +513,8 @@ function summarizeSmsCost(job = {}, options = {}) {
   else if (totals.confirmedConsumedUsd > 0) status = totals.refundedUsd > 0 ? 'partially_refunded' : 'confirmed';
   else if (hasData && totals.refundedUsd > 0) status = 'refunded';
   else if (hasData) status = 'settled';
-  return { ...totals, currency, currencyTotals, hasData, billingComplete, cancellationOnlyUnresolved, status };
+  return { ...totals, currency, currencyTotals, hasData, billingComplete, cancellationOnlyUnresolved, status,
+    ...(options.includeRecords ? { records } : {}) };
 }
 
 /**
@@ -579,6 +580,20 @@ function settleCancelledQuotes(ledger, requestedAmount) {
       ? 0
       : Number(ledger.cancelledUnresolvedActivationCount || 0),
   };
+  // Consumers requesting operational statistics must see the same reconciled
+  // amounts as the totals, including cancelled quotes proven not to be billed.
+  if (ledger.records) {
+    let remainingApplied = applied;
+    next.records = ledger.records.map(record => {
+      if (record.currency !== ledger.currency || !record.cancelled || !record.billingUnresolved) return record;
+      const settled = Math.min(remainingApplied, record.cancelledUnresolvedUsd);
+      remainingApplied = rounded(Math.max(0, remainingApplied - settled));
+      if (!settled) return record;
+      const unresolvedUsd = rounded(Math.max(0, record.unresolvedUsd - settled));
+      return { ...record, unresolvedUsd, cancelledUnresolvedUsd: unresolvedUsd,
+        billingUnresolved: unresolvedUsd > CANCELLATION_SETTLEMENT_TOLERANCE };
+    });
+  }
   if (next.currencyTotals && typeof next.currencyTotals === 'object') {
     const bucket = next.currencyTotals[next.currency];
     if (bucket) {
@@ -608,7 +623,7 @@ function settleCancelledQuotes(ledger, requestedAmount) {
 
 function summarizeSmsCosts(jobs = [], options = {}) {
   const defaultCurrency = normalizedCurrency(options.defaultCurrency);
-  const rawLedgers = (Array.isArray(jobs) ? jobs : []).map((job) => ({ job, ledger: summarizeSmsCost(job, { defaultCurrency }) }));
+  const rawLedgers = (Array.isArray(jobs) ? jobs : []).map((job) => ({ job, ledger: summarizeSmsCost(job, { defaultCurrency, includeRecords: options.includeRecords }) }));
   const settledByJob = options.settledCancelledQuotesByJob && typeof options.settledCancelledQuotesByJob === 'object'
     ? options.settledCancelledQuotesByJob
     : null;

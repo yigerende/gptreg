@@ -4,6 +4,7 @@ const runtimeSecrets = require("./runtime-secrets");
 const { id, fail } = require("./security");
 const { executionFailure } = require("./execution-failure");
 const { syncAttemptCosts, backfillCosts } = require("./execution-costs");
+const { loginTokens, backfillAccountTokens } = require("./account-tokens");
 const { TERMINAL, ITEM_TERMINAL, expired, creationUncertain, cleanupRuns } = require("./order-recovery");
 class OrderWorker {
   constructor(db, orders, manager) {
@@ -159,6 +160,7 @@ class OrderWorker {
       email: asset.email,
       password: asset.password,
       totp_secret: asset.totpSecret,
+      ...loginTokens(asset),
       ...(needOauth ? { oauth } : {}),
     };
   }
@@ -167,6 +169,7 @@ class OrderWorker {
     if (!this.costBackfillAt || Date.now() - this.costBackfillAt > 30000) {
       this.costBackfillAt = Date.now();
       await backfillCosts(this.db, this.manager).catch(() => {});
+      await backfillAccountTokens(this.db, this.orders.crypt, this.manager).catch(() => {});
     }
     this.manager.setCustomerConcurrency(
       s.registration_concurrency,

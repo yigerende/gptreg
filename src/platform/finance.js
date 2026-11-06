@@ -1,6 +1,6 @@
 "use strict";
 const { fail, integer } = require("./security");
-const { sumCosts } = require("./execution-costs");
+const { sumCosts, costAmountRows } = require("./execution-costs");
 const DAY = 86400000;
 function financeQuery(query = {}) {
   const today = new Date(Date.now() + 8*3600000).toISOString().slice(0,10);
@@ -46,11 +46,9 @@ async function financeData(db, query = {}, exporting = false) {
       bool_or(a.cost_snapshot->>'complete'='false') AS pending,max(a.cost_checked_at) AS updated_at
       FROM platform_attempts a JOIN platform_items i ON i.id=a.item_id JOIN platform_orders o ON o.id=i.order_id JOIN platform_users u ON u.id=o.user_id WHERE ${costsWhere}`,values)).rows[0];
     const execution_cost={...sumCosts(),...costStats,pending:Boolean(costStats.pending)};
-    const amounts=(await q.query(`SELECT kind,currency,sum((v->>'confirmed')::numeric)::float8 AS confirmed,
-      sum((v->>'pending')::numeric)::float8 AS pending,sum((v->>'refunded')::numeric)::float8 AS refunded
-      FROM platform_attempts a JOIN platform_items i ON i.id=a.item_id JOIN platform_orders o ON o.id=i.order_id JOIN platform_users u ON u.id=o.user_id
-      CROSS JOIN (VALUES ('mail'),('sms')) AS kinds(kind) CROSS JOIN LATERAL jsonb_each(coalesce(a.cost_snapshot->kind,'{}'::jsonb)) AS amounts(currency,v)
-      WHERE ${costsWhere} GROUP BY kind,currency`,values)).rows;
+    const amounts=await costAmountRows(q,`SELECT a.cost_snapshot FROM platform_attempts a
+      JOIN platform_items i ON i.id=a.item_id JOIN platform_orders o ON o.id=i.order_id
+      JOIN platform_users u ON u.id=o.user_id WHERE ${costsWhere}`,values);
     for(const {kind,currency,...amount} of amounts) execution_cost[kind][currency]=amount;
     const userCosts=new Map(users.map(u=>[u.id,[]]));
     const costRows=(await q.query(`SELECT o.user_id,a.cost_snapshot FROM platform_attempts a JOIN platform_items i ON i.id=a.item_id

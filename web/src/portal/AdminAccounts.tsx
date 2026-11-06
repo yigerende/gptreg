@@ -141,7 +141,7 @@ export default function AdminAccounts({
         {label}
         <div className="p-inline">
           {multiline ? (
-            <textarea readOnly value={text} rows={3} />
+            <textarea readOnly value={text} rows={3} placeholder="未保存该凭据" />
           ) : (
             <input readOnly value={text} />
           )}
@@ -228,10 +228,14 @@ export default function AdminAccounts({
           >
             SUB
           </button>
+          {[["email_at", "邮箱+AT"], ["email_session", "邮箱+Session"]].map(([format, label]) => <button
+            key={format} className="p-button secondary" disabled={!ids.length || a.busy || Boolean(exporting)}
+            onClick={() => exported(format)}>{label}</button>)}
         </div>
         <p className="p-records-note">
           JSON 包含完整交付资料与 OAuth；CSV 包含凭据、OAuth 和客户订单信息；TXT
           为邮箱----密码----2FA。每次最多 1000 个。订单费用包含失败与重试；账号明细显示该账号全部执行尝试的成本。
+          邮箱+AT / 邮箱+Session 导出完整网页登录凭据，标准账号也可使用；未保存时整批提示，不跳过账号。
         </p>
         <div className="p-admin-delivery-groups">
           {rows.map(r => <article className="p-admin-delivery-order" key={r.id}>
@@ -281,8 +285,11 @@ export default function AdminAccounts({
           {credential("密码", secret.password)}
           {credential("2FA 密钥", secret.totp_secret)}
           {credential("当前验证码", secret.totp_code)}
+          {credential("网页登录 AT", secret.access_token, true)}
+          {credential("完整 Session Token", secret.session_token, true)}
           <p className="p-muted">
             验证码每 30 秒变化；读取时剩余 {secret.totp_expires_in} 秒。
+            网页登录 AT 与下方 OAuth AT 独立；Session 为完整登录 Cookie Token，导出不刷新有效期。
           </p>
           <button
             className="p-button secondary"

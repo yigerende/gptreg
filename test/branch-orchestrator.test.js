@@ -10260,8 +10260,8 @@ test('an MFA mailbox stuck in manual review is counted as waste, apart from bill
   assert.equal(summary.costs.wastedMail, 0.015);
   assert.equal(summary.costs.wastedMailUnresolved, 0.015);
   assert.equal(summary.costs.wastedMailUnresolvedRentals, 1);
-  // The refused cancel stays at its recorded 0 here; only the waste figure reprices it.
-  assert.equal(summary.costs.mailUnresolved, 0.015);
+  // Old refused cancellations recorded zero; the quote must remain pending.
+  assert.equal(summary.costs.mailUnresolved, 0.03);
   assert.deepEqual(summary.counts.wastedBreakdown, [
     { kind: 'mail', code: 'SETTLED_RENTAL', count: 1, amount: 0.015, currency: 'USD' },
     { kind: 'mail', code: 'UNRESOLVED_RENTAL', count: 1, amount: 0.015, currency: 'USD' },

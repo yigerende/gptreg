@@ -31,6 +31,8 @@ describe("API documentation examples", () => {
     expect(fields.find((x) => x.name === "quantity")?.required).toBe(true);
     const credentials = schemaFields(spec, spec.components.schemas.Credentials);
     expect(credentials.find((x) => x.name === "oauth")?.required).toBe(false);
+    expect(credentials.find((x) => x.name === "access_token")?.required).toBe(false);
+    expect(credentials.find((x) => x.name === "session_token")?.required).toBe(false);
     expect(
       credentials.find((x) => x.name === "oauth.refresh_token")?.nested,
     ).toBe(true);

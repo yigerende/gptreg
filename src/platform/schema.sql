@@ -91,6 +91,9 @@ CREATE TABLE IF NOT EXISTS platform_quarantined_assets (
  reason text NOT NULL,created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS engine_sold_at timestamptz;
+ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS login_tokens_checked_at timestamptz;
+ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS login_tokens_synced_at timestamptz;
+CREATE INDEX IF NOT EXISTS platform_account_tokens_pending ON platform_accounts(login_tokens_checked_at,created_at) WHERE login_tokens_synced_at IS NULL;
 ALTER TABLE platform_accounts ADD COLUMN IF NOT EXISTS engine_sold_retry_at timestamptz NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS platform_account_sold_pending ON platform_accounts(engine_sold_retry_at,id) WHERE engine_sold_at IS NULL;
 

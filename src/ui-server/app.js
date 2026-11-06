@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const Fastify = require('fastify');
 const { pagination, pageRows, artifactPage } = require('./pagination');
+const { deviceFingerprintPage } = require('./device-fingerprints');
 const { ConfigService, withoutSecrets } = require('./config-service');
 const { SmsbowerMailService } = require('./smsbower-mail-service');
 const { LogStore } = require('./log-store');
@@ -656,6 +657,11 @@ function buildApp(options = {}) {
    * them over a different set than it rendered, so a group could promise 1330
    * accounts and draw 171.
    */
+  app.get('/api/v1/device-fingerprints', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return deviceFingerprintPage(runManager.sessionAssets(), request.query);
+  });
+
   app.get('/api/v1/session-assets', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const query = request.query || {};

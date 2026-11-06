@@ -1,5 +1,6 @@
 import { Pagination, type PageInfo } from './components/Pagination';
 import { PlatformConfigPage } from './PlatformConfigPage';
+import { DeviceFingerprintsPage } from './DeviceFingerprintsPage';
 import { OAuthProxyDialog } from './OAuthProxyDialog';
 import { SmsSettingsDialog } from './SmsSettingsDialog';
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -23,6 +24,7 @@ import {
   Eraser,
   FileJson,
   FileOutput,
+  Fingerprint,
   FolderArchive,
   FolderDown,
   Gauge,
@@ -115,6 +117,7 @@ const navItems = [
   { to: '/proxies', label: '代理', icon: Network },
   { to: '/history', label: '历史与产物', icon: History },
   { to: '/platform-config', label: '平台配置', icon: Settings2 },
+  { to: '/device-fingerprints', label: '设备指纹', icon: Fingerprint },
 ];
 
 const ISO_PROXY_COUNTRIES = 'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW'.split(' ');
@@ -5800,7 +5803,7 @@ export default function App() {
       navigate('/', { replace: true });
       return;
     }
-    const known = path === '/' || path === '/run' || /^\/run\/[^/]+$/.test(path) || ['/sessions', '/rebind', '/robots', '/chains', '/proxies', '/history', '/platform-config'].includes(path);
+    const known = path === '/' || path === '/run' || /^\/run\/[^/]+$/.test(path) || ['/sessions', '/rebind', '/robots', '/chains', '/proxies', '/history', '/platform-config', '/device-fingerprints'].includes(path);
     if (!known) navigate('/', { replace: true });
   }, [path, navigate]);
   let page: ReactNode = <DashboardPage />;
@@ -5812,5 +5815,6 @@ export default function App() {
   else if (path === '/proxies') page = <ProxyPage />;
   else if (path === '/history') page = <HistoryPage />;
   else if (path === '/platform-config') page = <PlatformConfigPage />;
+  else if (path === '/device-fingerprints') page = <DeviceFingerprintsPage />;
   return <AppLayout>{page}</AppLayout>;
 }

@@ -29,7 +29,7 @@ const { validateControls, visibleMenus } = require("./site-controls");
 const { registerMail } = require("./mail");
 const { registerAdminAccounts } = require("./admin-accounts");
 const { registerRedeemCodes, redeemTransaction } = require("./redeem-codes");
-const { oauthExport } = require("./account-export");
+const { oauthExport, tokenExport } = require("./account-export");
 const { registerCustomerCenter } = require("./customer-center");
 const { availableAccount } = require("./account-retention");
 function registerApi(app, db, orders, crypt) {
@@ -111,8 +111,8 @@ function registerApi(app, db, orders, crypt) {
         "一次选择 1～1000 个账号",
       );
       fail(
-        ["txt", "json", "csv", "cpa", "sub"].includes(v.format || "txt"),
-        "导出格式须为 txt、csv、json、cpa 或 sub",
+        ["txt", "json", "csv", "cpa", "sub", "email_at", "email_session"].includes(v.format || "txt"),
+        "导出格式须为 txt、csv、json、cpa、sub、email_at 或 email_session",
       );
       const rows = (
         await db.query(
@@ -130,6 +130,7 @@ function registerApi(app, db, orders, crypt) {
       await audit(db, r.user.id, "accounts.export", "", String(rows.length));
       if (["cpa", "sub"].includes(v.format))
         return oauthExport(values, v.format);
+      if (["email_at", "email_session"].includes(v.format)) return tokenExport(values, v.format);
       return {
         filename: `gptreg-accounts.${v.format || "txt"}`,
         content:

@@ -1,0 +1,17 @@
+.p-resource-cost { min-width: 178px; display: grid; gap: 7px; white-space: normal; font-size: 12px; line-height: 1.55; }
+.p-resource-total { color: var(--p-text, #25352f); font-size: 13px; }
+.p-resource-counts, .p-resource-cleanup { display: flex; flex-wrap: wrap; gap: 3px 10px; }
+.p-resource-counts span { padding: 1px 6px; border-radius: 5px; background: rgba(45, 120, 87, .07); }
+.p-resource-cleanup { color: var(--p-muted, #78867f); }
+.p-resource-cost .is-failure, .p-resource-warning { color: #ad5424; }
+.p-resource-money { border-top: 1px solid rgba(120, 140, 130, .15); padding-top: 6px; }
+.p-resource-money > small { display: block; }
+.p-resource-failed-cost { border-left: 2px solid #d9a17d; padding: 3px 0 3px 8px; color: #95552e; }
+.p-resource-failed-cost small, .p-resource-failed-cost span { display: block; }
+.p-resource-reasons summary { cursor: pointer; color: var(--p-muted, #78867f); }
+.p-resource-reasons p { margin: 5px 0; overflow-wrap: anywhere; }
+.p-resource-reasons code { display: block; font-size: 10px; color: var(--p-muted, #78867f); }
+.p-order-resource-details > summary { cursor: pointer; margin: 16px 0; font-weight: 600; }
+.p-order-resource-details .p-table-wrap { max-height: 65vh; overflow: auto; }
+.p-cost-grid > div { min-width: 0; }
+@media (max-width: 640px) { .p-cost-grid { grid-template-columns: 1fr; } }

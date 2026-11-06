@@ -34,6 +34,7 @@ const {
 const { createSmsProvider, sleep } = require('./sms-provider');
 const { IcloudClient } = require('./icloud-client');
 const { cancellationDetailsForBalance, summarizeSmsCost, summarizeSmsCosts } = require('./sms-cost-ledger');
+const { mailRentalCost } = require('./mail-cost-ledger');
 const {
   applyBalanceCancellationSettlement,
   balanceAccountFingerprint,
@@ -4088,9 +4089,9 @@ function markRentalSettlementUnknown(mailbox, action, produced, error, context) 
 function markRentalCleanupManualReview(mailbox, action, produced, error, context) {
   const previous = rentalCleanupRecord(mailbox);
   const at = nowIso(context);
-  const unresolvedUsd = action === 'settle' ? Number(mailbox.quotedPriceUsd || 0) : 0;
+  const unresolvedUsd = Number(mailbox.quotedPriceUsd || 0);
   mailbox.rentalClosed = 'cleanup_manual_review';
-  mailbox.rentalBillingUncertain = action === 'settle';
+  mailbox.rentalBillingUncertain = true;
   mailbox.rentalUnresolvedUsd = unresolvedUsd;
   mailbox.rentalCleanup = {
     ...previous,
@@ -12670,11 +12671,7 @@ function summarizeMailRentalCosts(mailboxes = [], jobs = []) {
       ? sum + Number(mailbox.costUsd || 0)
       : sum
   ), 0);
-  const unresolvedAmount = (mailbox) => {
-    const status = String(mailbox.rentalClosed || '').toLowerCase();
-    if (!mailbox.rentalBillingUncertain && !['settlement_unknown', 'cleanup_manual_review'].includes(status)) return 0;
-    return Number(mailbox.rentalUnresolvedUsd ?? mailbox.quotedPriceUsd ?? 0);
-  };
+  const unresolvedAmount = (mailbox) => mailRentalCost(mailbox).pending;
   const unresolved = rentals.reduce((sum, mailbox) => sum + unresolvedAmount(mailbox), 0);
   // A wasted outcome whose close never confirmed a charge is still waste: the
   // address took a code, so the provider will not refund it. Counting only
@@ -12682,15 +12679,8 @@ function summarizeMailRentalCosts(mailboxes = [], jobs = []) {
   // unresolved amount and kept apart from the confirmed figure, so `mail`
   // (what was billed) is not inflated by a charge nobody has confirmed.
   //
-  // Priced at the quote, not at `rentalUnresolvedUsd`: a refused *cancel*
-  // records that as 0 on the assumption a cancel is free, but the refusal
-  // ("Bad actual activation status") is SMSBower saying the address already
-  // took a code — which, for a wasted outcome, is the known case.
-  const wastedUnresolvedAmount = (mailbox) => {
-    const status = String(mailbox.rentalClosed || '').toLowerCase();
-    if (!mailbox.rentalBillingUncertain && !['settlement_unknown', 'cleanup_manual_review'].includes(status)) return 0;
-    return Number(mailbox.rentalUnresolvedUsd || mailbox.quotedPriceUsd || 0);
-  };
+  // Refused cancellations remain uncertain; never label the quote a charge.
+  const wastedUnresolvedAmount = unresolvedAmount;
   const wastedUnresolved = rentals.filter((mailbox) => (
     wastedMailboxIds.has(String(mailbox.id || '').trim())
     && !(Number(mailbox.costUsd || 0) > 0)

@@ -37,6 +37,11 @@ it("delivery groups lazily load accounts, keep cross-order selection capped at 1
   expect(posted.ids).toHaveLength(1000);expect(new Set(posted.ids).size).toBe(1000);
   expect(posted.ids.filter((id:string)=>id.startsWith('one-'))).toHaveLength(600);
   expect(calls.every(x=>!x.includes('/credentials'))).toBe(true);
+  for(const [label,format] of [["邮箱+AT","email_at"],["邮箱+Session","email_session"]]) {
+    fireEvent.click(screen.getByRole('button',{name:label}));
+    await waitFor(()=>expect(posted.format).toBe(format));
+    await waitFor(()=>expect((screen.getByRole('button',{name:label}) as HTMLButtonElement).disabled).toBe(false));
+  }
   fireEvent.click(screen.getAllByRole('button',{name:'选择 / 取消本单'})[1]);
   await screen.findByText('已选 600 个');
 });

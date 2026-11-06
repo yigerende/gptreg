@@ -116,6 +116,8 @@ const exampleCredentials = {
   email: "demo.account@gmail.com",
   password: "EXAMPLE_PASSWORD",
   totp_secret: "EXAMPLE_BASE32_SECRET",
+  access_token: "EXAMPLE_WEB_ACCESS_TOKEN",
+  session_token: "EXAMPLE_FULL_SESSION_TOKEN",
   oauth: {
     access_token: "EXAMPLE_ACCESS_TOKEN",
     refresh_token: "EXAMPLE_REFRESH_TOKEN",
@@ -238,6 +240,8 @@ const schemas = {
       email: str("交付邮箱"),
       password: str("账号密码"),
       totp_secret: str("2FA 的 Base32 密钥，请妥善保管"),
+      access_token: str("网页登录态 Access Token，标准/OAuth 账号均可返回；与 oauth.access_token 独立。仅新增可选字段，未采集或历史未补齐时为空或省略，不保证仍有效"),
+      session_token: str("完整 Session Token（登录 Cookie 的值，原平台已合并分片），不截断；不是 /api/auth/session 的 JSON。标准/OAuth 均可返回，未保存时为空或省略，读取不触发刷新"),
       oauth: ref("OAuth"),
     },
     ["asset_id", "email", "password", "totp_secret"],
@@ -601,7 +605,7 @@ operation(
   "读取账号凭据与验证码",
   "账号交付",
   "credentials:read",
-  "仅在交付后 72 小时内可读取密码、2FA 密钥和当前验证码；到期返回 404，即使保存过账号 ID 也无法继续领取。只有购买含 OAuth 服务的账号才返回 oauth；标准账号省略该字段。完整 OAuth 对象可能包含额外元数据。",
+  "仅在交付后 72 小时内可读取密码、2FA、当前验证码及已保存的网页登录 AT / 完整 Session Token；到期返回 404。新增可选 access_token / session_token，标准账号也可获取，缺失时为空或省略；不会刷新凭据。只有购买含 OAuth 服务才返回 oauth，其中 oauth.access_token 与顶层网页登录 AT 独立。旧字段、权限和调用路径保持兼容，调用方应忽略不使用的新增字段。",
   {
     parameters: [identifier("account")],
     result: ref("Credentials"),
@@ -620,7 +624,7 @@ operation(
   "批量导出交付资料",
   "账号交付",
   "credentials:read",
-  "一次传入 1～1000 个账号 ID。任一 ID 不存在、不属于当前用户或已超过交付后 72 小时领取期，则整体返回 404；重复 ID 自动去重，不保证输出顺序与请求顺序相同。TXT/CSV 为基础凭据；JSON 保留完整交付数据。CPA 每个账号一份 OAuth JSON，多账号打包 ZIP（encoding=base64）；SUB 多账号合并为一个 sub2api 导入 JSON。CPA/SUB 只支持完整 OAuth 账号，混入标准账号会整批拒绝。响应始终是 JSON 封装，先解析，ZIP 需 Base64 解码后保存。",
+  "一次传入 1～1000 个账号 ID。任一 ID 不存在、不属于当前用户或已超过交付后 72 小时，则整体返回 404；重复 ID 去重，不保证输出顺序。现有 TXT/CSV 三列及默认 txt 不变；JSON 新增可选网页登录 access_token / session_token。新增 email_at / email_session 均输出 TXT，每行邮箱----完整 AT 或 Session Token，标准账号也支持，任一账号缺少该凭据则整批 409，不跳过、不回退到 OAuth AT。CPA 每号一份 OAuth JSON，多号 ZIP（encoding=base64）；SUB 多号合并 sub2api JSON，均仍需 OAuth。响应始终为 JSON 封装，解析后保存 content，ZIP 先 Base64 解码。",
   {
     requestBody: requestBody(
       obj(
@@ -636,10 +640,10 @@ operation(
           },
           format: {
             type: "string",
-            enum: ["txt", "csv", "json", "cpa", "sub"],
+            enum: ["txt", "csv", "json", "cpa", "sub", "email_at", "email_session"],
             default: "txt",
             description:
-              "txt：邮箱-密码-2fa；json：完整交付；cpa：CPA 导入；sub：sub2api 合并导入",
+              "txt：邮箱-密码-2fa；csv：三列基础凭据；json：完整交付；email_at：邮箱+网页登录 AT；email_session：邮箱+完整 Session Token；cpa：CPA；sub：sub2api",
           },
         },
         ["ids"],
@@ -665,6 +669,8 @@ operation(
           summary: "SUB，多个账号合并 JSON",
           value: { ids: ["ACCOUNT_ID"], format: "sub" },
         },
+        email_at: { summary: "邮箱+AT，网页登录态 TXT", value: { ids: ["ACCOUNT_ID"], format: "email_at" } },
+        email_session: { summary: "邮箱+Session，完整 Session Token TXT", value: { ids: ["ACCOUNT_ID"], format: "email_session" } },
       },
     ),
     result: ref("ExportResult"),
@@ -734,6 +740,12 @@ exportMedia.examples.cpa = {
     ),
   },
 };
+for (const [format, field, label] of [["email_at", "access_token", "AT"], ["email_session", "session_token", "Session"]]) {
+  exportMedia.examples[format] = { summary: `邮箱+${label} TXT 文件正文`, value: {
+    filename: `gptreg-email-${format === "email_at" ? "at" : "session"}.txt`,
+    content: `${exampleCredentials.email}----${exampleCredentials[field]}\n`,
+  } };
+}
 exportMedia.examples.sub = {
   summary: "SUB 合并导入文件",
   value: {
@@ -784,7 +796,7 @@ const openapi = {
   openapi: "3.1.0",
   info: {
     title: "GPT Register 开放 API",
-    version: "1.6.0",
+    version: "1.7.0",
     description:
       "通过服务端 API 创建标准或含 OAuth 的注册订单，查询进度并领取交付凭据。下单预留积分，按实际交付结算；失败/取消未交付部分释放。所有示例为虚构演示资料，实际价格与上限以接口返回为准。",
   },
@@ -801,7 +813,7 @@ const openapi = {
     "orders:read": "查询订单列表与进度",
     "orders:write": "创建订单",
     "accounts:read": "查询已交付账号列表",
-    "credentials:read": "读取密码、2FA、OAuth 与批量导出",
+    "credentials:read": "读取密码、2FA、网页登录 AT / Session、OAuth 与批量导出",
   },
   "x-errors": Object.entries(errors).map(([status, [message, action]]) => ({
     status: Number(status),

@@ -1,6 +1,6 @@
-import { call, type Row } from "./client";
-import { useAction, Feedback, Table } from "./Workspace";
-import AdminCosts, { CostAmount } from "./AdminCosts";
+import { call, date, type Row } from "./client";
+import { useAction, Feedback, Table, Status } from "./Workspace";
+import AdminCosts, { ResourceCost } from "./AdminCosts";
 export default function AdminOrderActions({ data }: { data: Row }) {
   const a = useAction();
   return (
@@ -9,11 +9,27 @@ export default function AdminOrderActions({ data }: { data: Row }) {
       {data.cleanup_runs?.some((r: Row) => !r.finished_at) && <p className="p-inline-help">供应商资源正在后台清理，客户结算不受影响；失败会自动退避重试。</p>}
       {data.quarantined_assets?.length > 0 && <div className="p-alert">有 {data.quarantined_assets.length} 个迟到或归属异常的账号结果已隔离，不会再次扣费或交付。</div>}
       <AdminCosts cost={data.execution_cost} title="本订单执行成本" />
+      <details className="p-order-resource-details" open>
+      <summary>逐账号资源消耗与失败情况</summary>
       <Table rows={data.items} columns={[
         { title: "账号序号", render: r => r.position },
-        { title: "邮箱消耗", render: r => <CostAmount cost={r.execution_cost} kind="mail" /> },
-        { title: "短信消耗", render: r => <CostAmount cost={r.execution_cost} kind="sms" /> },
+        { title: "交付状态", render: r => <Status value={r.status} /> },
+        { title: "执行次数", render: r => r.execution_cost?.attempts || 0 },
+        { title: "邮箱数量 / 费用", render: r => <ResourceCost cost={r.execution_cost} kind="mail" detailed /> },
+        { title: "短信数量 / 费用", render: r => <ResourceCost cost={r.execution_cost} kind="sms" detailed /> },
       ]} />
+      <p className="p-muted p-fine">同一账号使用多个邮箱表示曾更换资源；数量按已记录的不同租约统计。可在下方内部执行记录查看每次执行的费用和错误。</p>
+      </details>
+      {data.cleanup_runs?.length > 0 && <details className="p-order-resource-details">
+        <summary>资源清理记录（{data.cleanup_runs.length}）</summary>
+        <Table rows={data.cleanup_runs} columns={[
+          { title: "执行任务", render: r => <code>{r.run_id}</code> },
+          { title: "清理状态", render: r => r.finished_at ? "已完成" : r.last_error ? "失败待重试" : "等待处理" },
+          { title: "尝试次数", render: r => r.attempts },
+          { title: "下次处理 / 完成时间", render: r => date(r.finished_at || r.next_attempt_at) },
+          { title: "最近错误", render: r => r.last_error || "—" },
+        ]} />
+      </details>}
       {data.items
         .filter((r: Row) => r.status === "review" || (r.status === "running" && r.recovery_attempts > 0))
         .map((r: Row) => (
@@ -60,11 +76,12 @@ export default function AdminOrderActions({ data }: { data: Row }) {
           </div>
         ))}
       {data.attempts?.length > 0 && (
-        <details>
+        <details className="p-order-resource-details">
           <summary>内部执行记录</summary>
           <Table
             rows={data.attempts}
             columns={[
+              { title: "账号序号", render: r => data.items.find((item: Row) => item.id === r.item_id)?.position || "—" },
               {
                 title: "执行任务",
                 render: (r) => (
@@ -94,6 +111,8 @@ export default function AdminOrderActions({ data }: { data: Row }) {
                     "—"
                   ),
               },
+              { title: "邮箱数量 / 费用", render: r => <ResourceCost cost={r.cost_snapshot || { attempts: 1 }} kind="mail" detailed /> },
+              { title: "短信数量 / 费用", render: r => <ResourceCost cost={r.cost_snapshot || { attempts: 1 }} kind="sms" detailed /> },
             ]}
           />
           <p className="p-muted">

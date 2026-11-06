@@ -58,6 +58,27 @@ function mount() {
   );
 }
 
+it.each([["邮箱+AT","email_at"],["邮箱+Session","email_session"]])("exports %s with progress and displays complete saved login tokens", async(label,format)=>{
+  const token='COMPLETE_SESSION_'+'s'.repeat(12000),row=account('web-token');let finish:(v:unknown)=>void=()=>{};
+  const save=vi.spyOn(client,'download').mockImplementation(()=>{});
+  const calls=vi.spyOn(client,'call').mockImplementation(async(path,method)=>{
+    if(method==='POST')return new Promise(resolve=>{finish=resolve;});
+    if(path.includes('/credentials'))return {...row,password:'test',access_token:'WEB_AT',session_token:token};
+    if(path.includes('account-orders'))return page([group('one',1)],1,{accounts_total:1});
+    return page([row]);
+  });
+  mount();await screen.findByRole('button',{name:'展开订单 one'});
+  fireEvent.click(screen.getByRole('button',{name:'按账号'}));await screen.findByText(row.email);
+  fireEvent.click(screen.getByRole('checkbox',{name:`选择 ${row.email}`}));
+  fireEvent.click(screen.getByRole('button',{name:label}));
+  expect(screen.getByRole('status').textContent).toContain('正在生成 1');
+  expect(screen.getByRole('button',{name:label})).toBeDisabled();
+  expect(calls.mock.calls.find(([,method])=>method==='POST')?.[2]).toEqual({ids:[row.id],format});
+  await act(async()=>finish({filename:'tokens.txt',content:'full-export'}));expect(save).toHaveBeenCalledWith('tokens.txt','full-export',undefined);
+  fireEvent.click(screen.getByRole('button',{name:'查看凭据'}));
+  expect(await screen.findByDisplayValue(token)).toHaveValue(token);expect(screen.getByDisplayValue('WEB_AT')).toBeVisible();
+});
+
 it("limits merged selections to 1000, ignores duplicate/expired rows, and fills freed slots", () => {
   const now = Date.now(),
     rows = Array.from({ length: 1002 }, (_, i) => account(String(i)));

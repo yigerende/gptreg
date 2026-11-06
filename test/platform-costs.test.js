@@ -5,17 +5,72 @@ const { Database } = require('../src/platform/db');
 const { Orders } = require('../src/platform/orders');
 const { buildPlatform } = require('../src/platform/app');
 const { cipher, id, digest } = require('../src/platform/security');
-const state = (cost = .017) => ({ taskKind: 'register_session', status: 'complete', workers: [], jobs: [], mailboxes: [{ id:'m', rented:true, rentalClosed:'settled', costUsd:cost }] });
+const state = (cost = .017, rentalId = id()) => ({ taskKind: 'register_session', status: 'complete', workers: [], jobs: [], mailboxes: [{ id:rentalId, rented:true, rentalClosed:'settled', costUsd:cost }] });
 test('cost snapshots separate confirmed rental spend, uncertain quotes and currencies without credentials', () => {
   const input = state(); input.mailboxes.push({ id:'uncertain', rented:true, rentalClosed:'settlement_unknown', quotedPriceUsd:.03 });
   input.password = 'NEVER_STORE_ME';
   const snapshot = costSnapshot(input);
   assert.equal(snapshot.mail.USD.confirmed,.017); assert.equal(snapshot.mail.USD.pending,.03); assert.equal(snapshot.complete,false);
   assert.ok(!JSON.stringify(snapshot).includes('NEVER_STORE_ME'));
-  const second = { ...costSnapshot(state(.02)), sms:{ CNY:{confirmed:1.5,pending:0,refunded:.2} } };
+  const second = { ...costSnapshot(state(.02)), version:1, sms:{ CNY:{confirmed:1.5,pending:0,refunded:.2} } };
   const total = sumCosts([snapshot,second,null]);
   assert.equal(total.mail.USD.confirmed,.037); assert.equal(total.sms.CNY.confirmed,1.5); assert.equal(total.missing,1);
   assert.equal(total.pending,true);
+});
+test('failed mail rentals include refused cancellation costs, and successful cancellation stays free', () => {
+  const input = state(); input.status = 'partial'; input.runId = 'mail-failures';
+  input.mailboxes = [
+    {id:'paid-failure',rented:true,rentalClosed:'settled',costUsd:.017},
+    {id:'refused',rented:true,rentalClosed:'cleanup_manual_review',quotedPriceUsd:.017,costUsd:0,rentalUnresolvedUsd:0,rentalBillingUncertain:false,rentalCleanup:{action:'cancel',status:'manual_review',lastError:{code:'MAILBOX_STATE_REJECTED',message:'SECRET_RESPONSE'}}},
+    {id:'cancelled',rented:true,rentalClosed:'cancelled',quotedPriceUsd:.017,costUsd:0},
+    {id:'settle-review',rented:true,rentalClosed:'settlement_unknown',quotedPriceUsd:.017,costUsd:0},
+  ];
+  input.jobs = input.mailboxes.map(m=>({id:'j-'+m.id,mailboxId:m.id,status:'failed',error:{code:'EMAIL_OTP_TIMEOUT'},email:'SECRET_ADDRESS',password:'SECRET_PASSWORD'}));
+  const snapshot = costSnapshot(input), u = snapshot.resources.mail;
+  assert.equal(snapshot.version,2); assert.equal(snapshot.mail.USD.confirmed,.017); assert.equal(snapshot.mail.USD.pending,.034);
+  assert.equal(u.total,4); assert.equal(u.failed,4); assert.equal(u.succeeded,0);
+  assert.equal(u.cancelled,1); assert.equal(u.cancel_failed,1); assert.equal(u.review,1);
+  assert.deepEqual(u.failed_cost.USD,{confirmed:.017,pending:.034,refunded:0});
+  assert.deepEqual(u.reasons,[{code:'EMAIL_OTP_TIMEOUT',count:4}]);
+  assert.deepEqual(snapshot.kind_pending,{mail:true,sms:false}); assert.equal(snapshot.complete,false);
+  assert.ok(!JSON.stringify(snapshot).includes('SECRET_'));
+});
+test('SMS counts distinguish accepted, rejected paid, cancelled, cleanup failure, waiting and unknown records', () => {
+  const input = state(); input.status='running'; input.runId='sms-scenarios';
+  input.jobs=[{id:'j',status:'running',sms:{attempts:[
+    {activationId:'ok',status:'complete',cost:.05,targetAccepted:true},
+    {activationId:'paid-bad',status:'complete',cost:.06,codeReceived:true,targetAccepted:false,cleanupReason:'INVALID_PHONE_OTP'},
+    {activationId:'cancel',status:'cancelled',cost:.03,cancelReason:'FRAUD_GUARD'},
+    {activationId:'refund',status:'cancelled',cost:.04,refunded:true,cancelReason:'PHONE_NUMBER_IN_USE'},
+    {activationId:'no-price',status:'cancelled',cancelReason:'SMS_CODE_TIMEOUT'},
+  ],pendingCleanup:[{activationId:'deferred',status:'pending_cleanup',cost:.02,cleanupAction:'cancel',cleanupError:'SECRET_PROVIDER_RESPONSE',cleanupReason:'SMS_CODE_TIMEOUT'}],
+  current:{activationId:'waiting',status:'waiting_code',cost:.01,phone:'SECRET_PHONE',code:'SECRET_CODE'}}}];
+  const snapshot = costSnapshot(input), u=snapshot.resources.sms;
+  assert.equal(u.total,7); assert.equal(u.succeeded,1); assert.equal(u.failed,5); assert.equal(u.active,1);
+  assert.equal(u.cancelled,3); assert.equal(u.cancel_failed,1); assert.equal(u.price_unknown,1);
+  assert.deepEqual(u.failed_cost.USD,{confirmed:.06,pending:.05,refunded:.04});
+  assert.deepEqual(snapshot.sms.USD,{confirmed:.11,pending:.06,refunded:.04});
+  assert.deepEqual(snapshot.kind_pending,{mail:false,sms:true});
+  assert.ok(!JSON.stringify(snapshot).includes('SECRET_'));
+  input.jobs[0].sms.current={...input.jobs[0].sms.attempts[0]};
+  assert.equal(costSnapshot(input).resources.sms.total,6,'same current and archived activation counted once');
+});
+test('reconciled cancelled SMS quotes are not reintroduced as failed costs', () => {
+  const { summarizeSmsCosts }=require('../src/sms-cost-ledger');
+  const jobs=[{id:'j',status:'complete',sms:{attempts:[{activationId:'cancel',status:'cancelled',cost:.03,cancelReason:'FRAUD_GUARD'}]}}];
+  const ledger=summarizeSmsCosts(jobs,{includeRecords:true,settledCancelledQuotesByJob:{j:.03}}).ledgers[0].ledger;
+  assert.equal(ledger.unresolvedUsd,0);assert.equal(ledger.records[0].unresolvedUsd,0);assert.equal(ledger.records[0].billingUnresolved,false);
+});
+test('legacy quantities remain unknown, missing history retains amounts, repeated resource facts count once', () => {
+  const input=state(.017,'m');input.jobs=[{id:'j',mailboxId:'m',status:'complete'}];
+  const snap=costSnapshot(input), legacy={version:1,mail:{USD:{confirmed:.02,pending:0,refunded:0}},sms:{},complete:true};
+  const total=sumCosts([snap,snap,legacy,null]);
+  assert.equal(total.resources.mail.total,1);assert.equal(total.resources.mail.missing_attempts,2);
+  assert.equal(total.resources.mail.succeeded,1);assert.equal(total.missing,1);
+  assert.equal(total.mail.USD.confirmed,.037,'repeated leases do not duplicate costs');
+  const unknown=costSnapshot({...state(),jobs:[{id:'legacy',status:'complete',sessionAssetId:'asset',sms:{costUsd:.05}}]});
+  assert.equal(unknown.resources.sms.total,0);assert.equal(unknown.resources.sms.uncounted,1);
+  assert.equal(unknown.sms.USD.confirmed,.05);
 });
 const connection = process.env.GPTREG_TEST_DATABASE_URL || (fs.existsSync('.local/platform-test/connection.json') ? JSON.parse(fs.readFileSync('.local/platform-test/connection.json')).url : '');
 test('cost reporting: retries, durable snapshots, grouped deliveries, exports and customer privacy', {skip:!connection}, async t => {
@@ -61,4 +116,13 @@ test('cost reporting: retries, durable snapshots, grouped deliveries, exports an
   for(const path of ['/api/user/v1/accounts','/api/user/v1/registration-orders/'+order.id])assert.ok(!(await get(path,user)).body.includes('execution_cost'));
   await backfillCosts(db,{load(){throw new Error('missing');}});
   assert.equal((await get('/api/admin/v1/orders/'+order.id)).json().execution_cost.mail.USD.confirmed,.054);
+  const attempt=await db.one('SELECT id,run_id,cost_snapshot FROM platform_attempts ORDER BY created_at LIMIT 1');
+  await db.query("UPDATE platform_attempts SET cost_snapshot=$2,cost_checked_at=now()-interval '10 minutes' WHERE id=$1",[attempt.id,{version:1,mail:{USD:{confirmed:.017,pending:0,refunded:0}},sms:{},complete:true}]);
+  await backfillCosts(db,{load(runId){assert.equal(runId,attempt.run_id);return {...state(),jobs:[{id:'j',mailboxId:'m',status:'complete'}]};}});
+  assert.equal((await db.one('SELECT cost_snapshot FROM platform_attempts WHERE id=$1',[attempt.id])).cost_snapshot.version,2,'completed legacy snapshots also get resource stats');
+  response=await get('/api/admin/v1/orders/'+order.id);
+  assert.ok(response.json().execution_cost.resources.mail.total>0);
+  for(const path of ['/api/user/v1/accounts','/api/user/v1/registration-orders/'+order.id]) {
+    const body=(await get(path,user)).body;assert.ok(!body.includes('resource_records'));assert.ok(!body.includes('failed_cost'));
+  }
 });

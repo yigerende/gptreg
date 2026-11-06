@@ -117,6 +117,8 @@ test(
             "/api/v1/health",
             "/api/v1/platform-config",
             "/admin/engine/platform-config",
+            "/api/v1/device-fingerprints",
+            "/admin/engine/device-fingerprints",
           ]) {
             for (const method of ["GET", "HEAD"]) {
               assert.equal(

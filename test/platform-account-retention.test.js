@@ -89,6 +89,8 @@ test(
       email: "fixture@gmail.com",
       password: "fixture-secret",
       totp_secret: "JBSWY3DPEHPK3PXP",
+      access_token: "fixture-web-at",
+      session_token: "fixture-full-session",
       oauth: {
         access_token: jwt,
         id_token: jwt,
@@ -262,7 +264,7 @@ test(
           assert.equal(fresh.statusCode, 200, fresh.body);
           assert.equal(fresh.json().password, creds.password);
           assert.ok(fresh.json().download_expires_at);
-          for (const format of ["txt", "csv", "json", "cpa", "sub"]) {
+          for (const format of ["txt", "csv", "json", "cpa", "sub", "email_at", "email_session"]) {
             const denied = await request(
               `${prefix}/accounts/export`,
               { ids: ["mixed-1", "mixed-3"], format },
@@ -333,7 +335,7 @@ test(
         );
         assert.equal(value.password, creds.password);
         assert.ok(value.delivery.engine_sold_at);
-        for (const format of ["txt", "csv", "json", "cpa", "sub"])
+        for (const format of ["txt", "csv", "json", "cpa", "sub", "email_at", "email_session"])
           assert.equal(
             (
               await request(
