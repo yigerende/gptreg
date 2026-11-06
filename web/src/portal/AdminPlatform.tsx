@@ -63,7 +63,11 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
     refetchOnReconnect: !settingsPage,
   });
   useEffect(() => {
-    if (settingsPage && data) setSettings(structuredClone(data));
+    if (settingsPage && data) {
+      const draft = structuredClone(data);
+      draft.email_domains = (draft.email_domains || []).join("\n");
+      setSettings(draft);
+    }
   }, [data, tab]);
   function field(key: string, value: any) {
     setSettings((s) => ({ ...s, [key]: value }));
@@ -345,6 +349,8 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
             const s = Object.fromEntries(
               fields.map((k) => [k, structuredClone(settings[k])]),
             );
+            if (typeof s.email_domains === "string")
+              s.email_domains = s.email_domains.split(/[\s,，]+/).filter(Boolean);
             if (s.smtp) delete s.smtp.password_configured;
             a.run(
               () => call("/api/admin/v1/settings", "PATCH", s),

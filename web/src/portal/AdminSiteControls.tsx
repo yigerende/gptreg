@@ -166,13 +166,8 @@ export default function AdminSiteControls({
             邮箱域名白名单
             <textarea
               rows={6}
-              value={s.email_domains.join("\n")}
-              onChange={(e) =>
-                field(
-                  "email_domains",
-                  e.target.value.split(/[\s,，]+/).filter(Boolean),
-                )
-              }
+              value={s.email_domains}
+              onChange={(e) => field("email_domains", e.target.value)}
               placeholder={"qq.com\ngmail.com"}
             />
             <small className="p-muted">
