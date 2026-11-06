@@ -18,6 +18,7 @@ import AdminPlatform from "./AdminPlatform";
 import CustomPage from "./CustomPage";
 import AdminEntry from "./AdminEntry";
 import type { Row } from "./client";
+const PartnerPage=lazy(()=>import("./PartnerPage"));
 const AdminRisk = lazy(() => import("./AdminRisk"));
 const AdminSuppliers = lazy(() => import("./AdminSuppliers"));
 const groups: NavGroup[] = [
@@ -34,6 +35,7 @@ const groups: NavGroup[] = [
   {
     label: "客户与服务",
     items: [
+      { path: "/admin/invites",name:"邀请管理",icon:Users },
       { path: "/admin/users", name: "账户管理", icon: Users },
       { path: "/admin/accounts", name: "账号交付", icon: KeyRound },
       { path: "/admin/codes", name: "积分兑换码", icon: Ticket },
@@ -84,7 +86,7 @@ export default function AdminChrome({
     >
       {path.startsWith("/admin/custom/") ? (
         <CustomPage id={path.slice(14)} admin />
-      ) : path === "/admin/risk" ? (
+      ) : path === "/admin/invites" ? (<Suspense fallback={<div className="p-loading">正在读取伙伴记录…</div>}><PartnerPage admin/></Suspense>) : path === "/admin/risk" ? (
         <Suspense fallback={<div className="p-loading">正在打开风控监控…</div>}>
           <AdminRisk />
         </Suspense>

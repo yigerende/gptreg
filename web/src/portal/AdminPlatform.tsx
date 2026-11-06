@@ -250,6 +250,9 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                 ),
               },
               {
+                title: "注册时间",render:(r)=>date(r.created_at),
+              },
+              {
                 title: "角色",
                 render: (r) => (r.role === "admin" ? "管理员" : "用户"),
               },
@@ -337,6 +340,7 @@ export default function AdminPlatform({ tab = "overview" }: { tab?: string }) {
                           "api_enabled",
                         ],
                         security: [
+                          "login_slider_enabled",
                           "registration_open",
                           "email_verify_enabled",
                           "email_domains",

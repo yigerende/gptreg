@@ -28,6 +28,7 @@ test(
       username: "admin",
       password: "TestAdminPassword123!",
     });
+    await store.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");
     const crypt = cipher(crypto.randomBytes(32).toString("base64")),
       orders = new Orders(store, crypt),
       app = buildPlatform({

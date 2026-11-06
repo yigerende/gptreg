@@ -26,6 +26,7 @@ async function fixture(t) {
     await setup.query(`DROP SCHEMA ${schema} CASCADE`); await setup.close();
   });
   await db.initialize();
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");
   const settings = async patch => db.query("UPDATE platform_settings SET value=value||$1::jsonb WHERE id=1", [JSON.stringify(patch)]);
   await settings({ orders_open: true, worker_enabled: false, max_open_orders: 20,
     template: { mailProvider: "smsbower", proxyAssignments: [{ workerSlot: 1, kind: "countryPool", countryCode: "CL" }] } });

@@ -3,6 +3,7 @@ import { Search, ChevronLeft, ChevronRight, TrendingUp } from "lucide-react";
 import type { Row } from "./client";
 export const number = (n: unknown) => Number(n || 0).toLocaleString("zh-CN");
 export const ledgerNames: Row = {
+  invite_reward:"伙伴奖励",
   reserve: "下单预留",
   release: "未交付退回",
   charge: "交付扣费",

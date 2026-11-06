@@ -80,6 +80,7 @@ test(
       crypt = cipher(crypto.randomBytes(32).toString("base64")),
       orders = new Orders(db, crypt);
     await db.initialize();
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");
     const pass = await passwordHash("RiskTestPassword123!"),
       admin = id(),
       alice = id(),
@@ -768,6 +769,7 @@ test(
           cfg = await settings(db);
         await scan(db, true);
         await db.initialize();
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");
         assert.equal(
           (
             await db.one(

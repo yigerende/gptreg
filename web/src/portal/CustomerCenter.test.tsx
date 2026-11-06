@@ -212,9 +212,9 @@ it("reveals admin delivery details on demand and exports only selected records",
   mount(<AdminAccounts rows={[{ id: row.order_id, available_count: 1, owner_email: row.owner_email }]} onOrder={() => {}} />);
   expect(fetcher).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: new RegExp("订单 " + row.order_id.slice(0,12)) }));
-  fireEvent.click(await screen.findByRole("button", { name: "查看全部资料" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查看凭据" }));
   expect(await screen.findByDisplayValue(record.password)).toBeTruthy();
-  expect(screen.getByDisplayValue("refresh-test")).toBeTruthy();
+  expect((screen.getByRole("textbox",{name:"RT（Refresh Token）"}) as HTMLInputElement).value).toBe("refresh-test");
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
   expect(screen.queryByDisplayValue(record.password)).toBeNull();
   fireEvent.click(screen.getByRole("checkbox", { name: `选择 ${row.email}` }));

@@ -25,6 +25,7 @@ test('supplier report deduplicates leases, separates countries and vendors, pagi
  const setup=new Database(connection),schema='supplier_'+crypto.randomBytes(8).toString('hex');await setup.query('CREATE SCHEMA '+schema);
  const url=new URL(connection);url.searchParams.set('options','-c search_path='+schema);const db=new Database(url.href),crypt=cipher(crypto.randomBytes(32).toString('base64')),orders=new Orders(db,crypt),app=buildPlatform({db,crypt,orders,secrets:{internal:'test'},proxy:false});
  t.after(async()=>{await app.close();await db.close();await setup.query('DROP SCHEMA '+schema+' CASCADE');await setup.close();});await db.initialize();
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");
  const users=[];for(const role of ['admin','member']){const u=await db.one("INSERT INTO platform_users(id,email,name,password_hash,role,points) VALUES($1,$2,'test','unused',$3,10000) RETURNING *",[id(),role+'@example.test',role]);users.push(u);await db.query("INSERT INTO platform_sessions VALUES($1,$2,now()+interval '1 hour')",[digest(u.id),u.id]);}
  await db.query("UPDATE platform_settings SET value=value||'{\"orders_open\":true}'::jsonb");
  const record=(key,provider,country,outcome,received,confirmed=.02)=>({key,provider,country,country_name:country==='6'?'印度尼西亚':'菲律宾',outcome,received,confirmed,pending:0,refunded:0,currency:'USD',counted:true});

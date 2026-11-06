@@ -123,7 +123,7 @@ async function listLedger(db, owner, query) {
     values = [
       owner,
       search(query.q),
-      option(query.kind, ["reserve", "release", "charge", "redeem", "adjust"]),
+      option(query.kind, ["reserve", "release", "charge", "redeem", "adjust", "invite_reward"]),
       query.days ? integer(Number(query.days), 1, 90, "统计天数") : null,
     ];
   const where =

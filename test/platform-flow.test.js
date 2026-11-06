@@ -161,6 +161,7 @@ async function fixture(t) {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
   await db.initialize();
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");
   await db.query(
     "UPDATE platform_settings SET value=value||$1::jsonb WHERE id=1",
     [JSON.stringify({ orders_open: true, worker_enabled: true })],

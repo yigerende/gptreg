@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpen,
+  Users,
   ChartNoAxesCombined,
   Code2,
   KeyRound,
@@ -27,6 +28,7 @@ import { call, currentUser } from "./portal/client";
 import "./portal/portal.css";
 import "./portal/workspace.css";
 import "./portal/center.css";
+const PartnerPage=lazy(()=>import("./portal/PartnerPage"));
 const AdminConsole = lazy(() => import("./AdminConsole"));
 const AdminChrome = lazy(() => import("./portal/AdminChrome"));
 const AdminEntry = lazy(() => import("./portal/AdminEntry"));
@@ -46,6 +48,7 @@ const customerGroups: NavGroup[] = [
     items: [
       { path: "/keys", name: "开发接入", icon: Code2 },
       { path: "/docs", name: "接口文档", icon: BookOpen },
+      {path:"/partners",name:"伙伴计划",icon:Users},
       { path: "/profile", name: "个人设置", icon: Settings },
     ],
   },
@@ -179,7 +182,7 @@ export default function Platform() {
         <CustomerAccounts key={`${me.data.id}:${search}`} userId={me.data.id} />
       ) : path === "/wallet" ? (
         <FundsAccount user={me.data} pub={pub.data} />
-      ) : path === "/profile" ? (
+      ) : path === "/partners" ? (<Suspense fallback={<div className="p-loading">正在读取伙伴记录…</div>}><PartnerPage/></Suspense>) : path === "/profile" ? (
         <PersonalSettings user={me.data} pub={pub.data} onLogout={logout} />
       ) : (
         <Workspace

@@ -74,6 +74,7 @@ test("delivery token backfill matches asset ownership, preserves existing encryp
   const db=new Database(url.href),crypt=cipher(crypto.randomBytes(32).toString('base64')),orders=new Orders(db,crypt);
   t.after(async()=>{await db.close();await setup.query('DROP SCHEMA '+schema+' CASCADE');await setup.close();});
   await db.initialize();
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");
   const user=await db.one("INSERT INTO platform_users(id,email,name,password_hash,points) VALUES($1,'token@example.test','test','unused',10000) RETURNING *",[id()]);
   await db.query("UPDATE platform_settings SET value=value||'{\"orders_open\":true}'::jsonb WHERE id=1");
   const order=(await orders.create(user,{quantity:3},id(),'web')).order,items=(await orders.detail(user.id,order.id)).items;

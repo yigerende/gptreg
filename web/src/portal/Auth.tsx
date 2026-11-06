@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, ShieldCheck, LoaderCircle } from "lucide-react";
 import { call, type Row } from "./client";
+import LoginSlider from "./LoginSlider";
 import ServiceFeatures from "./ServiceFeatures";
 export default function Auth({
   pub,
@@ -9,6 +10,7 @@ export default function Auth({
   pub: Row;
   onLogin: () => void;
 }) {
+  const [sliderProof,setSliderProof]=useState(""),[sliderKey,setSliderKey]=useState(0),[invite,setInvite]=useState(new URLSearchParams(location.search).get("invite")||"");
   const [mode, setMode] = useState("login"),
     [email, setEmail] = useState(""),
     [name, setName] = useState(""),
@@ -65,14 +67,14 @@ export default function Auth({
       const r = await call(
         `/api/auth/${mode === "reset" ? "reset-password" : mode}`,
         "POST",
-        { email, password, name, code },
+        { email, password, name, code,invite,slider_proof:sliderProof },
       );
       if (mode === "reset") {
         change("login");
         setMessage(r.message);
       } else onLogin();
     } catch (e) {
-      setError((e as Error).message);
+      setError((e as Error).message);setSliderProof("");setSliderKey(k=>k+1);
     } finally {
       setBusy(false);
     }
@@ -259,6 +261,8 @@ export default function Auth({
               />
             </label>
           )}
+          {mode === "register" && <label>邀请标识（选填）<input value={invite} maxLength={80} onChange={e=>setInvite(e.target.value)} placeholder="来自伙伴的邀请标识"/></label>}
+          {mode === "login" && pub.login_slider_enabled!==false && <LoginSlider key={sliderKey} onVerified={setSliderProof}/>}
           {mode === "login" && pub.password_reset_available && (
             <button
               className="p-link p-forgot"

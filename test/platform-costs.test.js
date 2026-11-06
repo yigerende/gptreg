@@ -98,6 +98,7 @@ test('cost reporting: retries, durable snapshots, grouped deliveries, exports an
   const app = buildPlatform({db,crypt,orders,secrets:{internal:'test'},proxy:false});
   t.after(async()=>{await app.close();await db.close();await setup.query('DROP SCHEMA '+schema+' CASCADE');await setup.close();});
   await db.initialize();
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");
   const user = await db.one("INSERT INTO platform_users(id,email,name,password_hash,points) VALUES($1,'cost@example.test','cost','unused',10000) RETURNING *",[id()]);
   const admin = await db.one("INSERT INTO platform_users(id,email,name,password_hash,role) VALUES($1,'admin-cost@example.test','admin','unused','admin') RETURNING *",[id()]);
   await db.query("UPDATE platform_settings SET value=value||'{\"orders_open\":true}'::jsonb WHERE id=1");

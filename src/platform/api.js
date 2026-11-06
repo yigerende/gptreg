@@ -277,6 +277,7 @@ function registerApi(app, db, orders, crypt) {
         "custom_menus",
         "features",
         "registration_open",
+        "login_slider_enabled",
         "email_verify_enabled",
         "email_domains",
         "orders_open",
@@ -306,6 +307,7 @@ function registerApi(app, db, orders, crypt) {
         ).rows[0].value,
         s = { ...old, ...v };
       s.custom_menus ??= [];
+      s.login_slider_enabled ??= true;
       if (s.registration_concurrency === undefined)
         s.registration_concurrency = 15;
       if (s.user_registration_concurrency === undefined)
@@ -315,6 +317,7 @@ function registerApi(app, db, orders, crypt) {
       s.brand = validateBrand({ ...old.brand, ...v.brand });
       for (const k of [
         "registration_open",
+        "login_slider_enabled",
         "email_verify_enabled",
         "orders_open",
         "api_enabled",

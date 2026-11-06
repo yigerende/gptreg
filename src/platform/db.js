@@ -13,6 +13,8 @@ const defaults = {
   brand: brandDefaults,
   announcement: "",
   registration_open: true,
+  login_slider_enabled: true,
+  invitations: {enabled:true,stages:[{until_days:30,rate_percent:10},{until_days:60,rate_percent:5},{until_days:90,rate_percent:2}]},
   email_verify_enabled: false,
   email_domains: [],
   orders_open: false,
@@ -69,6 +71,8 @@ class Database {
         "INSERT INTO platform_settings(id,value) VALUES(1,$1) ON CONFLICT DO NOTHING",
         [defaults],
       );
+      await c.query("UPDATE platform_settings SET value=value || $1::jsonb WHERE id=1 AND NOT value ? 'invitations'", [{invitations:defaults.invitations}]);
+      await c.query("UPDATE platform_settings SET value=value || '{\"login_slider_enabled\":true}' WHERE id=1 AND NOT value ? 'login_slider_enabled'");
       if (
         credentials &&
         !(

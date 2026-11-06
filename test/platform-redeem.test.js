@@ -15,7 +15,8 @@ test('redemption management, rollback, concurrent disable and bounded waits',{sk
  const url=new URL(connection);url.searchParams.set('options','-c search_path='+schema);
  const db=new Database(url.href),results={};let app;
  try{
-  await db.initialize();const crypt=cipher(crypto.randomBytes(32).toString('base64'));
+  await db.initialize();
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");const crypt=cipher(crypto.randomBytes(32).toString('base64'));
   app=buildPlatform({db,crypt,orders:new Orders(db,crypt),secrets:{internal:'fixture'},proxy:false});await app.ready();
   async function user(role='member'){
    const uid=id(),t=token();await db.query("INSERT INTO platform_users(id,email,name,password_hash,role) VALUES($1,$2,'fixture','unused',$3)",[uid,uid+'@example.test',role]);

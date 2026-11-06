@@ -19,6 +19,7 @@ export const featureLabels: Row = {
   register: ["注册服务", "选择模式与数量，创建注册订单"],
   orders: ["订单中心", "查询订单进度和详情"],
   accounts: ["账号交付", "查看、领取和导出已交付的账号凭据"],
+  partners:["伙伴计划","邀请链接、规则与奖励明细"],
   wallet: ["资金账户", "查询积分、账本及兑换充值"],
   keys: ["开发接入", "创建 API Key 并通过 API 调用服务"],
   docs: ["接口文档", "查看 API 文档与 OpenAPI 定义"],
@@ -152,6 +153,7 @@ export default function AdminSiteControls({
       )}
       {tab === "security" && (
         <>
+          {toggle("login_slider_enabled","登录滑动验证","登录前完成滑块验证，服务端校验且仅可使用一次。")}
           {toggle(
             "registration_open",
             "开放用户注册",

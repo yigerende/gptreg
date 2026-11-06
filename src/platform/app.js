@@ -111,6 +111,7 @@ function buildPlatform({
   });
   registerAuth(app, db, crypt, { publicOrigin, secureCookies });
   registerApi(app, db, orders, crypt);
+  require("./partners").registerPartners(app,db);
   for (const route of ["/site-icon", "/favicon.ico", "/site-icon/default"]) {
     app.get(route, async (r, reply) => {
       const icon = siteIcon(

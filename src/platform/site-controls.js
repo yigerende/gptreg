@@ -2,6 +2,7 @@
 const { fail } = require("./security");
 const { validateIcon } = require("./branding");
 const features = {
+  partners: true,
   home: true,
   register: true,
   orders: true,
@@ -125,6 +126,7 @@ function visibleMenus(s, role) {
 function requestFeature(path, method) {
   if (path === "/docs" || path === "/openapi.json") return "docs";
   const p = path.replace(/^\/(api\/user|open)\/v1/, "");
+  if (p === "/partners") return "partners";
   if (p === "/overview") return "home";
   if (p === "/products" || p === "/registration-regions" || (p === "/registration-orders" && method === "POST"))
     return "register";

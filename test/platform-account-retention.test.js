@@ -40,6 +40,7 @@ test(
       await setup.close();
     });
     await db.initialize();
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");
     await app.ready();
     for (const who of ["alice", "bob", "admin"]) {
       await db.query(

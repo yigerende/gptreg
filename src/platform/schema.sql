@@ -102,3 +102,59 @@ ALTER TABLE platform_ledger ADD COLUMN IF NOT EXISTS frozen_after integer;
 ALTER TABLE platform_redeem_codes ADD COLUMN IF NOT EXISTS encrypted_code text;
 ALTER TABLE platform_redeem_codes ADD COLUMN IF NOT EXISTS batch text NOT NULL DEFAULT '';
 ALTER TABLE platform_redeem_codes ADD COLUMN IF NOT EXISTS expires_at timestamptz;
+
+-- New admissions snapshot direct referral eligibility; no historical backfill.
+ALTER TABLE platform_users ADD COLUMN IF NOT EXISTS invite_code text NOT NULL DEFAULT md5(random()::text||clock_timestamp()::text);
+CREATE UNIQUE INDEX IF NOT EXISTS platform_users_invite_code ON platform_users(invite_code);
+ALTER TABLE platform_users ADD COLUMN IF NOT EXISTS invited_by text REFERENCES platform_users(id);
+CREATE INDEX IF NOT EXISTS platform_users_invited_by ON platform_users(invited_by);
+CREATE TABLE IF NOT EXISTS platform_partner_candidates(
+ order_id text PRIMARY KEY REFERENCES platform_orders(id),invitee_id text NOT NULL REFERENCES platform_users(id),inviter_id text NOT NULL REFERENCES platform_users(id),
+ rate_percent integer NOT NULL CHECK(rate_percent BETWEEN 1 AND 30),CHECK(invitee_id<>inviter_id)
+);
+CREATE TABLE IF NOT EXISTS platform_partner_rewards(
+ order_id text PRIMARY KEY REFERENCES platform_orders(id),invitee_id text NOT NULL REFERENCES platform_users(id),inviter_id text NOT NULL REFERENCES platform_users(id),
+ rate_percent integer NOT NULL,fee integer NOT NULL DEFAULT 0 CHECK(fee>=0),amount integer NOT NULL DEFAULT 0 CHECK(amount>=0),created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS platform_partner_rewards_owner ON platform_partner_rewards(inviter_id,invitee_id);
+CREATE OR REPLACE FUNCTION platform_partner_admit() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE inviter text; joined timestamptz; rules jsonb; rate integer;
+BEGIN
+ SELECT value->'invitations' INTO rules FROM platform_settings WHERE id=1;
+ IF rules->>'enabled' IS DISTINCT FROM 'true' THEN RETURN NEW; END IF;
+ SELECT invited_by,created_at INTO inviter,joined FROM platform_users WHERE id=NEW.user_id;
+ IF inviter IS NOT NULL AND inviter<>NEW.user_id AND NEW.created_at>=joined THEN
+  SELECT (s->>'rate_percent')::int INTO rate FROM jsonb_array_elements(rules->'stages') s
+   WHERE NEW.created_at<joined+(s->>'until_days')::int*interval '1 day' ORDER BY (s->>'until_days')::int LIMIT 1;
+  IF rate>0 THEN INSERT INTO platform_partner_candidates VALUES(NEW.id,NEW.user_id,inviter,rate) ON CONFLICT DO NOTHING; END IF;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE OR REPLACE FUNCTION platform_partner_settle() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE candidate platform_partner_candidates; target integer; previous integer; delta integer; balance integer; frozen_balance integer;
+BEGIN
+ IF NEW.charged<=OLD.charged THEN RETURN NEW; END IF;
+ SELECT * INTO candidate FROM platform_partner_candidates WHERE order_id=NEW.id;
+ IF NOT FOUND THEN RETURN NEW; END IF;
+ target=NEW.charged::bigint*candidate.rate_percent/100;
+ INSERT INTO platform_partner_rewards(order_id,invitee_id,inviter_id,rate_percent) VALUES(NEW.id,candidate.invitee_id,candidate.inviter_id,candidate.rate_percent) ON CONFLICT DO NOTHING;
+ SELECT amount INTO previous FROM platform_partner_rewards WHERE order_id=NEW.id FOR UPDATE;
+ delta=target-previous;
+ UPDATE platform_partner_rewards SET fee=NEW.charged,amount=target,updated_at=now() WHERE order_id=NEW.id;
+ IF delta>0 THEN
+  UPDATE platform_users SET points=points+delta WHERE id=candidate.inviter_id RETURNING points,frozen INTO balance,frozen_balance;
+  INSERT INTO platform_ledger(id,user_id,reference,kind,points_delta,frozen_delta,note,points_after,frozen_after)
+  VALUES(md5(random()::text||clock_timestamp()::text),candidate.inviter_id,'partner:'||NEW.id||':'||target,'invite_reward',delta,0,'伙伴计划消费奖励',balance,frozen_balance);
+ END IF;
+ RETURN NEW;
+END $$;
+DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='platform_partner_admission' AND tgrelid='platform_orders'::regclass) THEN
+  CREATE TRIGGER platform_partner_admission AFTER INSERT ON platform_orders FOR EACH ROW EXECUTE FUNCTION platform_partner_admit();
+ END IF;
+ IF NOT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='platform_partner_settlement' AND tgrelid='platform_orders'::regclass) THEN
+  CREATE TRIGGER platform_partner_settlement AFTER UPDATE OF charged ON platform_orders FOR EACH ROW EXECUTE FUNCTION platform_partner_settle();
+ END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS platform_slider_challenges(id text PRIMARY KEY,binding text NOT NULL,target integer NOT NULL,proof_hash text UNIQUE,created_at timestamptz NOT NULL DEFAULT now(),expires_at timestamptz NOT NULL);
+CREATE INDEX IF NOT EXISTS platform_slider_expiry ON platform_slider_challenges(expires_at);

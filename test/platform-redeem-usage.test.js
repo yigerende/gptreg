@@ -19,7 +19,8 @@ test('usage report permissions, literal filtering, pagination and credit preserv
  const url=new URL(connection);url.searchParams.set('options','-c search_path='+schema);
  const db=new Database(url.href);let app;
  try{
-  await db.initialize();const crypt=cipher(crypto.randomBytes(32).toString('base64'));
+  await db.initialize();
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");const crypt=cipher(crypto.randomBytes(32).toString('base64'));
   app=buildPlatform({db,crypt,orders:new Orders(db,crypt),secrets:{internal:'fixture'},proxy:false});await app.ready();
   async function user(role){const uid=id(),t=token();await db.query("INSERT INTO platform_users(id,email,name,password_hash,role) VALUES($1,$2,'report','unused',$3)",[uid,uid+'@example.test',role]);await db.query("INSERT INTO platform_sessions(hash,user_id,expires_at) VALUES($1,$2,now()+interval '1 hour')",[digest(t),uid]);return {id:uid,cookie:'gptreg_session='+t};}
   const a=await user('admin'),u=await user('member');

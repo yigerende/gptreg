@@ -17,6 +17,7 @@ test('authentication credential races, mail eligibility and trusted proxy bounda
  let app;
  try {
   await db.initialize({username:'admin@example.test',password:'OriginalPassword123!'});
+  await db.query("UPDATE platform_settings SET value=jsonb_set(value,'{login_slider_enabled}','false') WHERE id=1");
   app=buildPlatform({db,crypt,orders:new Orders(db,crypt),secrets:{internal:'test'},proxy:false,publicOrigin:''});await app.ready();
   const req=(method,url,payload,cookie,extra={})=>app.inject({method,url,payload,...extra,headers:{'x-requested-with':'gptreg',...(cookie?{cookie}:{}),...extra.headers}});
   const settings=async(p)=>db.query('UPDATE platform_settings SET value=$1 WHERE id=1',[{...await db.settings(),...p}]);

@@ -53,6 +53,7 @@ function registerAuth(app, db, crypt, { publicOrigin = "", secureCookies = false
       "Set-Cookie",
       `gptreg_session=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure(r) ? "; Secure" : ""}`,
     );
+  const {consumeSlider}=require("./login-slider").registerSlider(app,db,secure);
   async function insertSession(q, userId, t) {
     await q.query("INSERT INTO platform_sessions(hash,user_id,expires_at) VALUES($1,$2,now()+interval '24 hours')", [digest(t), userId]);
   }
@@ -102,6 +103,7 @@ function registerAuth(app, db, crypt, { publicOrigin = "", secureCookies = false
       announcements: activeAnnouncements(s),
       features: s.features,
       registration_open: s.registration_open,
+      login_slider_enabled:s.login_slider_enabled,
       email_verify_enabled: s.email_verify_enabled,
       email_domains: s.email_domains,
       password_reset_available: Boolean(s.smtp.host),
@@ -113,6 +115,7 @@ function registerAuth(app, db, crypt, { publicOrigin = "", secureCookies = false
   });
   app.post("/api/auth/login", async (r, reply) => {
     const v = r.body || {};
+    await consumeSlider(r,v.slider_proof);
     fail(
       typeof v.password === "string" && v.password.length <= 128,
       "账号或密码不正确",
@@ -248,9 +251,15 @@ function registerAuth(app, db, crypt, { publicOrigin = "", secureCookies = false
         const error = await consume(q, email, "register", v.code);
         if (error) return error;
       }
+      let inviter=null;
+      if(v.invite){
+        fail(typeof v.invite==='string'&&v.invite.length<=80,'邀请标识无效');
+        inviter=(await q.query("SELECT id FROM platform_users WHERE invite_code=$1 AND status='active' FOR SHARE",[v.invite])).rows[0]?.id;
+        fail(inviter,'邀请标识无效');
+      }
       await q.query(
-        "INSERT INTO platform_users(id,email,name,password_hash) VALUES($1,$2,$3,$4)",
-        [uid, email, name, hashed],
+        "INSERT INTO platform_users(id,email,name,password_hash,invited_by) VALUES($1,$2,$3,$4,$5)",
+        [uid, email, name, hashed,inviter],
       );
       await insertSession(q, uid, sessionToken);
       return "";

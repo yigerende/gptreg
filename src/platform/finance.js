@@ -15,7 +15,7 @@ function financeQuery(query = {}) {
   fail(["day","week","month","year"].includes(period), "统计周期无效");
   fail(query.include_admin === undefined || ["true","false"].includes(query.include_admin), "管理员筛选无效");
   const q=String(query.q || "").trim(); fail(q.length<=200,"搜索内容过长");
-  const kind=query.kind || ""; fail(["","reserve","release","charge","redeem","adjust"].includes(kind),"流水类型无效");
+  const kind=query.kind || ""; fail(["","reserve","release","charge","redeem","adjust","invite_reward"].includes(kind),"流水类型无效");
   return {start,end,period,include_admin:query.include_admin === "true",q,kind,
     limit:integer(Number(query.limit || 50),1,100,"limit"),offset:integer(Number(query.offset||0),0,1000000,"offset")};
 }
