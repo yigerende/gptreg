@@ -1,13 +1,14 @@
 import { call, date, type Row } from "./client";
 import { useAction, Feedback, Table, Status } from "./Workspace";
 import AdminCosts, { ResourceCost } from "./AdminCosts";
+import AdminQuarantinedAccounts from "./AdminQuarantinedAccounts";
 export default function AdminOrderActions({ data }: { data: Row }) {
   const a = useAction();
   return (
     <>
       <Feedback a={a} />
       {data.cleanup_runs?.some((r: Row) => !r.finished_at) && <p className="p-inline-help">供应商资源正在后台清理，客户结算不受影响；失败会自动退避重试。</p>}
-      {data.quarantined_assets?.length > 0 && <div className="p-alert">有 {data.quarantined_assets.length} 个迟到或归属异常的账号结果已隔离，不会再次扣费或交付。</div>}
+      <AdminQuarantinedAccounts data={data} />
       <AdminCosts cost={data.execution_cost} title="本订单执行成本" />
       <details className="p-order-resource-details" open>
       <summary>逐账号资源消耗与失败情况</summary>

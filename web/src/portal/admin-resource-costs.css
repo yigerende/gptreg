@@ -29,5 +29,10 @@
 .p-resource-reasons code { display: block; font-size: 10px; color: var(--p-muted, #78867f); }
 .p-order-resource-details > summary { cursor: pointer; margin: 16px 0; font-weight: 600; }
 .p-order-resource-details .p-table-wrap { max-height: 65vh; overflow: auto; }
+.p-quarantine-notice { display: block; min-width: 0; color: var(--p-text, #25352f); }
+.p-quarantine-notice > p { margin: 0 0 8px; line-height: 1.6; }
+.p-quarantine-notice > .p-fine { color: var(--p-muted, #78867f); }
+.p-quarantine-notice .p-order-resource-details > summary { margin: 10px 0 0; }
+.p-quarantine-notice .p-order-resource-details[open] > summary { margin-bottom: 12px; }
 .p-cost-grid > div { min-width: 0; }
 @media (max-width: 640px) { .p-cost-grid { grid-template-columns: 1fr; } }
