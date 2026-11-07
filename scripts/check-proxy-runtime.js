@@ -1,6 +1,6 @@
 'use strict';
 // Run against an empty, isolated tmpfs, with the image root mounted read-only:
-// docker run --rm --read-only --network none --tmpfs /app/.runtime:rw,size=16m
+// docker run --rm --read-only --network none --tmpfs /app/.runtime:rw,size=16m,uid=1000,gid=1000,mode=0700
 //   -e GPTREG_RUNTIME_SMOKE_TEST=1 --entrypoint node IMAGE scripts/check-proxy-runtime.js
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

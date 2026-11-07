@@ -49,7 +49,7 @@ docker compose -p gptreg -f compose.yml up -d --no-deps --no-build --force-recre
 代理使用与冷却记录保存在配置文件同级的 `proxy-usage.json`，正式环境即 `.runtime/proxy-usage.json`，随 `.runtime` 一起备份。不要为记录写入开放应用根目录的写权限。预构建后须用空的临时运行目录验证只读容器中的占用、释放和重启恢复（不会请求外部服务）：
 
 ```bash
-docker run --rm --read-only --network none --tmpfs /app/.runtime:rw,size=16m -e GPTREG_RUNTIME_SMOKE_TEST=1 --entrypoint node gptreg:<提交版本> scripts/check-proxy-runtime.js
+docker run --rm --read-only --network none --tmpfs /app/.runtime:rw,size=16m,uid=1000,gid=1000,mode=0700 -e GPTREG_RUNTIME_SMOKE_TEST=1 --entrypoint node gptreg:<提交版本> scripts/check-proxy-runtime.js
 ```
 
 此命令不能挂载正式 `.runtime`；检测脚本要求空目录，以免碰到业务配置。
