@@ -139,13 +139,14 @@ test('Missing dashboard IP authorization performs no mutations; API/network fail
 });
 
 test('SOCKS5 uses supplier SOCKS ports and provider saves leave other vendors intact', async t => {
-  const { service } = fixture(t); await pull(service); await service.buildAndPullApi({ provider: '1024proxy', countryCode: 'US', count: 1 });
+  const { service, state } = fixture(t); await pull(service); await service.buildAndPullApi({ provider: '1024proxy', countryCode: 'US', count: 1 });
   const other = service.readCatalog().countryPools.US.sources[0];
   service.saveProviderSettings({ provider: 'iproyal', count: 1, protocol: 'socks5', sessionMinutes: 10 });
   await service.settingsRefreshFlight;
   assert.equal(service.settingsRefresh.status, 'success');
   assert.match(service.readCatalog().countryPools.JP.sources[0].entries[0].url, /^socks5:\/\/proxy\.iproyal\.com:32325/);
   assert.deepEqual(service.readCatalog().countryPools.US.sources[0], other);
+  assert.deepEqual(state.rows.map(row => row.port), [12321, 32325]);
 });
 
 test('An uncertain upstream update removes that endpoint from allocation until reconciliation', async t => {
@@ -327,4 +328,51 @@ test('Delete routes await upstream completion and return 409/502 without falsely
   const response = await app.inject({ method: 'DELETE', url: '/api/v1/proxies/dynamic', payload: { countryCode: 'JP', sourceId: source.id } });
   assert.equal(response.statusCode, 200); assert.deepEqual(response.json().dynamic.countryPools, []);
   assert.deepEqual(state.rows.map(r => r.hash), ['manual']);
+});
+
+
+test('Saving protocol changes retains active/cooling old bindings and later refresh releases them', async t => {
+  const { service, state } = fixture(t); await pull(service);
+  const entries = service.readCatalog().countryPools.JP.sources[0].entries;
+  service.claims.set(entries[0].id, 'active-run');
+  service.usage.begin({ ...entries[1], sessionMinutes: 10 }); service.usage.release(entries[1].id);
+  const old = state.rows.filter(row => row.hash !== 'manual').map(row => ({ ...row }));
+  service.saveProviderSettings({ provider: 'iproyal', count: 1, protocol: 'socks5', sessionMinutes: 20 });
+  await service.settingsRefreshFlight;
+  let source = service.readCatalog().countryPools.JP.sources[0];
+  assert.equal(source.entries.length, 1); assert.equal(source.lastPulledSettings.protocol, 'socks5');
+  assert.match(source.lastNotice, /2 个旧协议/); assert.equal(state.rows.length, 4);
+  assert.deepEqual(state.rows.filter(row => old.some(o => o.hash === row.hash)), old);
+  assert.equal(service.claims.get(entries[0].id), 'active-run');
+  service.claims.delete(entries[0].id); service.usage.now = () => Date.now() + 11 * 60000;
+  await service.pull(source.id);
+  source = service.readCatalog().countryPools.JP.sources[0];
+  assert.equal(source.lastNotice, ''); assert.deepEqual(state.rows.map(row => row.port), [12321, 32325]);
+  assert.equal(service.claims.size, 0);
+});
+
+test('Failed protocol replacement keeps old whitelist bindings; successful retry cleans only owned old ones', async t => {
+  const { service, state } = fixture(t); await pull(service);
+  const before = JSON.stringify(state.rows);
+  state.failAfter = state.mutationCount;
+  service.saveProviderSettings({ provider: 'iproyal', count: 1, protocol: 'socks5', sessionMinutes: 10 });
+  await service.settingsRefreshFlight;
+  assert.equal(service.settingsRefresh.status, 'failed'); assert.equal(JSON.stringify(state.rows), before);
+  state.failAfter = Infinity;
+  await service.pull(service.readCatalog().countryPools.JP.sources[0].id);
+  assert.deepEqual(state.rows.map(row => row.port), [12321, 32325]);
+});
+
+
+test('Saving fewer entries explicitly reports retained occupied excess ports then releases them on refresh', async t => {
+  const { service, state } = fixture(t); await pull(service, { count: 3 });
+  const entries = service.readCatalog().countryPools.JP.sources[0].entries;
+  service.claims.set(entries[2].id, 'active-run');
+  service.saveProviderSettings({ provider: 'iproyal', count: 1, protocol: 'http', sessionMinutes: 10 });
+  await service.settingsRefreshFlight;
+  const source = service.readCatalog().countryPools.JP.sources[0];
+  assert.equal(source.entries.length, 1); assert.match(source.lastNotice, /1 个超出目标数量/);
+  assert.equal(state.rows.length, 3); assert.equal(service.claims.get(entries[2].id), 'active-run');
+  service.claims.delete(entries[2].id); await service.pull(source.id);
+  assert.equal(state.rows.length, 2); assert.equal(service.readCatalog().countryPools.JP.sources[0].lastNotice, '');
 });
