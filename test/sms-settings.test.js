@@ -90,3 +90,85 @@ test('SMSBower catalog failures preserve an error and failed quotes never show z
   const quote = (await app.inject({ method: 'POST', url: '/api/v1/sms/settings/smsbower/quotes', payload })).json().market.countries[0];
   assert.equal(quote.issue, 'AUTH_FAILED'); assert.equal(quote.inventory, null); assert.equal(quote.affordableInventory, null);
 });
+
+for (const provider of ['smsbower', 'hero-sms', 'firefox']) {
+  test(`${provider} saves its own configuration without switching or making supplier requests`, async t => {
+    const { app, file, calls } = fixture(t);
+    const raw = JSON.parse(fs.readFileSync(file));
+    raw.sms.provider = provider === 'smsbower' ? 'hero-sms' : 'smsbower';
+    raw.sms.hero = { apiKey: 'original-hero', countries: [{ id: '6' }], maxPrice: .4 };
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const payload = { activate: false, apiKey: 'new-vendor-key', maxPrice: .04, countries: provider === 'firefox' ? [{ code: 'usa' }] : [{ id: '4' }] };
+    const response = await app.inject({ method: 'PUT', url: `/api/v1/sms/settings/${provider}`, payload });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.body.includes('new-vendor-key'), false);
+    const saved = JSON.parse(fs.readFileSync(file));
+    assert.equal(saved.sms.provider, raw.sms.provider);
+    assert.deepEqual(saved.mail, raw.mail);
+    const view = (await app.inject(`/api/v1/sms/settings/${provider}`)).json();
+    assert.equal(view.active, false); assert.equal(view.apiKeyConfigured, true); assert.equal(view.maxPrice, .04);
+    assert.equal(calls.length, 0);
+    const invalid = await app.inject({ method: 'PUT', url: `/api/v1/sms/settings/${provider}`, payload: { ...payload, activate: 'false' } });
+    assert.equal(invalid.statusCode, 400);
+  });
+}
+
+for (const provider of ['smsbower', 'hero-sms']) {
+  test(`${provider} quotes unselected countries in bounded batches and preserves individual failures`, async t => {
+    const actions = []; let inFlight = 0, peak = 0;
+    const { app, file } = fixture(t, { smsSettingsFetch: async url => {
+      const q = new URL(url).searchParams, action = q.get('action'); actions.push(action);
+      if (action === 'getCountries') return new Response(JSON.stringify(Array.from({ length: 8 }, (_, i) => ({ id: String(i + 1), eng: `Country${i + 1}` }))));
+      if (action === 'getBalance') return new Response('ACCESS_BALANCE:12');
+      assert.equal(action, provider === 'smsbower' ? 'getPricesV3' : 'getPrices');
+      inFlight++; peak = Math.max(peak, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 5)); inFlight--;
+      const country = q.get('country');
+      if (country === '7') return new Response('BAD_KEY');
+      return new Response(JSON.stringify({ [country]: { dr: { cost: Number(country) / 100, count: country === '8' ? 0 : 10 } } }));
+    } });
+    const before = fs.readFileSync(file, 'utf8');
+    const payload = { apiKey: 'draft-key', countries: [{ id: '1' }], maxPrice: .05 };
+    let response = await app.inject({ method: 'POST', url: `/api/v1/sms/settings/${provider}/countries`, payload });
+    assert.equal(response.json().countries.length, 8);
+    response = await app.inject({ method: 'POST', url: `/api/v1/sms/settings/${provider}/test`, payload: { ...payload, skipQuotes: true } });
+    assert.equal(response.json().balance, 12); assert.equal(response.json().market, null);
+    assert.equal(actions.some(a => a.startsWith('getPrices')), false);
+    response = await app.inject({ method: 'POST', url: `/api/v1/sms/settings/${provider}/quotes`, payload: { ...payload, countries: response.json().countries } });
+    assert.equal(response.statusCode, 200, response.body);
+    const rows = response.json().market.countries;
+    assert.equal(rows.length, 8); assert.equal(rows[1].cheapestPrice, .02);
+    assert.equal(rows[5].issue, 'SMS_PRICE_ABOVE_MAX'); assert.equal(rows[5].affordableInventory, 0);
+    assert.equal(rows[6].issue, 'AUTH_FAILED'); assert.equal(rows[6].inventory, null);
+    assert.equal(rows[7].issue, 'SMS_INVENTORY_EMPTY'); assert.equal(rows[7].inventory, 0);
+    assert.ok(peak > 1 && peak <= 4); assert.equal(response.body.includes('draft-key'), false);
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+    response = await app.inject({ method: 'POST', url: `/api/v1/sms/settings/${provider}/quotes`, payload: { ...payload, countries: Array.from({ length: 9 }, (_, i) => ({ id: String(i) })) } });
+    assert.equal(response.statusCode, 400);
+  });
+}
+
+test('Firefox refreshes all public country prices in CNY without inventing inventory or changing selections', async t => {
+  const { app, file } = fixture(t, { smsSettingsFetch: async url => {
+    const action = new URL(url).searchParams.get('act');
+    if (action === 'myInfo') return new Response('1|2.50|normal|0');
+    assert.equal(action, 'getItem', 'read-only catalog operations');
+    return new Response(JSON.stringify([
+      { Item_ID: '1096', Item_UPrice: '.65', Country_ID: 'usa', Country_Title: '+1/美国/usa' },
+      { Item_ID: '1096', Item_UPrice: '.25', Country_ID: 'chl', Country_Title: '+56/智利/chile' },
+    ]));
+  } });
+  const before = fs.readFileSync(file, 'utf8');
+  const payload = { apiKey: 'firefox-catalog-key', countries: [{ code: 'usa' }], maxPrice: .5 };
+  assert.equal((await app.inject('/api/v1/sms/settings/firefox')).json().service, '1096');
+  let response = await app.inject({ method: 'POST', url: '/api/v1/sms/settings/firefox/countries', payload });
+  assert.equal(response.json().countries.length, 2);
+  response = await app.inject({ method: 'POST', url: '/api/v1/sms/settings/firefox/quotes', payload: { ...payload, countries: response.json().countries } });
+  assert.equal(response.json().currency, 'CNY');
+  const rows = response.json().market.countries;
+  assert.equal(rows.find(c => c.id === 'chl').cheapestPrice, .25);
+  assert.ok(rows.every(c => c.inventory === null && c.publicQuote));
+  response = await app.inject({ method: 'POST', url: '/api/v1/sms/settings/firefox/test', payload });
+  assert.equal(response.json().market.countries[0].cheapestPrice, .65);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+});

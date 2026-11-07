@@ -20,7 +20,7 @@ class SmsSettingsService {
     const v = this.saved(provider);
     return {
       provider, active: (this.configService.readRaw().sms?.provider || 'smsbower') === provider,
-      baseUrl: v.baseUrl || '', service: String(v.service?.code || v.service || (provider === 'firefox' ? '1096' : 'dr')),
+      baseUrl: v.baseUrl || '', service: provider === 'firefox' ? '1096' : String(v.service?.code || v.service || 'dr'),
       countries: provider === 'firefox' ? v.firefox?.countries || [] : v.countries || [],
       maxPrice: v.maxPrice ?? null, codeTimeoutMs: v.codeTimeoutMs || 120000,
       apiKeyConfigured: Boolean(v.apiKey || (v.apiKeyEnv && process.env[v.apiKeyEnv])), currency: provider === 'firefox' ? 'CNY' : 'USD',
@@ -52,38 +52,65 @@ class SmsSettingsService {
     return { ...value, provider, fetch: this.fetch, preflightAttempts: 1, requestTimeoutMs: 10000 };
   }
   save(provider, input) {
+    if (input.activate !== undefined && typeof input.activate !== 'boolean') throw new HttpError(400, '切换厂商参数无效');
     const v = this.settings(provider, input, true);
     const publicFields = Object.fromEntries(['baseUrl', 'service', 'countries', 'country', 'maxPrice', 'codeTimeoutMs'].map((k) => [k, v[k]]).filter(([, x]) => x !== undefined));
     const key = String(input.apiKey || '').trim();
-    const sms = { provider };
+    const sms = input.activate === false ? {} : { provider };
     if (provider === 'hero-sms') sms.hero = publicFields;
     else if (provider === 'firefox') sms.firefox = publicFields;
     else Object.assign(sms, publicFields);
     return this.configService.update({ config: { sms }, secretPatch: key ? { [provider === 'hero-sms' ? 'heroSmsApiKey' : provider === 'firefox' ? 'firefoxToken' : 'smsApiKey']: key } : {} });
   }
   async countries(provider, input = {}) {
-    if (provider !== 'smsbower') throw new HttpError(400, '此国家刷新接口仅用于 SMSBower');
     const client = createSmsProvider(this.settings(provider, input));
     try {
-      const countries = await client.getCountries();
+      const countries = provider === 'firefox' ? await client.listCountriesForConfig() : await client.getCountries();
       if (!countries.length) throw new Error('Empty country catalog');
       return { ok: true, provider, countries, message: `已刷新 ${countries.length} 个国家，原有勾选保持不变。` };
     } catch (error) { return { ok: false, provider, ...smsFailure(error) }; }
   }
   async quotes(provider, input = {}) {
-    if (provider !== 'smsbower') throw new HttpError(400, '此报价接口仅用于 SMSBower');
     const config = this.settings(provider, input);
-    if (config.countries.length !== 1 || !/^\d+$/.test(String(config.countries[0]?.id ?? '')))
-      throw new HttpError(400, '请选择一个有效国家查询报价');
-    const client = createSmsProvider(config), country = { id: String(config.countries[0].id) };
-    let prices = [], issue = '';
-    try {
-      prices = (await client.getPrices({ country: country.id, service: client.service }))
-        .filter(p => (p.country == null || String(p.country) === country.id) && (p.service == null || String(p.service) === client.service));
-    } catch (error) { issue = smsFailure(error).code; }
-    const market = summarizeSmsPreflight({ countries: [{ country, prices, issue }] }, config);
+    const selectors = config.countries;
+    const firefox = provider === 'firefox';
+    const validId = firefox ? /^[a-z]{3}$/ : /^\d+$/;
+    if (!Array.isArray(selectors) || !selectors.length || selectors.length > (firefox ? 500 : 8)
+      || selectors.some(c => !validId.test(String(firefox ? c?.code : c?.id))))
+      throw new HttpError(400, firefox ? '请选择1～500个有效国家查询报价' : '每批请选择1～8个有效国家查询报价');
+    const client = createSmsProvider(config);
+    let market;
+    if (firefox) {
+      // The public catalog has prices but no live inventory. Never fabricate stock.
+      let catalog = [], issue = '';
+      try { catalog = await client.listCountriesForConfig(); }
+      catch (error) { issue = smsFailure(error).code; }
+      const byCode = new Map(catalog.map(c => [c.code, c]));
+      market = { countries: selectors.map(country => {
+        const entry = byCode.get(country.code);
+        return { id: country.code, country, cheapestPrice: entry?.price ?? null, inventory: null, affordableInventory: null,
+          publicQuote: true, issue: issue || (entry ? '' : 'SMS_INVENTORY_EMPTY') };
+      }) };
+    } else {
+      const rows = new Array(selectors.length);
+      let next = 0;
+      // Bound both per-request work and supplier concurrency. The UI sends batches.
+      await Promise.all(Array.from({ length: Math.min(4, selectors.length) }, async () => {
+        while (next < selectors.length) {
+          const index = next++, country = { id: String(selectors[index].id) };
+          let prices = [], issue = '';
+          try {
+            prices = (await client.getPrices({ country: country.id, service: client.service }))
+              .filter(p => (p.country == null || String(p.country) === country.id) && (p.service == null || String(p.service) === client.service));
+          } catch (error) { issue = smsFailure(error).code; }
+          rows[index] = { country, prices, issue };
+        }
+      }));
+      market = summarizeSmsPreflight({ countries: rows }, config);
+    }
     for (const row of market.countries) row.message = row.issue ? '请检查国家报价或接口配置' : '';
-    return { ok: true, provider, currency: 'USD', market, message: issue ? '报价查询失败，请重试' : '已查询所选国家报价与库存' };
+    const failed = market.countries.some(c => c.issue && !['SMS_PRICE_ABOVE_MAX', 'SMS_INVENTORY_EMPTY'].includes(c.issue));
+    return { ok: true, provider, currency: firefox ? 'CNY' : 'USD', market, message: failed ? '部分报价查询失败，请重试' : '已查询国家报价' };
   }
   async test(provider, input = {}) {
     const config = this.settings(provider, input);
@@ -92,12 +119,14 @@ class SmsSettingsService {
     const client = createSmsProvider(config);
     const started = Date.now();
     try {
-      const balance = await client.getBalance();
+      const balance = await client.getBalance({ fresh: true });
       const countries = provider === 'firefox' ? await client.listCountriesForConfig() : await client.getCountries();
       let market = null;
       let marketError = null;
-      if (config.countries?.length || provider === 'firefox') {
-        try { market = summarizeSmsPreflight(await client.preflight({ checkBalance: false }), config); }
+      if (input.skipQuotes !== true && (config.countries?.length || provider === 'firefox')) {
+        try { market = provider === 'firefox'
+          ? (await this.quotes(provider, { ...input, countries: config.countries?.length ? config.countries : countries })).market
+          : summarizeSmsPreflight(await client.preflight({ checkBalance: false }), config); }
         catch (error) { marketError = smsFailure(error); }
       }
       if (market) {
