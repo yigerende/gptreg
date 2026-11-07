@@ -1391,6 +1391,42 @@ describe('console shell', () => {
     rendered.unmount(); client.clear();
   });
 
+  it('explains IPRoyal port release, shows deleting state and retains failed sources for retry', async () => {
+    window.history.replaceState(null, '', '/proxies');
+    let deleted = false, pending = false;
+    let finish: (response: Response) => void = () => {};
+    const requests: any[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/v1/proxies/dynamic' && init?.method === 'DELETE') {
+        requests.push(JSON.parse(String(init.body)));
+        if (requests.length === 1) return new Promise<Response>(resolve => { finish = resolve; });
+        deleted = true;
+      }
+      let payload: any = payloads[url.pathname] || {};
+      if (url.pathname === '/api/v1/proxies') payload = { ...payload, dynamic: { total: pending ? 0 : 2, countryPools: deleted ? [] : [{ countryCode: 'JP', total: pending ? 0 : 2, manualCount: 0, protocols: {}, entries: [], sources: [{ id: 'jp-source', provider: 'iproyal', protocol: 'http', count: 2, sessionMinutes: 10, url: 'https://resi-api.iproyal.com/v1', entries: [], cachedCount: pending ? 0 : 2, deletionPending: pending, lastError: pending ? '删除未完成，已暂停分配，请再次点击删除' : '' }] }] } };
+      return new Response(JSON.stringify(payload));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const rendered = render(<QueryClientProvider client={client}><Tooltip.Provider><Router><App /></Router></Tooltip.Provider></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: '删除 API 来源' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/同时释放它在 IPRoyal 的白名单端口/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: '删除' }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(screen.getByRole('button', { name: '删除 API 来源' })).toBeDisabled();
+    pending = true;
+    await act(async () => finish(new Response(JSON.stringify({ message: 'IPRoyal 连接失败，请重试删除' }), { status: 502 })));
+    await waitFor(() => expect(screen.getByRole('button', { name: '删除 API 来源' })).toBeEnabled());
+    expect(await screen.findByText(/删除完成前不会重新拉取/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '拉取' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '删除 API 来源' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '删除' }));
+    expect(await screen.findByText('没有国家代理池')).toBeInTheDocument();
+    expect(requests).toEqual([{ countryCode: 'JP', sourceId: 'jp-source' }, { countryCode: 'JP', sourceId: 'jp-source' }]);
+    rendered.unmount(); client.clear();
+  });
+
   it('submits IPRoyal whitelist IP without proxy credentials and excludes its fields for other providers', async () => {
     window.history.replaceState(null, '', '/proxies');
     const builds: any[] = [];

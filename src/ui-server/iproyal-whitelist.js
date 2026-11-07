@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { isIP } = require('node:net');
 const { parseProxyLine, stableProxyId } = require('../proxy-pool');
-const { atomicWriteText } = require('./utils');
+const { atomicWriteText, HttpError } = require('./utils');
 const { IPRoyalError, iproyalHttpError } = require('./iproyal');
 
 function lifetime(minutes) {
@@ -26,20 +26,21 @@ function matches(row, source) {
 class IPRoyalWhitelist {
   constructor(service) { this.service = service; this.file = path.join(service.configService.cwd, '.runtime', 'iproyal-whitelist-owner.json'); }
 
-  owner() {
+  owner(create = true) {
     try {
       const data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       if (!/^[a-f0-9]{32}$/.test(data.owner)) throw new Error('invalid');
       return data.owner;
     } catch (error) {
       if (error.code !== 'ENOENT') throw new IPRoyalError('IPRoyal 白名单管理标识无法读取，请检查运行目录');
+      if (!create) return null;
       const owner = crypto.randomBytes(16).toString('hex');
       atomicWriteText(this.file, JSON.stringify({ owner }) + '\n');
       return owner;
     }
   }
 
-  async pull(source, { signal, timeoutMs }) {
+  async client(source, { signal, timeoutMs }) {
     const service = this.service, credentials = service.iproyal.prepare();
     const base = source.url.replace(/\/+$/, '');
     const api = async (suffix, method = 'GET', body) => {
@@ -48,7 +49,7 @@ class IPRoyalWhitelist {
         method, headers: { Accept: 'application/json', Authorization: `Bearer ${credentials.apiToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}), signal, timeoutMs,
       });
-      if (!response.ok) throw new IPRoyalError(iproyalHttpError(response.status));
+      if (!response.ok && !(method === 'DELETE' && response.status === 404)) throw new IPRoyalError(iproyalHttpError(response.status));
       if (method === 'DELETE') return null;
       let data;
       try { data = JSON.parse(await response.text()); } catch { throw new IPRoyalError('IPRoyal 白名单接口返回的数据无效'); }
@@ -57,13 +58,73 @@ class IPRoyalWhitelist {
     const me = await api('/me');
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(me?.residential_user_hash || '')) throw new IPRoyalError('IPRoyal 未返回住宅代理账户');
     const route = `/residential-users/${me.residential_user_hash}/whitelist-entries`;
-    const rows = [];
-    for (let page = 1; page <= 100; page++) {
-      const data = await api(`${route}?page=${page}&per_page=100`);
-      if (!Array.isArray(data?.data) || !Number.isInteger(data.meta?.last_page) || data.meta.last_page > 100) throw new IPRoyalError('IPRoyal 白名单分页数据无效');
-      rows.push(...data.data);
-      if (page >= data.meta.last_page) break;
+    const list = async () => {
+      const rows = [];
+      for (let page = 1; page <= 100; page++) {
+        const data = await api(`${route}?page=${page}&per_page=100`);
+        if (!Array.isArray(data?.data) || !Number.isInteger(data.meta?.last_page) || data.meta.last_page < 1 || data.meta.last_page > 100) throw new IPRoyalError('IPRoyal 白名单分页数据无效');
+        rows.push(...data.data);
+        if (page >= data.meta.last_page) break;
+      }
+      return rows;
+    };
+    return { api, route, list, credentials };
+  }
+
+  // Keep the claims until the caller has persisted the local removal. Discover
+  // ownership by note, including old protocols/IPs and entries lost from cache.
+  async remove(sources, { beforeDelete, commit }) {
+    const service = this.service, owner = this.owner(false);
+    if (!owner) {
+      if (sources.some(s => s.entries.length || s.deletionPending || s.lastPulledAt)) throw new IPRoyalError('IPRoyal 白名单管理标识缺失，无法安全释放端口，请恢复运行目录中的管理标识');
+      return commit();
     }
+    const lockOwner = `iproyal-delete:${crypto.randomUUID()}`, locked = new Set();
+    const reserve = id => {
+      if (locked.has(id)) return;
+      if (service.claims.has(id) || service.usage.get(id).inUse) throw new HttpError(409, 'IPRoyal 代理正在使用，未执行删除；请等待任务结束后重试');
+      service.claims.set(id, lockOwner); locked.add(id);
+    };
+    const controller = new AbortController(), timeoutMs = 90000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      for (const source of sources) for (const entry of source.entries) reserve(entry.id);
+      const groups = new Map();
+      for (const source of sources) {
+        const key = source.url.replace(/\/+$/, '');
+        if (!groups.has(key)) groups.set(key, { source, notes: new Set() });
+        groups.get(key).notes.add(`gptreg:${owner}:${source.id}`);
+      }
+      const plans = [];
+      for (const group of groups.values()) {
+        const client = await this.client(group.source, { signal: controller.signal, timeoutMs });
+        const rows = (await client.list()).filter(row => group.notes.has(row.note));
+        for (const row of rows) {
+          const port = Number(row.port);
+          if (!/^[a-zA-Z0-9_-]{1,128}$/.test(row.hash || '') || !Number.isInteger(port) || port < 1 || port > 65535) throw new IPRoyalError('IPRoyal 白名单条目标识无效');
+          // The same endpoint can be cached under an older protocol setting.
+          for (const protocol of ['http', 'socks5']) reserve(stableProxyId(`${protocol}://proxy.iproyal.com:${port}`));
+        }
+        plans.push({ ...client, rows, notes: group.notes });
+      }
+      // Persist before the first upstream DELETE: a crash or uncertain response
+      // must not leave removed endpoints allocatable or let a timer recreate them.
+      beforeDelete();
+      for (const plan of plans) {
+        for (const row of plan.rows) await plan.api(`${plan.route}/${encodeURIComponent(row.hash)}`, 'DELETE');
+        if ((await plan.list()).some(row => plan.notes.has(row.note))) throw new IPRoyalError('IPRoyal 仍有端口未释放，请重试删除');
+      }
+      return commit();
+    } finally {
+      clearTimeout(timer);
+      for (const id of locked) if (service.claims.get(id) === lockOwner) service.claims.delete(id);
+    }
+  }
+
+  async pull(source, { signal, timeoutMs }) {
+    const service = this.service;
+    const { api, route, list, credentials } = await this.client(source, { signal, timeoutMs });
+    const rows = await list();
     let ip = credentials.whitelistIp;
     if (!ip) {
       // Detect the worker's direct egress; never send the API token to this service.

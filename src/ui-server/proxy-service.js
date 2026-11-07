@@ -329,6 +329,9 @@ class ProxyService {
 
   importDynamic(payload = {}) {
     if (this.catalogBusy) throw new HttpError(409, 'A dynamic proxy source is currently being refreshed');
+    if (payload.mode === 'replace' && Object.values(this.catalogSnapshot().countryPools).some(pool => pool.sources.some(source => source.provider === 'iproyal'))) {
+      throw new HttpError(409, '请先删除已有 IPRoyal 来源并释放白名单端口，再替换国家池');
+    }
     const incoming = parseDynamicContent(payload.content, {
       providerSettings: this.catalogSnapshot().providerSettings,
       defaultProtocol: payload.defaultProtocol,
@@ -497,8 +500,11 @@ class ProxyService {
     const scope = typeof payload === 'string' ? payload : payload.scope || 'local';
     if (scope === 'dynamic') {
       if (this.catalogBusy) throw new HttpError(409, 'A dynamic proxy source is currently being refreshed');
-      this.writeCatalog({ ...emptyProxyCatalog(), providerSettings: clone(this.catalogSnapshot().providerSettings) });
-      return this.list();
+      const catalog = this.readCatalog();
+      return this.deleteDynamicSources(catalog, Object.values(catalog.countryPools).flatMap(pool => pool.sources), () => {
+        this.writeCatalog({ ...emptyProxyCatalog(), providerSettings: catalog.providerSettings });
+        return this.list();
+      });
     }
     atomicWriteText(this.configService.proxyFilePath(), '# Local proxy pool intentionally empty.\n');
     this.checks.clear();
@@ -511,12 +517,48 @@ class ProxyService {
     const countryCode = String(payload.countryCode || '').toUpperCase();
     const pool = catalog.countryPools[countryCode];
     if (!pool) return this.list();
-    if (payload.sourceId) pool.sources = pool.sources.filter((source) => source.id !== payload.sourceId);
-    if (payload.entryId) pool.manualEntries = pool.manualEntries.filter((entry) => entry.id !== payload.entryId);
-    if (!payload.sourceId && !payload.entryId) delete catalog.countryPools[countryCode];
-    else if (!pool.sources.length && !pool.manualEntries.length) delete catalog.countryPools[countryCode];
-    this.writeCatalog(catalog);
-    return this.list();
+    const sources = payload.sourceId ? pool.sources.filter(source => source.id === payload.sourceId) : payload.entryId ? [] : pool.sources;
+    return this.deleteDynamicSources(catalog, sources, () => {
+      if (payload.sourceId) {
+        pool.sources = pool.sources.filter((source) => source.id !== payload.sourceId);
+        pool.retiredEntries = (pool.retiredEntries || []).filter(entry => entry.sourceId !== payload.sourceId);
+      }
+      if (payload.entryId) pool.manualEntries = pool.manualEntries.filter((entry) => entry.id !== payload.entryId);
+      if (!payload.sourceId && !payload.entryId) delete catalog.countryPools[countryCode];
+      else if (!pool.sources.length && !pool.manualEntries.length) delete catalog.countryPools[countryCode];
+      this.writeCatalog(catalog);
+      return this.list();
+    });
+  }
+
+  deleteDynamicSources(catalog, sources, commit) {
+    const managed = sources.filter(source => source.provider === 'iproyal');
+    if (!managed.length) return commit();
+    this.catalogBusy = true;
+    const ids = new Set(managed.map(source => source.id));
+    return this.iproyalWhitelist.remove(managed, {
+      beforeDelete: () => {
+        for (const source of managed) {
+          source.deletionPending = true;
+          source.entries = [];
+          source.lastPullCount = 0;
+          source.lastNotice = '';
+          source.lastError = 'IPRoyal 白名单正在删除，已暂停分配；若未完成请再次点击删除';
+        }
+        for (const pool of Object.values(catalog.countryPools)) pool.retiredEntries = (pool.retiredEntries || []).filter(entry => !ids.has(entry.sourceId));
+        this.writeCatalog(catalog);
+      },
+      commit,
+    }).catch(error => {
+      const message = error instanceof IPRoyalError || error instanceof HttpError ? error.message
+        : error.name === 'AbortError' ? 'IPRoyal 删除超时，请重试' : 'IPRoyal 连接失败，请检查网络或供应商状态后重试删除';
+      for (const source of managed) if (source.deletionPending) source.lastError = `删除未完成，已暂停分配，请再次点击删除：${message}`;
+      this.writeCatalog(catalog);
+      throw new HttpError(error instanceof HttpError ? error.statusCode : 502, message);
+    }).finally(() => {
+      this.catalogBusy = false;
+      this._flushPendingRetirements();
+    });
   }
 
   /**
@@ -528,6 +570,9 @@ class ProxyService {
    * a batch has to keep going and report at the end.
    */
   async pullInto(found, options = {}) {
+    if (found.source.deletionPending) {
+      return { ok: false, countryCode: found.pool.countryCode, sourceId: found.source.id, pulled: 0, error: 'IPRoyal 来源正在等待删除，请再次点击删除释放端口；不会重新拉取' };
+    }
     const controller = new AbortController();
     const timeoutMs = Math.max(1000, Number(options.timeoutMs || (found.source.provider === 'iproyal' ? 90000 : 20000)));
     const timer = setTimeout(() => controller.abort(), timeoutMs);

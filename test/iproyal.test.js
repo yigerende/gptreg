@@ -174,3 +174,157 @@ test('All whitelist pages are read before reserving ports and unrelated IPs are 
   assert.ok(state.calls.some(c => c.url.includes('page=2&')));
   assert.equal(state.rows[0].hash, 'manual'); assert.equal(state.rows.length, 3);
 });
+
+
+test('Deleting a source frees only its owned ports, including old protocols and IP settings', async t => {
+  const { service, state } = fixture(t); await pull(service);
+  const jp = service.readCatalog().countryPools.JP.sources[0];
+  await pull(service, { countryCode: 'US', count: 1 });
+  const keep = state.rows.filter(r => !r.note.endsWith(':' + jp.id));
+  state.rows.push({ hash: 'old-socks', ip: '192.0.2.99', port: 51200, note: state.rows[1].note, configuration: '' });
+  state.rows.push({ hash: 'another-project', ip, port: 51201, note: 'gptreg:other-owner:' + jp.id, configuration: '' });
+  keep.push(state.rows.at(-1));
+  await service.removeDynamic({ countryCode: 'JP', sourceId: jp.id });
+  assert.equal(service.readCatalog().countryPools.JP, undefined);
+  assert.deepEqual(state.rows, keep); assert.equal(service.claims.size, 0);
+  // Freed capacity is immediately available to a different country.
+  await pull(service, { countryCode: 'GB', count: 2 });
+  assert.equal(service.readCatalog().countryPools.GB.sources[0].entries.length, 2);
+});
+
+test('Country removal and clear release IPRoyal, retain provider settings and leave other suppliers alone', async t => {
+  const { service, state } = fixture(t);
+  await pull(service, { count: 1 }); await pull(service, { countryCode: 'US', count: 1 });
+  await service.buildAndPullApi({ provider: '1024proxy', countryCode: 'JP', count: 1 });
+  const settings = service.readCatalog().providerSettings;
+  await service.removeDynamic({ countryCode: 'JP' });
+  assert.equal(service.readCatalog().countryPools.JP, undefined);
+  assert.equal(state.rows.length, 2);
+  assert.ok(state.rows[1].configuration.includes('_country-us'));
+  await service.clear({ scope: 'dynamic' });
+  assert.deepEqual(service.readCatalog().countryPools, {});
+  assert.deepEqual(service.readCatalog().providerSettings, settings);
+  assert.deepEqual(state.rows.map(r => r.hash), ['manual']);
+});
+
+test('Claims and active usage block deletion before any supplier mutation; inactive cooldown can be deleted', async t => {
+  const { service, state } = fixture(t); await pull(service);
+  const before = service.readCatalog(), entry = before.countryPools.JP.sources[0].entries[0], mutations = state.mutationCount;
+  service.claims.set(entry.id, 'active-run');
+  await assert.rejects(service.removeDynamic({ countryCode: 'JP' }), e => e.statusCode === 409 && /正在使用/.test(e.message));
+  assert.equal(service.claims.get(entry.id), 'active-run'); assert.deepEqual(service.readCatalog(), before);
+  service.claims.delete(entry.id); service.usage.begin({ ...entry, sessionMinutes: 10 });
+  await assert.rejects(service.clear({ scope: 'dynamic' }), e => e.statusCode === 409);
+  assert.equal(state.mutationCount, mutations); assert.deepEqual(service.readCatalog(), before);
+  service.usage.release(entry.id); assert.ok(service.usage.isCooling(entry.id));
+  await service.removeDynamic({ countryCode: 'JP' });
+  assert.deepEqual(state.rows.map(r => r.hash), ['manual']);
+});
+
+test('An owned port absent from cache is checked for active use before deleting any country', async t => {
+  const { service, state } = fixture(t); await pull(service, { count: 1 });
+  await pull(service, { countryCode: 'US', count: 1 });
+  const catalog = service.readCatalog(), entry = catalog.countryPools.US.sources[0].entries[0];
+  catalog.countryPools.US.sources[0].entries = []; service.writeCatalog(catalog);
+  service.claims.set(entry.id, 'other-task'); const mutations = state.mutationCount;
+  await assert.rejects(service.clear({ scope: 'dynamic' }), e => e.statusCode === 409);
+  assert.equal(state.mutationCount, mutations); assert.equal(state.rows.length, 3);
+  assert.equal(service.claims.size, 1); assert.equal(service.catalogBusy, false);
+});
+
+test('Deletion reserves cached ports during discovery and pauses allocation before upstream DELETE', async t => {
+  const { service, state } = fixture(t); await pull(service);
+  const entries = service.readCatalog().countryPools.JP.sources[0].entries;
+  service.fetch = async (url, init) => {
+    assert.ok(entries.every(e => service.claims.has(e.id)));
+    assert.throws(() => service.importDynamic({ content: 'other.example:8080' }), e => e.statusCode === 409);
+    if (init?.method === 'DELETE') {
+      const source = service.readCatalog().countryPools.JP.sources[0];
+      assert.equal(source.deletionPending, true); assert.equal(source.entries.length, 0);
+      assert.equal(service.list().dynamic.countryPools[0].total, 0);
+    }
+    return state.fetch(url, init);
+  };
+  await service.removeDynamic({ countryCode: 'JP' });
+  assert.equal(service.claims.size, 0); assert.equal(service.catalogBusy, false);
+});
+
+test('Partial or uncertain deletes remain retryable across restart and background refresh cannot recreate ports', async t => {
+  const { service, state, configService } = fixture(t); await pull(service);
+  let once = true;
+  service.fetch = async (url, init) => {
+    const result = await state.fetch(url, init);
+    if (init?.method === 'DELETE' && once) { once = false; throw new Error('lost response ' + token); }
+    return result;
+  };
+  await assert.rejects(service.removeDynamic({ countryCode: 'JP' }), /连接失败/);
+  const pending = service.readCatalog().countryPools.JP.sources[0];
+  assert.equal(pending.deletionPending, true); assert.equal(pending.entries.length, 0);
+  assert.match(pending.lastError, /再次点击删除/); assert.ok(!pending.lastError.includes(token));
+  assert.equal(state.rows.length, 2); assert.equal(service.claims.size, 0);
+  const restarted = new ProxyService(configService, { fetch: state.fetch });
+  t.after(() => restarted.shutdown());
+  const calls = state.calls.length;
+  const result = await restarted.pullAll(); assert.equal(result.refresh.failed, 1);
+  assert.equal(state.calls.length, calls);
+  await restarted.removeDynamic({ countryCode: 'JP' });
+  assert.equal(restarted.readCatalog().countryPools.JP, undefined);
+  assert.deepEqual(state.rows.map(r => r.hash), ['manual']);
+});
+
+test('Discovery failures preserve cache and sanitize errors; missing ownership never deletes unknown entries', async t => {
+  const { service, state } = fixture(t); await pull(service);
+  const before = service.readCatalog(); state.status = 401;
+  await assert.rejects(service.removeDynamic({ countryCode: 'JP' }), /Token 无效/);
+  assert.deepEqual(service.readCatalog(), before); assert.equal(service.claims.size, 0);
+  fs.unlinkSync(service.iproyalWhitelist.file); const calls = state.calls.length;
+  await assert.rejects(service.removeDynamic({ countryCode: 'JP' }), /管理标识缺失/);
+  assert.equal(state.calls.length, calls); assert.deepEqual(service.readCatalog(), before);
+});
+
+test('Deletion reads all pages, accepts already-deleted 404, and checks supplier removal before dropping the source', async t => {
+  const { service, state } = fixture(t); await pull(service);
+  let refuse = true;
+  service.fetch = async (url, init) => {
+    if (init?.method === 'DELETE' && refuse) return { ok: true, status: 204 };
+    const response = await state.fetch(url, init);
+    if (init?.method === 'DELETE') return { ok: false, status: 404 };
+    if (url.includes('/whitelist-entries?')) {
+      const page = Number(new URL(url).searchParams.get('page'));
+      return { ok: true, status: 200, text: async () => JSON.stringify({ data: page === 1 ? state.rows.slice(0, 1) : state.rows.slice(1), meta: { last_page: 2 } }) };
+    }
+    return response;
+  };
+  await assert.rejects(service.removeDynamic({ countryCode: 'JP' }), /仍有端口未释放/);
+  assert.equal(service.readCatalog().countryPools.JP.sources[0].deletionPending, true);
+  refuse = false; await service.removeDynamic({ countryCode: 'JP' });
+  assert.deepEqual(state.rows.map(r => r.hash), ['manual']);
+});
+
+test('Never-pulled IPRoyal source can be removed without credentials or creating an owner file', async t => {
+  const { service, state } = fixture(t);
+  const source = buildProxyApiUrl('iproyal', { countryCode: 'JP' });
+  service.writeCatalog({ countryPools: { JP: { sources: [{ ...source, entries: [] }] } } });
+  fs.unlinkSync(service.iproyal.file);
+  await service.removeDynamic({ countryCode: 'JP' });
+  assert.equal(state.calls.length, 0); assert.equal(fs.existsSync(service.iproyalWhitelist.file), false);
+  assert.deepEqual(service.readCatalog().countryPools, {});
+});
+
+
+test('Delete routes await upstream completion and return 409/502 without falsely removing the pool', async t => {
+  const { service, state, cwd, configService } = fixture(t); await pull(service);
+  const { buildApp } = require('../src/ui-server/app');
+  const app = buildApp({ cwd, configService, proxyService: service, deferBootMaintenance: true, robotService: { start() {}, shutdown: async () => {} } });
+  t.after(() => app.close());
+  const source = service.readCatalog().countryPools.JP.sources[0];
+  service.claims.set(source.entries[0].id, 'task');
+  assert.equal((await app.inject({ method: 'DELETE', url: '/api/v1/proxies/dynamic', payload: { countryCode: 'JP', sourceId: source.id } })).statusCode, 409);
+  service.claims.clear(); state.status = 503;
+  assert.equal((await app.inject({ method: 'DELETE', url: '/api/v1/proxies?scope=dynamic' })).statusCode, 502);
+  assert.equal(service.readCatalog().countryPools.JP.sources.length, 1);
+  state.status = 200;
+  const response = await app.inject({ method: 'DELETE', url: '/api/v1/proxies/dynamic', payload: { countryCode: 'JP', sourceId: source.id } });
+  assert.equal(response.statusCode, 200); assert.deepEqual(response.json().dynamic.countryPools, []);
+  assert.deepEqual(state.rows.map(r => r.hash), ['manual']);
+});

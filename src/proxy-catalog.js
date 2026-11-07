@@ -456,6 +456,7 @@ function normalizeProxyCatalog(input = {}) {
       }
       const previous = sourceIds.has(id) ? sources.find((source) => source.id === id) : null;
       if (previous) {
+        if (rawSource.deletionPending) previous.deletionPending = true;
         // Two records for one source: keep the fresher pull and union the
         // cached proxies rather than dropping whichever came second.
         const merged = new Set(previous.entries.map((entry) => entry.url));
@@ -482,6 +483,7 @@ function normalizeProxyCatalog(input = {}) {
         lastPullCount: Number(rawSource.lastPullCount || entries.length),
         lastError: String(rawSource.lastError || ''),
         lastNotice: String(rawSource.lastNotice || ''),
+        ...(rawSource.deletionPending ? { deletionPending: true } : {}),
         lastPulledSettings: rawSource.lastPulledSettings || null,
       });
     }
@@ -556,7 +558,7 @@ function flattenedPoolEntries(pool) {
   const seen = new Set();
   for (const entry of [
     ...(pool?.manualEntries || []),
-    ...(pool?.sources || []).flatMap((source) => (source.entries || []).map(entry => ({ ...entry,
+    ...(pool?.sources || []).filter(source => !source.deletionPending).flatMap((source) => (source.entries || []).map(entry => ({ ...entry,
       sessionMinutes: source.lastPulledSettings?.sessionMinutes ?? source.sessionMinutes ?? null }))),
   ]) {
     if (seen.has(entry.url)) continue;

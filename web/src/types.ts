@@ -1090,6 +1090,7 @@ export type ProxyApiSource = {
   lastPullCount: number;
   lastError: string;
   lastNotice?: string;
+  deletionPending?: boolean;
 };
 
 export type CountryProxyPool = {
