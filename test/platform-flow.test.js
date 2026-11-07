@@ -335,6 +335,38 @@ function holdExecutions(f) {
   return { live, finish };
 }
 
+test('OAuth cooldown beyond the order deadline refunds immediately; a short cooldown remains eligible', { skip: !connection }, async t => {
+  const f = await fixture(t);
+  for (const minutes of [60, 1]) {
+    const order = await f.create(true); await f.worker.cycle();
+    const item = await f.item(order), asset = f.asset();
+    asset.oauthCooldown = { until: new Date(Date.now() + minutes * 60000).toISOString() };
+    f.states.get(item.run_id).jobs = [{ sessionAssetId: asset.id }];
+    await f.worker.cycle();
+    assert.equal((await f.item(order)).status, minutes === 60 ? 'failed' : 'running');
+    assert.equal((await f.orders.detail(f.user.id, order.id)).released, minutes === 60 ? 100 : 0);
+  }
+  assert.equal((await f.db.one("SELECT count(*)::int n FROM platform_ledger WHERE kind='release'")).n, 1);
+});
+
+test('blocked independent session refunds once without replacing the mailbox or restarting the job', { skip: !connection }, async t => {
+  const f = await fixture(t), order = await f.create(); await f.worker.cycle();
+  const item = await f.item(order);
+  f.states.get(item.run_id).jobs = [{ error: { code: 'SESSION_PROXY_REQUEST_BLOCKED' } }];
+  await f.worker.cycle(); await f.worker.cycle();
+  assert.equal((await f.item(order)).status, 'failed'); assert.equal(f.calls.length, 1);
+  assert.equal((await f.orders.detail(f.user.id, order.id)).released, 50);
+});
+
+test('exhausted OAuth number budget fails without queuing another OAuth attempt', { skip: !connection }, async t => {
+  const f = await fixture(t), order = await f.create(true); await f.worker.cycle();
+  const item = await f.item(order), asset = f.asset();
+  f.states.get(item.run_id).jobs = [{ sessionAssetId: asset.id, error: { code: 'OAUTH_PHONE_REPLACEMENT_BUDGET_EXHAUSTED' } }];
+  await f.worker.cycle(); await f.worker.cycle();
+  assert.equal(f.calls.length,1); assert.equal((await f.item(order)).status,'failed');
+  assert.equal((await f.orders.detail(f.user.id,order.id)).released,100);
+});
+
 test("refund races, stale review and legacy overwritten status never re-charge or re-open a settled item", { skip: !connection }, async t => {
   const f = await fixture(t), o = await f.create();
   await f.worker.cycle();

@@ -4,7 +4,8 @@ function executionProgress(state, item) {
   if (!job) return item.need_oauth ? '正在注册并完成 OAuth 授权' : '正在注册账号';
   const security = job.sessionState?.security || {};
   let text;
-  if (job.phase === 'waiting_security_email_retry') text = `补密码验证码未收到，等待同邮箱重试（${job.securityEmailRetries || 0}）`;
+  if (job.phase === 'waiting_session_proxy_retry') text = `代理连接暂时中断，正在重试原会话（${job.sessionTransportRetries || 0}）`;
+  else if (job.phase === 'waiting_security_email_retry') text = `补密码验证码未收到，等待同邮箱重试（${job.securityEmailRetries || 0}）`;
   else if (job.phase === 'waiting_security_retry' || job.phase === 'resuming_security') text = '账号已创建，正在重试密码／2FA 设置';
   else if (security.passwordStatus === 'waiting_otp') text = '账号已创建，等待补密码邮箱验证码';
   else if (job.sessionState?.step === 'email_otp_sent') text = '等待注册邮箱验证码';

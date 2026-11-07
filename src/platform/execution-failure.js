@@ -35,6 +35,8 @@ const reasons = {
   AUXILIARY_TASK_CAPACITY: ["waiting", "OAuth 执行槽正在被其他任务占用", true],
   SESSION_ASSET_IN_USE: ["waiting", "账号正在被其他任务使用", true],
   OAUTH_ASSET_COOLDOWN: ["waiting", "账号处于 OAuth 冷却期", true],
+  SESSION_PROXY_REQUEST_BLOCKED: ["proxy", "独立会话请求被目标站验证拦截，已停止该账号执行"],
+  SESSION_PROXY_TRANSPORT_FAILED: ["proxy", "独立会话代理连接失败"],
   NO_ELIGIBLE_MAILBOX: ["mail", "邮箱库存不足或没有符合条件的邮箱"],
   MAIL_PREFLIGHT_FAILED: ["mail", "邮箱库存、域名或渠道配置检查未通过"],
   MAIL_STOCK_CHECK_FAILED: ["mail", "邮箱库存接口查询失败"],

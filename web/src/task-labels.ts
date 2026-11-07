@@ -110,6 +110,7 @@ const PHASE_LABELS: Record<string, string> = {
   waiting_proxy_pool: '等待代理池补货',
   waiting_proxy_rotation: '等待换代理',
   waiting_proxy_retry: '代理重试中',
+  waiting_session_proxy_retry: '同会话连接重试中',
   waiting_proxy_continuity: '等待原代理',
   waiting_proxy_abort_cleanup: '代理中止清理',
   waiting_maintenance_proxy: '等待本机转发',

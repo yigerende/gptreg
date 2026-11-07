@@ -3,6 +3,7 @@
 // Public operational metadata only. Credentials, paths and protocol invariants
 // deliberately stay outside this allowlist.
 const retryDefaults = {
+  waiting_session_proxy_retry: { maxRetries: 2, delaysMs: [2000, 5000] },
   waiting_proxy_retry: { maxRetries: 2, delaysMs: [2000, 2000] },
   waiting_transient: { maxRetries: 5, delaysMs: [2000, 5000, 15000, 45000, 120000] },
   waiting_security_retry: { maxRetries: 3, delaysMs: [3000, 10000, 30000] },
@@ -24,7 +25,7 @@ number('短信', 'sms.codeTimeoutMs', '注册短信每轮等待时间（毫秒�
 number('短信', 'sms.oauthCodeTimeoutMs', 'OAuth 短信每号码等待时间（毫秒）', 60000, 1000, 300000, '从号码发送成功开始计时；恢复不重置截止时间，超时后处理旧号码再换号。');
 number('短信', 'sms.pollIntervalMs', '短信查询间隔（毫秒）', 5000, 1000, 60000);
 number('短信', 'sms.sendRetryLimit', '同号码额外重发次数', 1, 0, 3, '仅注册接码；OAuth 不重复发送同号码，避免触发限流。');
-number('短信', 'sms.replacementBudget', '最多换号码次数', 20, 0, 30, '不含首次号码。换号前先核实迟到验证码并完成旧号码处理。');
+number('短信', 'sms.replacementBudget', '最多换号码次数', 4, 0, 30, '不含首次号码。换号前先核实迟到验证码并完成旧号码处理。');
 number('短信', 'sms.inventoryWaitMs', '无库存最多等待时间（毫秒）', 600000, 1000, 86400000);
 number('短信', 'sms.fraudGuardThreshold', '风控连续失败阈值', 5, 1, 20);
 number('短信', 'sms.fraudGuardCooldownMs', '风控冷却时间（毫秒）', 900000, 1000, 86400000);
@@ -34,6 +35,7 @@ number('请求与代理', 'registration.securityRequestTimeoutMs', '密码／2FA
 number('请求与代理', 'proxyPool.healthCheck.timeoutMs', '代理健康检测超时（毫秒）', 8000, 1000, 120000);
 number('请求与代理', 'proxyPool.maxRotationsBeforeBootstrap', '注册前最多轮换代理次数', 2, 1, 20);
 const names = {
+  waiting_session_proxy_retry: '独立会话连接故障重试',
   waiting_proxy_retry: '同代理网络重试', waiting_transient: '临时网络故障',
   waiting_security_retry: '密码／2FA 网络重试', waiting_security_email_retry: '补密码同邮箱收码重试',
   waiting_phone_continuity: '接码过程网络重试', waiting_phone_confirmation: '手机验证结果核对',

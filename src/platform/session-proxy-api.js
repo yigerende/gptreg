@@ -73,7 +73,7 @@ function registerSessionProxy(app, config, allocator) {
     for (const [key, column] of [['source','b.source'], ['status','b.status'], ['country','b.country'], ['order','t.order_id']]) {
       if (query[key]) { args.push(String(query[key])); conditions.push(`${column}=$${args.length}`); }
     }
-    if (query.search) { args.push(`%${String(query.search).slice(0, 100)}%`); conditions.push(`(b.task_item_id ILIKE $${args.length} OR b.run_id ILIKE $${args.length} OR b.final_account_id ILIKE $${args.length} OR t.order_id ILIKE $${args.length} OR EXISTS(SELECT 1 FROM platform_accounts a WHERE a.asset_id=b.final_account_id AND a.email ILIKE $${args.length}))`); }
+    if (query.search) { args.push(`%${String(query.search).slice(0, 100)}%`); conditions.push(`(b.task_item_id ILIKE $${args.length} OR b.detect_result->>'exitIp' ILIKE $${args.length} OR b.run_id ILIKE $${args.length} OR b.final_account_id ILIKE $${args.length} OR t.order_id ILIKE $${args.length} OR EXISTS(SELECT 1 FROM platform_accounts a WHERE a.asset_id=b.final_account_id AND a.email ILIKE $${args.length}))`); }
     for (const [key, op] of [['from', '>='], ['to', '<=']]) if (query[key]) { fail(Number.isFinite(Date.parse(query[key])), '时间无效'); args.push(new Date(query[key]).toISOString()); conditions.push(`b.created_at${op}$${args.length}::timestamptz`); }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const join = 'FROM session_proxy_bindings b JOIN session_proxy_task_items t USING(source,task_item_id) LEFT JOIN session_proxy_sessions s ON s.session_id=b.session_ref';

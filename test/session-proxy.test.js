@@ -77,6 +77,21 @@ test('historical session proxy metadata resolves exact registration ownership an
   assert.equal(detail[0].registrationProxyUrl, held.endpoint);
 });
 
+test('session exit observations persist by exact binding and backfill history without probing or replacing recorded IPs', { skip: !connection }, async t => {
+  const f = await fixture(t), { recordExitIp, backfillExitIps } = require('../src/platform/session-proxy-observations');
+  const first = await f.allocator.acquire({ ...f.request(), runId: 'history-run' });
+  const second = await f.allocator.acquire({ ...f.request(), runId: 'other-run' });
+  await f.allocator.release(first); await f.allocator.release(second);
+  const observation = { resourceKind: 'sessionProxy', bindingId: first.bindingId, exitIp: '192.0.2.40', exitIpCheckedAt: '2026-11-07T08:00:00Z' };
+  const cursor = await backfillExitIps(f.allocator, { load: runId => ({ runId, jobs: [{ registrationProxy: observation }] }) });
+  assert.equal(String(cursor), String(second.bindingId));
+  assert.equal((await f.db.one('SELECT detect_result FROM session_proxy_bindings WHERE id=$1', [first.bindingId])).detect_result.exitIp, '192.0.2.40');
+  assert.equal((await f.db.one('SELECT detect_result FROM session_proxy_bindings WHERE id=$1', [second.bindingId])).detect_result.exitIp, undefined);
+  await recordExitIp(f.allocator, first.bindingId, { ...observation, exitIp: '192.0.2.99' });
+  assert.equal((await f.db.one('SELECT detect_result FROM session_proxy_bindings WHERE id=$1', [first.bindingId])).detect_result.exitIp, '192.0.2.40');
+  assert.equal(await recordExitIp(f.allocator, second.bindingId, { exitIp: 'not-an-ip' }), false);
+});
+
 test('supplier adapter sends official HTTP/SOCKS5 and auth fields and never echoes supplier secrets', async () => {
   const { SessionProxyGenerator } = require('../src/ui-server/session-proxy-generator');
   for (const protocol of ['http', 'socks5']) for (const authType of ['credentials', 'subuser']) {
@@ -183,6 +198,31 @@ test('engine batch binds a different session per account and releases all capaci
   assert.ok(checkpoints.every(s => !s.includes('test-password')));
   assert.equal((await f.config.public()).occupied, 0);
   assert.equal((await f.db.one('SELECT count(*)::int AS n FROM session_proxy_bindings WHERE final_account_id IS NOT NULL')).n, 2);
+});
+
+test('session challenge failure ends safely instead of entering the legacy pool rotation loop', { skip: !connection, timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  const batch = await engineBatch(t, f, { count: 1, workers: 1, onRegister: async () => {
+    throw Object.assign(new Error('synthetic challenge'), { code: 'CLOUDFLARE_CHALLENGE', cloudflareChallenge: true });
+  } });
+  await batch.done;
+  assert.equal(batch.seen.length, 1);
+  assert.equal(batch.state.jobs[0].error.code, 'SESSION_PROXY_REQUEST_BLOCKED');
+  assert.ok(['failed', 'skipped'].includes(batch.state.jobs[0].status));
+  assert.equal((await f.config.public()).occupied, 0);
+  assert.ok(!batch.state.events.some(e => e.type === 'worker_proxy_swapped_before_registration'));
+});
+
+test('independent connection errors retry twice on the same session and then release capacity', { skip: !connection, timeout: 20000 }, async t => {
+  const f = await fixture(t);
+  const batch = await engineBatch(t, f, { count: 1, workers: 1, onRegister: async () => {
+    throw Object.assign(new Error('synthetic timeout'), { code: 'ETIMEDOUT' });
+  } });
+  await batch.done;
+  assert.equal(batch.seen.length, 3);
+  assert.equal(new Set(batch.seen).size, 1);
+  assert.equal(batch.state.jobs[0].error.code, 'SESSION_PROXY_TRANSPORT_FAILED');
+  assert.equal((await f.config.public()).occupied, 0);
 });
 
 test('cancellation and revocation fence slow generation; retries cannot steal an asset', { skip: !connection }, async t => {
@@ -312,6 +352,14 @@ test('admin routes enforce auth and pagination; concurrent order replay survives
     assert.equal((await f.db.one("SELECT count(*)::int n FROM session_proxy_regions WHERE name LIKE 'Selection%' AND enabled")).n, 201);
     assert.equal((await req(base + '/regions/batch', admin, 'POST', { codes: selection.codes, enabled: false, expected_revision: selection.revision })).statusCode, 409);
     assert.equal((await req(base + '/regions?search=Selection&limit=25&offset=25', admin)).json().items.length, 25);
+    await f.config.save({ expected_revision: (await f.config.public()).revision, enabled: true });
+    const held = await f.allocator.acquire(f.request());
+    await require('../src/platform/session-proxy-observations').recordExitIp(f.allocator, held.bindingId, { exitIp: '192.0.2.77', exitIpCheckedAt: '2026-11-07T08:00:00Z' });
+    const observed = await req(base + '/sessions?search=192.0.2.77', admin);
+    assert.equal(observed.statusCode, 200); assert.equal(observed.json().total, 1);
+    assert.equal(observed.json().items[0].detect_result.exitIp, '192.0.2.77');
+    assert.ok(!observed.body.includes('test-password'));
+    await f.allocator.release(held);
 
   } finally { await app.close(); }
 });

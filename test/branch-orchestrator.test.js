@@ -7652,9 +7652,9 @@ test('a number rejected as spent is swapped for a fresh one instead of parking t
   assert.match(String(replacement?.message || ''), /phone_max_usage_exceeded/);
 });
 
-test('the 21st OAuth phone failure cools down the source login-state asset', async (t) => {
+for (const phoneLimit of [5, 21]) test(`OAuth stops after exactly ${phoneLimit} failed numbers and cools the asset`, async (t) => {
   const config = branchConfig(1);
-  config.sms.replacementBudget = 20;
+  config.sms.replacementBudget = phoneLimit - 1;
   const store = temporaryStore(t);
   const seed = makeInitialChatGptSessionState({ email: 'oauth-phone-budget-exhausted@example.test' });
   const asset = store.upsert({
@@ -7711,16 +7711,16 @@ test('the 21st OAuth phone failure cools down the source login-state asset', asy
   const stored = store.get(asset.id);
   assert.equal(state.status, 'failed');
   assert.equal(job.status, 'failed');
-  assert.equal(job.sms.replacements, 21);
-  assert.equal(acquireCalls, 21);
-  assert.equal(sendCalls, 21);
+  assert.equal(job.sms.replacements, phoneLimit);
+  assert.equal(acquireCalls, phoneLimit);
+  assert.equal(sendCalls, phoneLimit);
   assert.equal(job.error.code, 'OAUTH_PHONE_REPLACEMENT_BUDGET_EXHAUSTED');
   assert.match(job.error.message, /OAuth phone attempt budget exhausted/);
   assert.equal(job.error.causeCode, 'PHONE_MAX_USAGE_EXCEEDED');
   assert.match(job.error.causeMessage, /phone_max_usage_exceeded/);
-  assert.equal(job.error.phoneAttempts, 21);
-  assert.equal(job.error.phoneReplacementBudget, 20);
-  assert.equal(stored.oauthCooldown.failureCount, 21);
+  assert.equal(job.error.phoneAttempts, phoneLimit);
+  assert.equal(job.error.phoneReplacementBudget, phoneLimit - 1);
+  assert.equal(stored.oauthCooldown.failureCount, phoneLimit);
   assert.equal(Date.parse(stored.oauthCooldown.until) > Date.now(), true);
   assert.equal(state.events.some((record) => record.type === 'session_asset_oauth_cooldown_set'), true);
 });

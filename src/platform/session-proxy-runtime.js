@@ -69,6 +69,10 @@ class SessionProxyRuntime {
       await this.allocator.db.query('UPDATE session_proxy_bindings SET last_error=$2 WHERE id=$1', [entry.ref.bindingId, String(error.code || 'DATABASE_ERROR').slice(0, 100)]);
       throw error;
     }
+    const observation = job.registrationProxy;
+    if (!entry.exitIpSaved && observation?.resourceKind === 'sessionProxy' && String(observation.bindingId) === String(entry.ref.bindingId)) {
+      try { entry.exitIpSaved = await require('./session-proxy-observations').recordExitIp(this.allocator, entry.ref.bindingId, observation); } catch {}
+    }
   }
   async bind(worker, job, context) {
     const entry = this.handles.get(job.id);
@@ -110,6 +114,9 @@ class SessionProxyRuntime {
     clearInterval(entry.timer);
     if (entry.checking) await entry.checking;
     if (entry.ref) {
+      if (String(job.registrationProxy?.bindingId) === String(entry.ref.bindingId)) {
+        await require('./session-proxy-observations').recordExitIp(this.allocator, entry.ref.bindingId, job.registrationProxy).catch(() => {});
+      }
       await this.allocator.stopping(entry.ref);
       entry.controller.abort(); await Promise.allSettled([...entry.inflight]);
       await this.allocator.release(entry.ref, entry.error?.code === 'SESSION_PROXY_EXPIRED' ? 'expired' : 'ended');

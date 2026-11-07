@@ -25,7 +25,7 @@ test('normalizes the v2 scheduler defaults and fixed SMSBower market', () => {
   assert.equal(config.sms.country.id, 151);
   assert.deepEqual(config.sms.countries.map((country) => country.id), [151]);
   assert.equal(config.sms.maxPrice, 0.03);
-  assert.equal(config.sms.replacementBudget, 20);
+  assert.equal(config.sms.replacementBudget, 4);
   assert.equal(config.mail.maxPollAttempts, 15);
   const smsbower = validateV2Config({
     schemaVersion: 2,

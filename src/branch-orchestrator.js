@@ -253,6 +253,7 @@ const PROXY_ROTATION_CYCLE_DELAY_MS = 250;
 // independently from the identity/configuration fingerprint.
 // `maxRetries` counts retries only: a job runs once, then up to maxRetries more times.
 const RETRY_POLICIES = {
+  waiting_session_proxy_retry: { delaysMs: [2000, 5000], maxRetries: 2 },
   // The challenged exit is banned and unbound before this policy is read, so
   // the first retry only needs long enough to avoid a hot loop.
   [PROXY_ROTATION_PHASE]: { delaysMs: [150, 500, 1200], maxRetries: 3 },
@@ -10015,6 +10016,25 @@ async function runJob(job, worker, context) {
     } else if (context.action()) {
       job.status = 'queued';
       job.phase = context.action() === 'cancel' ? 'cancel_pending' : 'paused';
+    } else if (context.sessionProxyRuntime?.enabled
+        && (error.cloudflareChallenge === true || error.code === 'CLOUDFLARE_CHALLENGE' || error.proxyFailure === true || proxyRuntimeTransportFailure(error)
+          || ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ENETUNREACH', 'EHOSTUNREACH'].includes(String(error.code || '')))) {
+      // A fixed session cannot use the legacy pool rotation lane. Stop safely
+      // instead of endlessly re-binding the same session as a "new" proxy.
+      const blocked = error.cloudflareChallenge === true || error.code === 'CLOUDFLARE_CHALLENGE';
+      const retryConnection = !blocked && ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ENETUNREACH', 'EHOSTUNREACH'].includes(String(error.code || ''));
+      const policy = retryPolicyForWait('waiting_session_proxy_retry', context);
+      const retryCount = Number(job.sessionTransportRetries || 0);
+      error = Object.assign(new Error(blocked ? '独立会话请求被目标站验证拦截，已停止该账号执行' : '独立会话代理连接失败'), {
+        code: blocked ? 'SESSION_PROXY_REQUEST_BLOCKED' : 'SESSION_PROXY_TRANSPORT_FAILED',
+        causeCode: String(error.code || ''), retryable: false, category: 'settled',
+      });
+      job.error = { code: error.code, message: error.message, causeCode: error.causeCode };
+      if (retryConnection && retryCount < policy.maxRetries) {
+        job.sessionTransportRetries = retryCount + 1;
+        job.status = 'waiting'; job.phase = 'waiting_session_proxy_retry';
+        await scheduleRetryForWait(job, job.phase, worker, context, error);
+      } else await failJobAfterRunError(job, worker, context, error);
     } else {
       let callbackProxyRecovery = createdAccountCallbackPending(job);
       if (error.accountCreated === true) {
@@ -10616,6 +10636,7 @@ async function recordProxyBindFailure(job, worker, error, context) {
  */
 const LANE_HOLDING_WAIT_PHASES = new Set([
   'waiting_session_proxy',
+  'waiting_session_proxy_retry',
   SMS_INVENTORY_RETRY_PHASE,
   SMS_INVENTORY_EXHAUSTED_PHASE,
   PROXY_RETRY_PHASE,

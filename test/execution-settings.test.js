@@ -44,6 +44,11 @@ test('configuration endpoint exposes only allowlisted tuning fields and validate
   assert.equal(writes,0);
   assert.equal((await app.inject({method:'PUT',url:'/api/v1/platform-config',payload:{values:{'sms.sendRetryLimit':0}}})).statusCode,200);
   assert.equal(writes,1);
+  const bounded = await app.inject({method:'PUT',url:'/api/v1/platform-config',payload:{values:{'sms.numberAttemptLimit':5,'retryPolicy.waiting_session_proxy_retry.maxRetries':2}}});
+  assert.equal(bounded.statusCode,200);
+  assert.equal(config.sms.replacementBudget,4);
+  assert.equal(bounded.json().fields.find(f=>f.path==='sms.numberAttemptLimit').value,5);
+  assert.equal((await app.inject({method:'PUT',url:'/api/v1/platform-config',payload:{values:{'sms.numberAttemptLimit':0}}})).statusCode,400);
   manager.stateFiles=()=>['legacy'];
   assert.equal((await app.inject({method:'PUT',url:'/api/v1/platform-config',payload:{values:{'sms.sendRetryLimit':1}}})).statusCode,409);
   manager.cachedState=()=>({runId:'customer-old',status:'partial'});

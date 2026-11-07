@@ -177,6 +177,9 @@ class OrderWorker {
       this.costBackfillAt = Date.now();
       await backfillCosts(this.db, this.manager).catch(() => {});
       await backfillAccountTokens(this.db, this.orders.crypt, this.manager).catch(() => {});
+      if (this.manager.sessionProxy?.allocator) {
+        try { this.exitIpCursor = await require('./session-proxy-observations').backfillExitIps(this.manager.sessionProxy.allocator, this.manager, this.exitIpCursor || 0); } catch {}
+      }
     }
     this.manager.setCustomerConcurrency(
       s.registration_concurrency,
@@ -202,6 +205,14 @@ class OrderWorker {
       WHERE i.status IN ('queued','oauth_pending') AND i.execution_started_at IS NOT NULL
       AND i.execution_started_at+o.timeout_minutes*interval '1 minute'<=now()`)).rows;
     for (const item of overdue) await this.refund(item, "执行超过总时限");
+    const cooling = (await this.db.query(`SELECT i.*,o.timeout_minutes FROM platform_items i JOIN platform_orders o ON o.id=i.order_id
+      WHERE i.status='oauth_pending' AND i.asset_id IS NOT NULL AND i.execution_started_at IS NOT NULL`)).rows;
+    for (const item of cooling) {
+      let asset;
+      try { asset = this.manager.sessionAssets().get(item.asset_id); } catch { continue; }
+      if (Date.parse(asset?.oauthCooldown?.until || '') >= Date.parse(item.execution_started_at) + item.timeout_minutes * 60000)
+        await this.refund(item, 'OAuth 冷却超过本单剩余时限，无法继续交付');
+    }
     if (!s.worker_enabled || this.closed) return;
     // The durable count also covers jobs whose engine checkpoint is missing
     // after a crash. Never replace uncertain work with a duplicate execution.
@@ -360,6 +371,10 @@ class OrderWorker {
             null,
             "资源等待超时，未交付部分积分已退回",
           );
+          return;
+        }
+        if (failure.code === 'OAUTH_ASSET_COOLDOWN' && failure.delay >= remaining) {
+          await this.refund(fresh, 'OAuth 冷却超过本单剩余时限，无法继续交付');
           return;
         }
         await this.db.query(
@@ -551,6 +566,8 @@ class OrderWorker {
       return this.refund(item, item.cancel_requested ? "已取消后续执行" : "执行超过总时限");
     const failure = executionFailure(jobs.find(job => job.error)?.error || {}, "ENGINE_EXECUTION_FAILED");
     await this.recordFailure(item.run_id, failure);
+    if (['SESSION_PROXY_REQUEST_BLOCKED', 'SESSION_PROXY_TRANSPORT_FAILED', 'OAUTH_PHONE_REPLACEMENT_BUDGET_EXHAUSTED'].includes(failure.code))
+      return this.refund(item, failure.detail);
     if (!TERMINAL.has(state.status))
       return this.recover(item, failure.detail, allowResume);
     await this.db.query("UPDATE platform_attempts SET status='finished',finished_at=COALESCE(finished_at,now()) WHERE run_id=$1", [item.run_id]);

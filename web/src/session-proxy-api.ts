@@ -13,7 +13,7 @@ export type SessionRow = {
   session: string; status: string; created_at: string; activated_at: string; expires_at: string; ended_at: string;
   reserved_until: string; last_error: string; final_account_id: string; order_id: string;
   session_key: string; intervals: number; run_id?: string; initiated_by?: string;
-  detect_result: { exitIp?: string; latencyMs?: number; status?: string };
+  detect_result: { exitIp?: string; checkedAt?: string; latencyMs?: number; status?: string };
 };
 export type SessionPage<T> = { items: T[]; total: number; offset: number; limit: number };
 export async function sessionProxyApi<T>(path = '', method = 'GET', body?: unknown): Promise<T> {
