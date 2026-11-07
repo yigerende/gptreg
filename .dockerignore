@@ -6,6 +6,7 @@
 .local
 gpt-re.config.json
 dynamic-proxy-pools.json
+proxy-usage.json
 proxy-pool.txt
 web/dist
 **/*.log

@@ -707,7 +707,8 @@ class RunManager extends EventEmitter {
     this.configService = options.configService;
     this.logStore = options.logStore;
     this.proxyService = options.proxyService || new ProxyService(options.configService);
-    this.proxyClaims = new Map();
+    this.proxyClaims = this.proxyService.claims || new Map();
+    this.proxyService.usage?.recover();
     this.harPath = options.harPath || '';
     // The one seam the sub2api push has: tests drive the gateway through this
     // rather than binding a real listener on 8080.
@@ -1549,13 +1550,13 @@ class RunManager extends EventEmitter {
     if (['register_session', 'register_oauth'].includes(planInput.taskKind) && Number(planInput.schemaVersion) >= 2 && !planInput.proxyAssignments?.length) {
       const workers = Number(planInput.workerConcurrency ?? base.workers.maxConcurrency);
       if (!Number.isInteger(workers) || workers < 1 || workers > MAX_WORKER_CONCURRENCY) throw new HttpError(400, '注册 Worker 数量无效');
-      planInput = { ...planInput, proxyAssignments: defaultOAuthAssignments(workers, this.proxyService.list(), { claims: this.proxyClaims }) };
+      planInput = { ...planInput, proxyAssignments: defaultOAuthAssignments(workers, this.proxyService.list(), { claims: this.proxyClaims, usage: this.proxyService.usage }) };
     }
     if (planInput.taskKind === 'oauth') {
       const count = planInput.oauthSource?.accounts?.length || planInput.oauthSource?.assetIds?.length || 1;
       const workers = Number(planInput.workerConcurrency ?? Math.min(base.workers.maxConcurrency, count));
       if (!Number.isInteger(workers) || workers < 1 || workers > MAX_WORKER_CONCURRENCY || workers > count) throw new HttpError(400, 'OAuth Worker 数量无效或超过账号数');
-      if (!planInput.proxyAssignments?.length) planInput = { ...planInput, proxyAssignments: defaultOAuthAssignments(workers, this.proxyService.list(), { claims: this.proxyClaims }) };
+      if (!planInput.proxyAssignments?.length) planInput = { ...planInput, proxyAssignments: defaultOAuthAssignments(workers, this.proxyService.list(), { claims: this.proxyClaims, usage: this.proxyService.usage }) };
       assertOAuthProxySelection(planInput);
     }
     const plan = this.bindSessionAssetMailProvider(normalizeRunPlan(planInput, base));
@@ -1586,6 +1587,7 @@ class RunManager extends EventEmitter {
         workerSlots: [],
         resourceKind: metadata.resourceKind,
         countryCode: metadata.countryCode || '',
+        sessionMinutes: entry.sessionMinutes ?? null,
       };
       if (!current.workerSlots.includes(assignment.workerSlot)) current.workerSlots.push(assignment.workerSlot);
       entries.set(entry.id, current);
@@ -3048,13 +3050,18 @@ class RunManager extends EventEmitter {
       const har = this.protocolCapture(state, config);
       const initialProxyEntries = this.proxyEntriesForState(state, config);
       active.proxyEntries = Array.isArray(initialProxyEntries) ? initialProxyEntries : [];
-      const usedProxyIds = new ProxyClaims(this.proxyClaims, state.runId);
+      const usedProxyIds = new ProxyClaims(this.proxyClaims, state.runId, this.proxyService.usage);
       for (const worker of state.workers || []) {
-        if (worker.proxyId && worker.proxy?.resourceKind !== 'maintenance') usedProxyIds.add(worker.proxyId);
+        if (worker.proxyId && worker.proxy?.resourceKind !== 'maintenance') {
+          usedProxyIds.add(worker.proxyId);
+          const current = active.proxyEntries.find(entry => entry.id === worker.proxyId);
+          usedProxyIds.markUsed({ ...current, ...worker.proxy, id: worker.proxyId, sessionMinutes: worker.proxy?.sessionMinutes ?? current?.sessionMinutes });
+        }
       }
       const runOptions = {
         proxyEntries: active.proxyEntries,
         usedProxyIds,
+        proxyUsage: this.proxyService.usage,
         control: gate,
         saveState: (next) => saveV2StateWithRetry(stateFile, next),
         onEvent: (event) => this.logStore.append(state.runId, {
@@ -3176,7 +3183,7 @@ class RunManager extends EventEmitter {
       if (TERMINAL_RUN_STATUSES.has(state.status)) this.appendTerminalSummary(state);
     } finally {
       try { active.lock.release(); } catch { /* Surface lock issues on the next operation. */ }
-      new ProxyClaims(this.proxyClaims, state.runId).clear();
+      new ProxyClaims(this.proxyClaims, state.runId, this.proxyService.usage).clear();
       const finalStatus = state.status;
       if (active.slot === 'customer') {
         if (this.customerActive.get(state.runId) === active) this.customerActive.delete(state.runId);

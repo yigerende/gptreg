@@ -33,6 +33,7 @@ const {
   requiresSmsPreflight,
 } = require('./run-plan');
 const { createSmsProvider, sleep } = require('./sms-provider');
+const { preferUncooled } = require('./proxy-usage');
 const { IcloudClient } = require('./icloud-client');
 const { cancellationDetailsForBalance, summarizeSmsCost, summarizeSmsCosts } = require('./sms-cost-ledger');
 const { mailRentalCost } = require('./mail-cost-ledger');
@@ -4708,24 +4709,26 @@ async function bindWorkerProxy(worker, context) {
   }
   const allUsable = candidatesForWorker(worker, context)
     .filter((entry) => !proxyRetiredForRun(context.state.proxyHealth[entry.id], entry, context));
-  const usable = shuffleProxyEntries(
-    allUsable.filter((entry) => sharedProxyEntry(entry, context) || !context.usedProxyIds.has(entry.id)),
-    context,
-  );
+  const usable = allUsable.filter((entry) => sharedProxyEntry(entry, context) || !context.usedProxyIds.has(entry.id));
+  const preferred = preferUncooled(usable, context.proxyUsage);
+  const preferredIds = new Set(preferred.map(entry => entry.id));
   // The exit just spent (or just dropped) is skipped while anything else is
   // available, but is not removed outright — a one-proxy pool must still work.
   const lastProxyId = String(worker.lastProxyId || '');
-  const rotated = lastProxyId ? usable.filter((entry) => entry.id !== lastProxyId) : usable;
-  const pool = rotated.length ? rotated : usable;
   // Exits no Worker has used in this run go first, so a released exit is not
   // handed straight to the next account while unused ones are still on hand.
   // Earlier-used exits remain as the fallback when the fresh ones run out.
   const everBound = (entry) => !sharedProxyEntry(entry, context)
     && Boolean(context.state.proxyHealth?.[entry.id]?.lastSuccessAt);
-  const candidates = [
-    ...pool.filter((entry) => !everBound(entry)),
-    ...pool.filter((entry) => everBound(entry)),
-  ];
+  const order = entries => {
+    const shuffled = shuffleProxyEntries(entries, context);
+    const rotated = lastProxyId ? shuffled.filter(entry => entry.id !== lastProxyId) : shuffled;
+    const pool = rotated.length ? rotated : shuffled;
+    return [...pool.filter(entry => !everBound(entry)), ...pool.filter(everBound)];
+  };
+  // Keep cooling connections as a second phase in case every ready candidate
+  // fails its probe. The loop rechecks free, ready capacity before any fallback.
+  const candidates = [...order(preferred), ...order(usable.filter(entry => !preferredIds.has(entry.id)))];
   if (!candidates.length && context.config.proxyPool.required) {
     const busy = allUsable.length > 0;
     throw Object.assign(new Error(
@@ -4743,6 +4746,9 @@ async function bindWorkerProxy(worker, context) {
     if (!sharedProxyEntry(candidate, context)) {
       if (context.usedProxyIds.has(candidate.id)) continue;
       if (proxyRetiredForRun(context.state.proxyHealth[candidate.id], candidate, context)) continue;
+      // A different task may have released a ready connection during a probe.
+      if (context.proxyUsage?.isCooling(candidate.id) && allUsable.some(entry => !context.usedProxyIds.has(entry.id)
+        && !context.proxyUsage.isCooling(entry.id) && !proxyRetiredForRun(context.state.proxyHealth[entry.id], entry, context))) continue;
       context.usedProxyIds.add(candidate.id);
     }
     const sharedMaintenance = sharedProxyEntry(candidate, context);
@@ -4778,6 +4784,8 @@ async function bindWorkerProxy(worker, context) {
       }
       probeCompleted = true;
       const reusedExit = everBound(candidate);
+      const cooldownFallback = !sharedMaintenance && Boolean(context.proxyUsage?.isCooling(candidate.id));
+      if (!sharedMaintenance) context.usedProxyIds.markUsed?.(candidate);
       worker.proxy = clone(candidate);
       worker.proxyId = candidate.id;
       context.state.proxyLeases[worker.id] = candidate.id;
@@ -4792,6 +4800,7 @@ async function bindWorkerProxy(worker, context) {
         proxyId: candidate.id,
         ...(sharedMaintenance ? { shared: true } : {}),
         ...(reusedExit ? { reusedExit: true } : {}),
+        ...(cooldownFallback ? { cooldownFallback: true } : {}),
       }, context);
       await context.checkpoint('worker_proxy_bound');
       return worker.proxy;

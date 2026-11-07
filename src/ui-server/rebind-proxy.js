@@ -4,6 +4,9 @@ const { createProxyAllocator, parseProxyList, probeProxy } = require('../proxy-p
 const { executePureHttpUrl } = require('../pure-url');
 const { sourceProxySummary } = require('../session-asset-store');
 const { HttpError, sanitizeValue } = require('./utils');
+const { randomUUID } = require('node:crypto');
+const { ProxyClaims } = require('../oauth-proxies');
+const { preferUncooled } = require('../proxy-usage');
 
 const DEFAULT_MAINTENANCE_PROXY = 'http://127.0.0.1:7890';
 
@@ -30,6 +33,7 @@ function createRebindProxyPool(assignments, catalog, options = {}) {
         sourceId: candidate.sourceId || '',
         resourceKind: plan.kind,
         countryCode: plan.kind === 'countryPool' ? String(plan.countryCode).toUpperCase() : '',
+        sessionMinutes: candidate.sessionMinutes ?? null,
       };
       const previous = entries.get(entry.url);
       if (previous && (previous.countryCode !== entry.countryCode || previous.resourceKind !== entry.resourceKind)) {
@@ -42,6 +46,7 @@ function createRebindProxyPool(assignments, catalog, options = {}) {
   });
   const allocator = createProxyAllocator([...entries.values()].filter((entry) => entry.resourceKind !== 'maintenance'));
   const bound = new Map();
+  const claims = options.claims ? new ProxyClaims(options.claims, `rebind-${randomUUID()}`, options.usage) : null;
   const health = options.healthCheck || {};
   const groupFor = (slot) => groups.find((group) => Number(group.workerSlot) === Number(slot)) || groups[0];
   return {
@@ -62,6 +67,8 @@ function createRebindProxyPool(assignments, catalog, options = {}) {
     },
     describe: (slot) => sourceProxySummary(bound.get(String(slot))),
     release(slot) {
+      const entry = bound.get(String(slot));
+      if (entry && entry.resourceKind !== 'maintenance') claims?.delete(entry.id);
       bound.delete(String(slot));
       allocator.release(String(slot));
     },
@@ -80,12 +87,16 @@ function createRebindProxyPool(assignments, catalog, options = {}) {
       for (;;) {
         if (options.shouldStop?.()) throw Object.assign(new Error('代理筛选已停止，尚未开始账号流程'), { code: 'TASK_INTERRUPTED' });
         // Reservation happens synchronously before the probe so concurrent workers cannot reuse this candidate.
-        const entry = allocator.acquireRandom(key, { isUsable: (candidate) => group.urls.has(candidate.url), random: options.random || Math.random });
+        const free = allocator.pool.filter(candidate => group.urls.has(candidate.url) && !claims?.has(candidate.id)
+          && ['unknown', 'healthy'].includes(allocator.health[candidate.id]?.status || 'unknown'));
+        const preferred = new Set(preferUncooled(free, options.usage).map(candidate => candidate.id));
+        const entry = allocator.acquireRandom(key, { isUsable: (candidate) => preferred.has(candidate.id), random: options.random || Math.random });
         if (!entry) {
-          const busy = allocator.pool.some((candidate) => group.urls.has(candidate.url) && allocator.health[candidate.id]?.status === 'leased');
+          const busy = allocator.pool.some((candidate) => group.urls.has(candidate.url) && (allocator.health[candidate.id]?.status === 'leased' || claims?.has(candidate.id)));
           const code = busy ? 'PROXY_POOL_BUSY' : 'HEALTHY_PROXY_REQUIRED';
           throw Object.assign(new Error(busy ? '可用代理正被其他换绑账号占用，请降低并发或补充代理' : `所选代理池没有通过检测的节点${lastError ? `：${lastError.message}` : ''}`), { code });
         }
+        claims?.add(entry.id);
         checked += 1;
         const detail = { proxy: sourceProxySummary(entry), candidateIndex: checked, candidateCount: group.urls.size };
         onCheck({ ...detail, status: 'checking' });
@@ -96,10 +107,12 @@ function createRebindProxyPool(assignments, catalog, options = {}) {
               executor: options.executor || executePureHttpUrl, rejectChallenge: true,
             });
           }
+          claims?.markUsed(entry);
           bound.set(key, entry);
           onCheck({ ...detail, status: health.enabled === false ? 'skipped' : 'healthy', reason: health.enabled === false ? 'health_check_disabled' : '' });
           return entry.url;
         } catch (error) {
+          claims?.delete(entry.id);
           lastError = sanitizeValue({ code: String(error.code || 'PROXY_PROBE_FAILED'), message: String(error.message || '').slice(0, 180) }, { redactPii: false });
           allocator.fail(entry, lastError.message);
           let retired = false;

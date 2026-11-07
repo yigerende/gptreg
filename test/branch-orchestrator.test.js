@@ -106,6 +106,81 @@ function finishSession(state, job) {
   state.lastValidatedAt = new Date().toISOString();
 }
 
+for (const allCooling of [false, true]) test(`proxy cooldown fallback preserves unused-first selection and never shares occupied connections (allCooling=${allCooling})`, async t => {
+  const { ProxyUsage } = require('../src/proxy-usage');
+  const { ProxyClaims } = require('../src/oauth-proxies');
+  const store = temporaryStore(t), usage = new ProxyUsage(path.join(store.cwd, 'proxy-usage.json'));
+  const config = branchConfig(2); config.proxyPool.required = true; config.mail.count = 2;
+  const plan = normalizeRunPlan({ schemaVersion: 3, taskKind: 'register_session', mailCount: 2, workerConcurrency: 2,
+    aliasStrategy: 'root', proxyAssignments: [1,2].map(workerSlot => ({ workerSlot, kind: 'countryPool', countryCode: 'JP' })) }, config);
+  const state = makeInitialBranchState(config, plan, { runId: `cooldown-${allCooling}` });
+  const entries = ['occupied','past','fresh','ready'].map((id,i) => ({ id, url: `http://proxy-${id}.example.test:${9000+i}`,
+    resourceKind: 'countryPool', countryCode: 'JP', workerSlots: [1,2], sessionMinutes: 10 }));
+  for (const entry of entries.filter(e => allCooling || e.id !== 'ready')) { usage.begin(entry); usage.release(entry.id); }
+  const registry = new Map([['occupied', 'another-task']]);
+  const claims = new ProxyClaims(registry, state.runId, usage);
+  state.proxyHealth = { past: { status: 'healthy', lastSuccessAt: '2026-01-01T00:00:00Z' } };
+  const seen = [], running = new Set(), overlap = [];
+  const gate = new ControlGate(), deadline = setTimeout(() => gate.request('cancel'), 5000);
+  t.after(() => clearTimeout(deadline));
+  await runBranchOrchestrator({ log: { entries: [] } }, state, config, {
+    assetStore: store, proxyEntries: entries, proxyUsage: usage, usedProxyIds: claims, random: () => .99, control: gate,
+    proxyProbeExecutor: async () => { await new Promise(resolve => setTimeout(resolve, 5)); return { response: { status: 200 } }; },
+    mailClient: mailboxClient([{ id: 'one', email: 'one@example.test', tokenValid: true }, { id: 'two', email: 'two@example.test', tokenValid: true }]),
+    sessionRunnerFactory: ({job,worker}) => ({ async run(session) {
+      const id = worker.proxy.id;
+      if (running.has(id)) overlap.push(id);
+      running.add(id); seen.push(id);
+      await new Promise(resolve => setTimeout(resolve, 10)); finishSession(session, job); running.delete(id);
+    } }),
+  });
+  clearTimeout(deadline);
+  assert.equal(state.status, 'complete', JSON.stringify(state.events.slice(-8))); assert.equal(seen.length, 2);
+  assert.deepEqual(overlap, []); assert.ok(!seen.includes('occupied')); assert.ok(!seen.includes('past'));
+  assert.equal(new Set(seen).size, 2);
+  if (!allCooling) assert.equal(seen[0], 'ready');
+  assert.equal(state.events.filter(e => e.type === 'worker_proxy_bound' && e.cooldownFallback).length, allCooling ? 2 : 1);
+  assert.deepEqual([...registry], [['occupied','another-task']]);
+  for (const id of seen) { assert.equal(usage.isCooling(id), true); assert.equal(usage.get(id).inUse, false); }
+});
+
+for (const allOccupied of [false, true]) test(`proxy cooldown respects occupancy and falls back after ready probes fail (allOccupied=${allOccupied})`, async t => {
+  const { ProxyUsage } = require('../src/proxy-usage');
+  const { ProxyClaims } = require('../src/oauth-proxies');
+  const store = temporaryStore(t), usage = new ProxyUsage(path.join(store.cwd, 'proxy-usage.json'));
+  const config = branchConfig(); config.proxyPool.required = true;
+  const plan = normalizeRunPlan({ taskKind: 'register_session', mailCount: 1, workerConcurrency: 1, aliasStrategy: 'root' }, config);
+  const state = makeInitialBranchState(config, plan, { runId: `fallback-failure-${allOccupied}` });
+  const entries = ['ready', 'cold'].map(id => ({ id, url: `http://${id}.example.test:9000`, sessionMinutes: 10 }));
+  usage.begin(entries[1]); usage.release('cold');
+  const registry = new Map(allOccupied ? entries.map(e => [e.id, 'other-run']) : []);
+  const claims = new ProxyClaims(registry, state.runId, usage), gate = new ControlGate();
+  const deadline = setTimeout(() => gate.request('cancel'), 5000); t.after(() => clearTimeout(deadline));
+  const probes = [], selected = [];
+  await runBranchOrchestrator({ log: { entries: [] } }, state, config, {
+    assetStore: store, proxyEntries: entries, proxyUsage: usage, usedProxyIds: claims, control: gate,
+    mailClient: mailboxClient([{ id: 'one', email: 'one@example.test', tokenValid: true }]),
+    onEvent: record => { if (allOccupied && record.type === 'branch_job_waiting') gate.request('cancel'); },
+    proxyProbeExecutor: async (_req, options) => {
+      probes.push(options.proxy);
+      if (options.proxy === entries[0].url) throw new Error('simulated unavailable connection');
+      return { response: { status: 200 } };
+    },
+    sessionRunnerFactory: ({ job, worker }) => ({ async run(session) { selected.push(worker.proxy.id); finishSession(session, job); } }),
+  });
+  clearTimeout(deadline);
+  if (allOccupied) {
+    assert.deepEqual(probes, []); assert.deepEqual(selected, []);
+    assert.equal(state.status, 'cancelled');
+    assert.ok(state.events.some(e => e.type === 'branch_job_waiting' && e.code === 'PROXY_POOL_BUSY'));
+    assert.deepEqual([...registry], entries.map(e => [e.id, 'other-run']));
+  } else {
+    assert.equal(state.status, 'complete', JSON.stringify(state.events.slice(-8)));
+    assert.deepEqual(probes, entries.map(e => e.url)); assert.deepEqual(selected, ['cold']);
+    assert.ok(state.events.some(e => e.type === 'worker_proxy_bound' && e.cooldownFallback));
+  }
+});
+
 for (const confirmed of [true, false]) {
   test(`refresh forwards only confirmed email changes and keeps maintenance proxy (confirmed: ${confirmed})`, async (t) => {
     const config = branchConfig();

@@ -14,5 +14,6 @@
 .proxy-inventory-progress span { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .proxy-inventory-progress progress { width: 100%; height: 6px; margin-top: 8px; accent-color: #16745a; }
 .proxy-check-healthy { color: #187450; } .proxy-check-failed { color: #c34444; }
+.proxy-usage-busy { color: #2765a6; } .proxy-usage-cooling { color: #a96d19; }
 .proxy-inventory-hint { font-size: 12px; line-height: 1.7; opacity: .65; margin: 10px 0 0; }
 @media(max-width: 720px) { .proxy-inventory { padding: 12px; } .proxy-inventory-filters { grid-template-columns: repeat(2,minmax(0,1fr)); } .proxy-inventory-filters input { grid-column: 1 / -1; } }

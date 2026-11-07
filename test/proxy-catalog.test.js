@@ -234,6 +234,23 @@ test('local proxy parser accepts a bare port as localhost', () => {
   assert.equal(parseProxyLine('4001').url, 'http://127.0.0.1:4001');
 });
 
+test('sticky usage survives catalog refresh and restart, including old checkpoints without source duration', async t => {
+  const { configService } = workspace(t);
+  const now = () => Date.parse('2026-11-07T00:00:00Z');
+  const fetch = async () => new Response('sticky.example.test:9010');
+  const service = new ProxyService(configService, { now, fetch });
+  await service.buildAndPullApi({ provider: '1024proxy', countryCode: 'US', count: 1, sessionMinutes: 10 });
+  const entry = service.list().dynamic.countryPools[0].entries[0];
+  assert.equal(entry.sessionMinutes, 10);
+  service.usage.begin({ id: entry.id }); service.usage.release(entry.id);
+  const before = service.usage.get(entry.id);
+  assert.equal(before.cooldownUntil, '2026-11-07T00:10:00.000Z');
+  await service.pullAll();
+  const reloaded = new ProxyService(configService, { now, fetch });
+  assert.deepEqual(reloaded.inventory.list().items[0].cooldownUntil, before.cooldownUntil);
+  assert.deepEqual(reloaded.usage.get(entry.id), before);
+});
+
 test('manual 711 pulls replace one source atomically and preserve cache after a failed refresh', async (t) => {
   const { configService } = workspace(t);
   let responseText = 'proxy-a.example:1001\r\nproxy-b.example:1002\r\n';

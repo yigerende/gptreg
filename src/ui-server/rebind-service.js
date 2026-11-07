@@ -543,6 +543,8 @@ class RebindService {
       const channel = this.mailChannel(provider);
       const catalog = this.proxyService.list();
       const proxyPool = createRebindProxyPool(body.proxyAssignments, catalog, {
+        claims: this.proxyService.claims,
+        usage: this.proxyService.usage,
         maintenanceProxy: this.config().proxyPool?.maintenanceProxy,
         healthCheck: this.config().proxyPool?.healthCheck,
         executor: this.proxyProbeExecutor,

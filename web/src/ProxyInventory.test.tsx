@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Tooltip } from 'radix-ui';
 import ProxyInventory from './ProxyInventory';
@@ -24,4 +24,33 @@ it('loads actual pages, submits filters and tests selected proxies with visible 
   expect(screen.getByRole('button',{name:'测试已选'})).toBeDisabled();
   const post=fetcher.mock.calls.find(([,i])=>i?.method==='POST')!;
   expect(JSON.parse(String(post[1]?.body))).toMatchObject({ids:['p0'],filters:{q:'8080'}});
+});
+
+it('shows last use and cooldown deadlines, defaults to recent use and filters only free cooling entries', async () => {
+  const lastUsedAt = '2026-11-07T01:00:00.000Z', cooldownUntil = '2026-11-07T01:10:00.000Z';
+  const rows = ['busy', 'cold', 'new'].map(id => ({ id, scope: 'country', countryCode: 'JP', provider: '711proxy', providerLabel: '711Proxy', sourceId: 's1', protocol: 'http', endpoint: `http://${id}.test:8080`, sessionMinutes: 10, pulledAt: '', check: null, lastUsedAt: id === 'new' ? '' : lastUsedAt, cooldownUntil: id === 'new' ? '' : cooldownUntil, cooling: id !== 'new', inUse: id === 'busy' }));
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const query = new URL(String(input), 'http://local').searchParams;
+    const items = query.get('usage') === 'cooling' ? rows.filter(row => row.cooling && !row.inUse) : rows;
+    return new Response(JSON.stringify({ items, total: items.length, offset: 0, limit: 50, countries: ['JP'], providers: [], summary: { total: 3, matched: items.length, inUse: 1, cooling: 1 }, test: null }));
+  });
+  mount(); await screen.findByText(rows[0].endpoint);
+  expect(new URL(String(fetcher.mock.calls[0][0]), 'http://local').searchParams.get('sort')).toBe('used');
+  expect(screen.getByRole('columnheader', { name: '最近使用时间 ↓' })).toBeInTheDocument();
+  expect(screen.getByRole('columnheader', { name: '冷却释放时间' })).toBeInTheDocument();
+  const busy = within(screen.getByText(rows[0].endpoint).closest('tr')!);
+  expect(busy.getByText('使用中，释放后计算')).toBeInTheDocument();
+  expect(busy.getByText('占用期间不可分配')).toBeInTheDocument();
+  const cold = within(screen.getByText(rows[1].endpoint).closest('tr')!);
+  expect(cold.getByText(new Date(lastUsedAt).toLocaleString('zh-CN', { hour12: false }))).toBeInTheDocument();
+  expect(cold.getByText(new Date(cooldownUntil).toLocaleString('zh-CN', { hour12: false }))).toBeInTheDocument();
+  expect(screen.getByText('未记录')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('combobox', { name: '筛选使用状态' }));
+  fireEvent.click(screen.getByRole('option', { name: '冷却中（未占用）' }));
+  await waitFor(() => expect(screen.queryByText(rows[0].endpoint)).not.toBeInTheDocument());
+  expect(await screen.findByText(rows[1].endpoint)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('combobox', { name: '代理排序' }));
+  fireEvent.click(screen.getByRole('option', { name: '按国家排序' }));
+  await waitFor(() => expect(fetcher.mock.calls.some(([url]) => String(url).includes('sort=country'))).toBe(true));
+  expect(screen.getByRole('columnheader', { name: '最近使用时间' })).toBeInTheDocument();
 });

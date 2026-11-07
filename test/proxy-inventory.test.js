@@ -35,3 +35,20 @@ test('empty selections, removed proxies and oversized batches never trigger netw
   assert.throws(()=>inventory.start({all:true}),/1000/);
   assert.equal(inventory.status(),null);
 });
+
+test('usage dates are sorted before pagination and occupancy overrides cooling filters', () => {
+  const {service,inventory,entries}=fixture(5);
+  const blank={lastUsedAt:'',releasedAt:'',cooldownUntil:'',inUse:false,cooling:false};
+  const usage=new Map([
+    [entries[4].id,{...blank,lastUsedAt:'2026-11-07T01:00:00.000Z',cooldownUntil:'2026-11-07T01:10:00.000Z',cooling:true}],
+    [entries[2].id,{...blank,lastUsedAt:'2026-11-07T02:00:00.000Z',cooldownUntil:'2026-11-07T02:10:00.000Z',cooling:true}],
+  ]);
+  service.usage={get:id=>usage.get(id)||blank}; service.claims=new Map([[entries[2].id,'active-run']]);
+  const first=inventory.list({limit:1}),second=inventory.list({limit:1,offset:1});
+  assert.equal(first.items[0].id,entries[2].id);assert.equal(first.items[0].inUse,true);
+  assert.equal(second.items[0].id,entries[4].id);
+  assert.equal(inventory.list({usage:'cooling'}).total,1);
+  assert.equal(inventory.list({usage:'in_use'}).total,1);
+  assert.equal(inventory.list({usage:'available'}).total,3);
+  assert.equal(first.summary.cooling,1);assert.equal(first.summary.inUse,1);
+});

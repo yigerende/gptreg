@@ -1,6 +1,8 @@
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
+const { ProxyUsage } = require('../proxy-usage');
 
 const { executePureHttpUrl } = require('../pure-url');
 const {
@@ -76,6 +78,18 @@ class ProxyService {
     this.fetch = options.fetch || globalThis.fetch;
     this.executor = options.executor || executePureHttpUrl;
     this.checks = new Map();
+    this.claims = new Map();
+    this.usage = options.usage || new ProxyUsage(path.join(configService.cwd, 'proxy-usage.json'), {
+      now: options.now,
+      sessionMinutesFor: entry => {
+        if (entry.sessionMinutes != null) return entry.sessionMinutes;
+        // Checkpoints from before usage tracking do not carry source duration.
+        for (const pool of Object.values(this.catalogSnapshot().countryPools)) for (const source of pool.sources || []) {
+          if ((source.entries || []).some(candidate => candidate.id === entry.id)) return source.lastPulledSettings?.sessionMinutes ?? source.sessionMinutes;
+        }
+        return null;
+      },
+    });
     this.inventory = new ProxyInventory(this);
     this.iproyal = new IPRoyalCredentials(configService.cwd);
     this.catalogBusy = false;

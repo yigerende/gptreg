@@ -551,7 +551,8 @@ function flattenedPoolEntries(pool) {
   const seen = new Set();
   for (const entry of [
     ...(pool?.manualEntries || []),
-    ...(pool?.sources || []).flatMap((source) => source.entries || []),
+    ...(pool?.sources || []).flatMap((source) => (source.entries || []).map(entry => ({ ...entry,
+      sessionMinutes: source.lastPulledSettings?.sessionMinutes ?? source.sessionMinutes ?? null }))),
   ]) {
     if (seen.has(entry.url)) continue;
     seen.add(entry.url);

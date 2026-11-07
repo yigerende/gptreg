@@ -25,6 +25,7 @@ scratch/
 # Machine credentials, business configuration and container data
 gpt-re.config.json
 dynamic-proxy-pools.json
+proxy-usage.json
 proxy-pool.txt
 .gpt-re-network.local*
 .runtime/

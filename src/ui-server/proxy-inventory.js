@@ -27,6 +27,8 @@ class ProxyInventory {
       // Passwords are never returned in the inventory. Runtime keeps the original URL.
       endpoint: `${row.protocol}://${row.username ? '***@' : ''}${row.host}:${row.port}`,
       hasCredentials: Boolean(row.username), pulledAt: row.pulledAt, sessionMinutes: row.sessionMinutes,
+      ...(service.usage?.get(row.id) || { lastUsedAt: '', releasedAt: '', cooldownUntil: '', inUse: false, cooling: false }),
+      inUse: service.claims?.has(row.id) || service.usage?.get(row.id).inUse || false,
       check: this.service.checks.get(row.id) || null,
     }));
   }
@@ -34,7 +36,7 @@ class ProxyInventory {
   filtered(query = {}, rows = this.rows()) {
     const q = String(query.q || '').trim().toLowerCase();
     if (q.length > 200) throw new HttpError(400, '搜索内容最多200个字符');
-    for (const [key, allowed] of Object.entries({ scope: ['all', 'local', 'country'], status: ['all', 'unknown', 'healthy', 'failed'], protocol: ['all', 'http', 'https', 'socks5'] })) {
+    for (const [key, allowed] of Object.entries({ scope: ['all', 'local', 'country'], status: ['all', 'unknown', 'healthy', 'failed'], usage: ['all', 'available', 'cooling', 'in_use'], protocol: ['all', 'http', 'https', 'socks5'] })) {
       if (query[key] && !allowed.includes(query[key])) throw new HttpError(400, '无效的代理筛选条件');
     }
     const filtered = rows.filter(row => (!query.scope || query.scope === 'all' || row.scope === query.scope)
@@ -42,10 +44,12 @@ class ProxyInventory {
       && (!query.provider || query.provider === 'all' || row.provider === query.provider)
       && (!query.protocol || query.protocol === 'all' || row.protocol === query.protocol)
       && (!query.status || query.status === 'all' || (row.check?.status || 'unknown') === query.status)
+      && (!query.usage || query.usage === 'all' || (row.inUse ? 'in_use' : row.cooling ? 'cooling' : 'available') === query.usage)
       && (!q || [row.host, row.port, row.endpoint, row.countryCode, row.providerLabel, row.check?.exitIp].join(' ').toLowerCase().includes(q)));
-    const sort = query.sort || 'country';
-    if (!['country', 'latency', 'checked', 'pulled'].includes(sort)) throw new HttpError(400, '无效的代理排序');
+    const sort = query.sort || 'used';
+    if (!['country', 'latency', 'checked', 'pulled', 'used'].includes(sort)) throw new HttpError(400, '无效的代理排序');
     return filtered.sort((a, b) => (sort === 'latency' ? (a.check?.latencyMs ?? Infinity) - (b.check?.latencyMs ?? Infinity)
+      : sort === 'used' ? b.lastUsedAt.localeCompare(a.lastUsedAt)
       : sort === 'checked' ? String(b.check?.checkedAt || '').localeCompare(a.check?.checkedAt || '')
         : sort === 'pulled' ? b.pulledAt.localeCompare(a.pulledAt) : a.countryCode.localeCompare(b.countryCode))
       || a.provider.localeCompare(b.provider) || a.host.localeCompare(b.host, undefined, { numeric: true }) || String(a.port).localeCompare(String(b.port), undefined, { numeric: true }) || a.id.localeCompare(b.id));
@@ -54,7 +58,8 @@ class ProxyInventory {
   list(query = {}) {
     const rows = this.rows(), filtered = this.filtered(query, rows);
     return { ...pageRows(filtered, query),
-      summary: { total: rows.length, matched: filtered.length, healthy: filtered.filter(r => r.check?.status === 'healthy').length, failed: filtered.filter(r => r.check?.status === 'failed').length, unknown: filtered.filter(r => !r.check).length },
+      summary: { total: rows.length, matched: filtered.length, healthy: filtered.filter(r => r.check?.status === 'healthy').length, failed: filtered.filter(r => r.check?.status === 'failed').length, unknown: filtered.filter(r => !r.check).length,
+        inUse: filtered.filter(r => r.inUse).length, cooling: filtered.filter(r => !r.inUse && r.cooling).length },
       countries: [...new Set(rows.map(r => r.countryCode).filter(Boolean))].sort(),
       providers: [...new Set(rows.map(r => r.provider))].map(value => ({ value, label: rows.find(r => r.provider === value).providerLabel })),
       test: this.status(),
