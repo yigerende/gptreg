@@ -125,6 +125,7 @@ for (const allCooling of [false, true]) test(`proxy cooldown fallback preserves 
   t.after(() => clearTimeout(deadline));
   await runBranchOrchestrator({ log: { entries: [] } }, state, config, {
     assetStore: store, proxyEntries: entries, proxyUsage: usage, usedProxyIds: claims, random: () => .99, control: gate,
+    trialChecker: async () => ({ status: 'unknown', code: 'MOCK' }),
     proxyProbeExecutor: async () => { await new Promise(resolve => setTimeout(resolve, 5)); return { response: { status: 200 } }; },
     mailClient: mailboxClient([{ id: 'one', email: 'one@example.test', tokenValid: true }, { id: 'two', email: 'two@example.test', tokenValid: true }]),
     sessionRunnerFactory: ({job,worker}) => ({ async run(session) {
@@ -159,6 +160,7 @@ for (const allOccupied of [false, true]) test(`proxy cooldown respects occupancy
   const probes = [], selected = [];
   await runBranchOrchestrator({ log: { entries: [] } }, state, config, {
     assetStore: store, proxyEntries: entries, proxyUsage: usage, usedProxyIds: claims, control: gate,
+    trialChecker: async () => ({ status: 'unknown', code: 'MOCK' }),
     mailClient: mailboxClient([{ id: 'one', email: 'one@example.test', tokenValid: true }]),
     onEvent: record => { if (allOccupied && record.type === 'branch_job_waiting') gate.request('cancel'); },
     proxyProbeExecutor: async (_req, options) => {

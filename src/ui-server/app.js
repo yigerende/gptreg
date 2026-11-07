@@ -178,6 +178,7 @@ function buildApp(options = {}) {
   const proxyService = options.proxyService || new ProxyService(configService);
   const smsbowerMail = new SmsbowerMailService(configService, { fetch: options.smsbowerMailFetch });
   const runManager = options.runManager || new RunManager({
+    sessionProxy: options.sessionProxy,
     cwd,
     configService,
     logStore,
@@ -437,7 +438,7 @@ function buildApp(options = {}) {
     return { ...meta, runs };
   });
   app.post('/api/v1/runs', async (request, reply) => {
-    const result = await runManager.start(request.body?.plan || {});
+    const result = await runManager.start(request.body?.plan || {}, { actorId: request.headers['x-gptreg-actor'] });
     reply.code(202);
     return result;
   });

@@ -60,6 +60,47 @@ afterEach(() => {
 });
 
 describe('console shell', () => {
+  it('enables concurrent session-mode launch without any legacy proxy entries', async () => {
+    let checked = false;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      let value: any = payloads[url.pathname] || {};
+      if (url.pathname === '/api/v1/config') value = { ...value, config: { ...value.config, mail: { count: 2 }, workers: { maxConcurrency: 2 } } };
+      if (url.pathname === '/api/v1/proxies') value = { total: 0, local: { total: 0, proxies: [], errors: [] }, dynamic: { total: 0, countryPools: [] }, proxies: [], errors: [] };
+      if (url.pathname === '/api/admin/v1/session-proxy') value = { defaultMode: 'sessionProxy', ready: true, enabled: true, country_count: 2, revision: 1, maxParallel: 20 };
+      if (url.pathname === '/api/v1/preflight') checked = true;
+      return new Response(JSON.stringify(value));
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><Tooltip.Provider><Router><App /></Router></Tooltip.Provider></QueryClientProvider>);
+    await waitFor(() => expect(checked).toBe(true));
+    await waitFor(() => expect(screen.getByRole('button', { name: '仅注册' })).toBeEnabled());
+    expect(screen.queryByText(/Worker 代理分配无效/)).not.toBeInTheDocument();
+    client.clear();
+  });
+  it.each([
+    ['/proxies/regions', '注册地区', '注册地区分页'],
+    ['/proxies/sessions', '独立代理会话', '会话记录分页'],
+  ])('keeps the session proxy route %s and fetches the next page from the server', async (route, heading, pagination) => {
+    window.history.replaceState(null, '', route);
+    const offsets: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      let value: unknown = payloads[url.pathname] || {};
+      if (url.pathname === '/api/admin/v1/session-proxy') value = { revision: 1, counts: {}, maxParallel: 20, available: 20, occupied: 0 };
+      if (url.pathname.endsWith(route.replace('/proxies', ''))) { offsets.push(url.searchParams.get('offset') || '0'); value = { items: [], total: 30, limit: 25, offset: Number(url.searchParams.get('offset')) }; }
+      return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><Tooltip.Provider><Router><App /></Router></Tooltip.Provider></QueryClientProvider>);
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+    expect(window.location.pathname).toBe(route);
+    const page = await screen.findByRole('navigation', { name: pagination });
+    await waitFor(() => expect(within(page).getByRole('button', { name: '下一页' })).toBeEnabled());
+    fireEvent.click(within(page).getByRole('button', { name: '下一页' }));
+    await waitFor(() => expect(offsets).toContain('25'));
+  });
+
   it('preflights and enables launch for a compact country pool without loading address pages', async () => {
     let checked = false;
     vi.stubGlobal('fetch',vi.fn(async (input:RequestInfo|URL, init?:RequestInit) => {

@@ -19,6 +19,7 @@
     "cpa:export": "node bin/gpt-re.js cpa-export",
     "test": "node scripts/run-tests.js quick",
     "test:quick": "node scripts/run-tests.js quick",
+    "test:session-proxy": "node --test test/session-proxy.test.js",
     "ui:build": "npm --prefix web run build",
     "test:platform": "node --test --test-concurrency=2 test/platform.test.js test/platform-costs.test.js test/platform-finance.test.js test/platform-suppliers.test.js test/platform-auth.test.js test/platform-redeem-usage.test.js test/platform-encryption.test.js test/platform-openapi.test.js test/platform-flow.test.js test/platform-account-export.test.js test/platform-redeem.test.js test/platform-account-retention.test.js test/platform-risk.test.js test/platform-regions.test.js test/platform-partners.test.js",
     "start:platform": "node docker/server.js",

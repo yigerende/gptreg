@@ -39,12 +39,18 @@ async function ledger(q, userId, reference, kind, points, frozen, note) {
   return true;
 }
 class Orders {
-  constructor(db, crypt, { registrationPools = () => [] } = {}) {
+  constructor(db, crypt, { registrationPools = () => [], sessionProxy } = {}) {
     this.db = db;
     this.crypt = crypt;
     this.registrationPools = registrationPools;
+    this.sessionProxy = sessionProxy;
   }
   async regions() {
+    if (this.sessionProxy) {
+      const settings = await this.db.settings();
+      if (settings.default_proxy_mode === 'local') return [];
+      if (settings.default_proxy_mode === 'sessionProxy') return (await this.sessionProxy.policy()).countries;
+    }
     try { return registrationRegions(await this.registrationPools()); }
     catch { fail(false, "注册地区暂不可用，请稍后重试", 503); }
   }
@@ -89,14 +95,21 @@ class Orders {
         fail(previous.request_hash === hash, "相同幂等键不能用于不同请求", 409);
         return { order: publicOrder(previous), replayed: true };
       }
-      if (region !== "random") fail((await this.regions()).some(r => r.code === region),
-        "所选注册地区当前不可用，请刷新地区列表后重新选择");
       await checkNewOrder(q, user.id);
+      if (this.sessionProxy) await this.sessionProxy.control(q, true);
       const s = (
         await q.query(
           "SELECT value FROM platform_settings WHERE id=1 FOR SHARE",
         )
       ).rows[0].value;
+      let template = regionTemplate(s.template, region);
+      if (this.sessionProxy && s.default_proxy_mode === 'sessionProxy') {
+        template = { ...s.template, proxyMode: 'sessionProxy', proxyPolicy: { ...await this.sessionProxy.policy(region, q), timeoutMinutes: s.timeout_minutes },
+          proxyAssignments: [{ workerSlot: 1, kind: 'sessionProxy' }] };
+      } else {
+        if (region !== 'random') fail((await this.regions()).some(r => r.code === region), '所选注册地区当前不可用，请刷新地区列表后重新选择');
+        if (s.default_proxy_mode === 'local') template = { ...s.template, proxyMode: 'local', proxyAssignments: [] };
+      }
       fail(s.orders_open, "暂未开放下单，请稍后再试", 503);
       fail(source !== "api" || s.api_enabled, "API 暂未开放", 503);
       fail(quantity <= s.max_quantity, `每单最多 ${s.max_quantity} 个账号`);
@@ -123,7 +136,7 @@ class Orders {
             source,
             key,
             hash,
-            regionTemplate(s.template, region),
+            template,
             s.attempt_limit,
             s.timeout_minutes,
             region,

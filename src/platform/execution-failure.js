@@ -2,6 +2,13 @@
 // Only fixed descriptions and known codes cross into platform diagnostics.
 // Never persist upstream messages, URLs, credentials, or entire preflight data.
 const reasons = {
+  SESSION_PROXY_CAPACITY: ['waiting', '等待独立会话代理资源', true],
+  SESSION_PROXY_BUSY: ['waiting', '等待账号或代理执行占用释放', true],
+  SESSION_PROXY_REVOKED: ['configuration', '独立会话凭据已紧急停用'],
+  SESSION_PROXY_EXPIRED: ['proxy', '独立代理会话已到期'],
+  SESSION_PROXY_CONFIG_INVALID: ['configuration', '独立会话代理配置不可用'],
+  SESSION_PROXY_GENERATION_FAILED: ['proxy', '供应商生成独立会话失败'],
+  SESSION_PROXY_PROBE_FAILED: ['proxy', '独立会话连通检测失败'],
   EMAIL_NOT_DELIVERED_TO_TARGET: ["mail", "邮箱未收到目标验证码"],
   CHATGPT_SIGNIN_FAILED: ["registration", "注册登录入口请求失败"],
   EMAIL_OTP_TIMEOUT: ["mail", "邮箱验证码等待超时"],

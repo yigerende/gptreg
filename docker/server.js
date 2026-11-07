@@ -18,17 +18,20 @@ async function main() {
     );
   const db = new Database(process.env.DATABASE_URL);
   await db.initialize(credentials);
+  const { createSessionProxy } = require('../src/platform/session-proxy-service');
+  const sessionProxy = await createSessionProxy(db, crypt, 'app');
   // Read the shared catalog only; no engine, proxy refresh or supplier call.
   const proxies = new ProxyService(new ConfigService({ cwd, configPath }));
   const app = buildPlatform({
     db,
-    orders: new Orders(db, crypt, { registrationPools: () => proxies.countryPools() }),
+    orders: new Orders(db, crypt, { registrationPools: () => proxies.countryPools(), sessionProxy: sessionProxy.config }),
+    sessionProxy,
     crypt,
     secrets,
     cwd,
     workerUrl: process.env.WORKER_URL || "http://worker:3211",
   });
-  app.addHook("onClose", () => db.close());
+  app.addHook("onClose", async () => { await sessionProxy.close(); await db.close(); });
   await app.listen({
     host: process.env.LISTEN_HOST || "0.0.0.0",
     port: Number(process.env.PORT || 3210),

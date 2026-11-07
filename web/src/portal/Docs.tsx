@@ -741,7 +741,7 @@ export default function Docs({
                   默认随机地区，旧接入无需修改。如需指定地区，先
                   <a href="#get_registration_regions">查询可用国家代码</a>，
                   再在下单请求中传入可选的 <code>registration_region</code>。
-                  每次重试须保持原地区参数；<code>GLOBAL</code> 是全球混合池。
+                  每次重试须保持原地区参数。地区列表由平台当前模式提供；国家池模式下 <code>GLOBAL</code> 为全球混合池，独立会话模式下与随机地区兼容。订单受理后保留原地区规则，资源忙时自动排队。
                 </li>
                 <li>
                   生成并保存唯一幂等键，<a href="#create_order">创建订单</a>

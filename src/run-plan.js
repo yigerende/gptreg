@@ -235,6 +235,7 @@ function normalizeRunPlan(input = {}, defaults = {}) {
         throw new Error(`plan.proxyAssignments[${index}].workerSlot must be between 1 and ${workerConcurrency}`);
       }
       const kind = String(assignment?.kind || '').trim();
+      if (kind === 'sessionProxy') return { workerSlot, kind };
       if (kind === 'local') {
         const localProxyId = String(assignment.localProxyId || '').trim();
         if (!localProxyId) throw new Error(`plan.proxyAssignments[${index}].localProxyId is required`);
@@ -254,6 +255,7 @@ function normalizeRunPlan(input = {}, defaults = {}) {
       throw new Error(`plan.proxyAssignments[${index}].kind must be "local", "countryPool" or "maintenance"`);
     });
   if (requestedSchema >= 2) {
+    if (proxyAssignments.some(p => p.kind === 'sessionProxy') && proxyAssignments.some(p => p.kind !== 'sessionProxy')) throw new Error('独立会话代理不能与其它代理模式混用');
     if (proxyAssignments.length !== workerConcurrency) {
       throw new Error('plan.proxyAssignments must contain exactly one assignment per Worker');
     }
@@ -274,6 +276,9 @@ function normalizeRunPlan(input = {}, defaults = {}) {
     aliasMaxAttempts,
     aliasRunTag,
     proxyAssignments: proxyAssignments.sort((left, right) => left.workerSlot - right.workerSlot),
+    ...(input.proxyMode ? { proxyMode: input.proxyMode } : {}),
+    ...(input.proxyPolicy ? { proxyPolicy: structuredClone(input.proxyPolicy) } : {}),
+    ...(input.sessionProxyItem ? { sessionProxyItem: structuredClone(input.sessionProxyItem) } : {}),
     totalAccounts: sourceTask ? sourceCount : mailCount * aliasCount,
     oauthSource,
     postRegistrationOAuth: taskKind === 'register_oauth'

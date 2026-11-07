@@ -276,6 +276,8 @@ export type PreflightSnapshot = {
 };
 
 export type RunPlan = {
+  proxyMode?: string;
+  registrationRegion?: string;
   schemaVersion?: number;
   taskKind?: 'register_oauth' | 'register_session' | 'oauth' | 'session_refresh';
   mailCount: number;
@@ -315,6 +317,7 @@ export type RunPlan = {
 };
 
 export type ProxyAssignment =
+  | { workerSlot: number; kind: 'sessionProxy' }
   | { workerSlot: number; kind: 'local'; localProxyId: string }
   | { workerSlot: number; kind: 'countryPool'; countryCode: string }
   /** The configured local forwarder, for upkeep on an account that exists. */

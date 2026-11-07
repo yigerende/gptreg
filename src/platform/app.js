@@ -19,6 +19,7 @@ function buildPlatform({
   proxy = true,
   publicOrigin = process.env.PUBLIC_ORIGIN || "",
   secureCookies = process.env.COOKIE_SECURE === "true",
+  sessionProxy,
 }) {
   const app = Fastify({
     logger: false,
@@ -118,6 +119,7 @@ function buildPlatform({
   });
   registerAuth(app, db, crypt, { publicOrigin, secureCookies });
   registerApi(app, db, orders, crypt);
+  if (sessionProxy) require('./session-proxy-api').registerSessionProxy(app, sessionProxy.config, sessionProxy.allocator);
   require("./partners").registerPartners(app,db);
   for (const route of ["/site-icon", "/favicon.ico", "/site-icon/default"]) {
     app.get(route, async (r, reply) => {

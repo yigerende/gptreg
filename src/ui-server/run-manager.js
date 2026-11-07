@@ -707,6 +707,7 @@ class RunManager extends EventEmitter {
     this.configService = options.configService;
     this.logStore = options.logStore;
     this.proxyService = options.proxyService || new ProxyService(options.configService);
+    this.sessionProxy = options.sessionProxy;
     this.proxyClaims = this.proxyService.claims || new Map();
     this.proxyService.usage?.recover();
     this.harPath = options.harPath || '';
@@ -1567,6 +1568,10 @@ class RunManager extends EventEmitter {
   }
 
   proxySnapshot(plan) {
+    if (plan.proxyPolicy?.mode === 'sessionProxy') {
+      if (!this.sessionProxy) throw new HttpError(503, '独立会话模式需要平台数据库与执行器');
+      return { entries: [], assignments: plan.proxyAssignments, mode: 'sessionProxy' };
+    }
     assertOAuthProxySelection(plan);
     const taskKind = String(plan.taskKind || '');
     const sourceTask = taskKind === 'oauth' || taskKind === 'session_refresh';
@@ -2928,6 +2933,7 @@ class RunManager extends EventEmitter {
   }
 
   async preflight(planInput = {}, options = {}) {
+    if (this.sessionProxy) planInput = await this.sessionProxy.preparePlan(planInput, this.proxyService.list());
     try {
       // Inside the try on purpose: plan validation throws plain Errors, and
       // leaving this outside turned every rejected plan into an opaque 500
@@ -2945,6 +2951,7 @@ class RunManager extends EventEmitter {
   }
 
   async start(planInput = {}, startOptions = {}) {
+    if (this.sessionProxy) planInput = await this.sessionProxy.preparePlan(planInput, this.proxyService.list(), { frozen: startOptions.customerExecution === true });
     const customerExecution = startOptions.customerExecution === true;
     const slot = customerExecution ? 'customer' : taskSlotOf({ taskKind: taskKindOf(planInput) });
     const startingToken = this.reserveStartingSlot(slot, '', customerExecution ? String(startOptions.customerUserId || '') : '');
@@ -2983,6 +2990,10 @@ class RunManager extends EventEmitter {
         config = applyRunPlan(config, plan);
       }
       const state = makeInitialBranchState(config, plan, { runId: startOptions.runId ? safeRunId(startOptions.runId) : generatedRunId() });
+      if (plan.proxyPolicy?.mode === 'sessionProxy') {
+        state.sessionProxyTaskIds = Array.from({ length: plan.totalAccounts || plan.mailCount }, () => require('node:crypto').randomUUID());
+        state.sessionProxyActor = String(startOptions.actorId || '');
+      }
       if (customerExecution) state.customerExecution = true;
       if (customerExecution) state.customerUserId = String(startOptions.customerUserId || '');
       if (customerExecution) this.customerPendingRunIds?.add(state.runId);
@@ -3038,6 +3049,8 @@ class RunManager extends EventEmitter {
 
   async execute(active) {
     const { state, stateFile, config, gate, preparedResources } = active;
+    const sessionProxyRuntime = state.runPlan?.proxyPolicy?.mode === 'sessionProxy' ? this.sessionProxy?.runtime(state) : undefined;
+    active.sessionProxyRuntime = sessionProxyRuntime;
     try {
       const runtimeResources = { ...(preparedResources || {}) };
       const smsProvider = this.runSmsProvider(state, config, runtimeResources);
@@ -3052,18 +3065,19 @@ class RunManager extends EventEmitter {
       active.proxyEntries = Array.isArray(initialProxyEntries) ? initialProxyEntries : [];
       const usedProxyIds = new ProxyClaims(this.proxyClaims, state.runId, this.proxyService.usage);
       for (const worker of state.workers || []) {
-        if (worker.proxyId && worker.proxy?.resourceKind !== 'maintenance') {
+        if (worker.proxyId && !['maintenance', 'sessionProxy'].includes(worker.proxy?.resourceKind)) {
           usedProxyIds.add(worker.proxyId);
           const current = active.proxyEntries.find(entry => entry.id === worker.proxyId);
           usedProxyIds.markUsed({ ...current, ...worker.proxy, id: worker.proxyId, sessionMinutes: worker.proxy?.sessionMinutes ?? current?.sessionMinutes });
         }
       }
       const runOptions = {
+        sessionProxyRuntime,
         proxyEntries: active.proxyEntries,
         usedProxyIds,
         proxyUsage: this.proxyService.usage,
         control: gate,
-        saveState: (next) => saveV2StateWithRetry(stateFile, next),
+        saveState: (next) => saveV2StateWithRetry(stateFile, sessionProxyRuntime ? require('../platform/session-proxy-runtime').redact(next) : next),
         onEvent: (event) => this.logStore.append(state.runId, {
           at: event.at,
           source: 'scheduler',
@@ -3182,6 +3196,7 @@ class RunManager extends EventEmitter {
       });
       if (TERMINAL_RUN_STATUSES.has(state.status)) this.appendTerminalSummary(state);
     } finally {
+      if (sessionProxyRuntime) await sessionProxyRuntime.close().catch(error => this.logStore.append(state.runId, { level: 'error', source: 'run-manager', type: 'session_proxy_cleanup_pending', message: '代理占用正在等待数据库恢复后释放', details: { code: error.code || 'DATABASE_ERROR' } }));
       try { active.lock.release(); } catch { /* Surface lock issues on the next operation. */ }
       new ProxyClaims(this.proxyClaims, state.runId, this.proxyService.usage).clear();
       const finalStatus = state.status;
@@ -3234,6 +3249,7 @@ class RunManager extends EventEmitter {
       requestedAt: new Date().toISOString(),
     };
     active.gate.request(action);
+    await active.sessionProxyRuntime?.interrupt();
     await saveV2StateWithRetry(active.stateFile, active.state);
     this.logStore.append(runId, { source: 'operator', type: `${action}_requested`, message: action === 'pause' ? '已请求安全暂停' : '已请求安全取消' });
     return this.get(runId);
@@ -3558,6 +3574,9 @@ class RunManager extends EventEmitter {
     const stateFile = this.findStateFile(runId);
     const state = loadV2State(stateFile);
     if (this.activeRun(runId)) throw new HttpError(409, 'Run is already active');
+    if (options.proxyAssignments && (state.runPlan?.proxyPolicy || options.proxyAssignments.some(p => p.kind === 'sessionProxy'))) {
+      throw new HttpError(409, '恢复任务必须保留原代理模式；独立会话将自动续用原会话或为原账号继续 OAuth', { code: 'SESSION_PROXY_CONFIG_INVALID' });
+    }
     const requestedJobIds = normalizeRequestedJobIds(
       options.jobIds !== undefined ? options.jobIds : options.jobId,
     );

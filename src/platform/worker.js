@@ -283,6 +283,8 @@ class OrderWorker {
     if (!claimed) return;
     const plan = {
       ...candidate.template,
+      ...(candidate.template.proxyPolicy ? { sessionProxyItem: { source: 'order', taskItemId: candidate.id,
+        orderId: candidate.order_id, userId: candidate.user_id, attemptSeq: Number(candidate.resource_replacements || 0) + 1 } } : {}),
       schemaVersion: 2,
       taskKind: stage === "oauth" ? "oauth" : "register_session",
       mailCount: 1,

@@ -134,10 +134,10 @@ const account = {
 const schemas = {
   RegistrationRegions: obj({
     default_region: str("省略下单地区参数时使用随机地区", { const: "random" }),
-    regions: { type: "array", description: "当前已配置且非空的国家池；只返回代码和名称，不包含代理资料", items: ref("RegistrationRegion") },
+    regions: { type: "array", description: "当前默认代理模式开放的注册地区；只返回代码和名称，不包含代理资料", items: ref("RegistrationRegion") },
   }),
   RegistrationRegion: obj({
-    code: str("注册地区代码；GLOBAL 表示供应商分配出口地区的全球池", { pattern: "^(GLOBAL|[A-Z]{2})$" }),
+    code: str("注册地区代码；国家池模式下 GLOBAL 为全球混合池；独立会话模式兼容 GLOBAL 输入并按订单冻结的开放地区随机", { pattern: "^(GLOBAL|[A-Z]{2})$" }),
     name: str("地区显示名称"),
   }),
   User: obj({
@@ -450,7 +450,7 @@ operation(
   "查询可选注册地区",
   "账户与服务",
   "",
-  "使用现有 Bearer API Key，无需新增 scope。返回后台已配置且非空的国家代理池代码和名称，不返回地址、密钥或库存。random 始终是下单默认值，GLOBAL 仅在配置了全球池时返回；全球池的出口地区由供应商决定。无国家池时 regions=[]，默认随机仍沿用系统固定代理回退。读取配置失败返回503。",
+  "使用现有 Bearer API Key，无需新增 scope。返回当前默认代理模式开放的国家代码和名称，不返回地址、密钥或库存。国家池模式保持原行为；独立会话模式返回管理员开放的注册地区，不要求提前拉取代理。省略地区或 random 始终默认随机；独立会话模式兼容 GLOBAL 输入并按 random 处理。切换模式及修改地区只影响新订单，已接受订单保持原快照；同幂等键重试返回原订单。读取配置失败返回503。",
   { result: ref("RegistrationRegions"), example: { default_region: "random", regions: [{ code: "CL", name: "智利" }, { code: "JP", name: "日本" }, { code: "PH", name: "菲律宾" }] } },
 );
 operation(
@@ -489,7 +489,7 @@ operation(
             ...bool("true 包含完整 OAuth 数据；false 交付邮箱、密码和 2FA"),
             default: false,
           },
-          registration_region: str("可选：省略或 random 都默认随机，每个账号独立从有空闲容量的国家池等概率选择。也可传地区查询接口返回的 code（如 JP），本单注册及补 OAuth 均使用该国家池，不自动切换至其他地区。未知或空池地区返回400且不扣积分；下单后池不可用按原任务重试/退款规则处理。重试必须保留相同地区。", { default: "random", pattern: "^(random|GLOBAL|[A-Z]{2})$" }),
+          registration_region: str("可选：省略或 random 默认随机，或传地区查询接口返回的 code（如 JP）。国家池模式沿用原有分配；独立会话模式按每个注册尝试首次分配时从订单冻结候选集中等概率选择，普通重试与换短信不重新随机，GLOBAL 兼容为 random。无需用户选择供应商或配置代理。等待代理资源不计注册失败次数，但仍有原订单超时上限，未交付部分按规则退款。幂等重试必须保留原参数。", { default: "random", pattern: "^(random|GLOBAL|[A-Z]{2})$" }),
         },
         ["quantity"],
         { additionalProperties: false },

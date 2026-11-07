@@ -29,7 +29,8 @@ async function main() {
     "Another registration worker owns the queue",
     503,
   );
-  const app = buildApp({ cwd, configPath, deferBootMaintenance: true });
+  const sessionProxy = await require('../src/platform/session-proxy-service').createSessionProxy(db, crypt, 'worker');
+  const app = buildApp({ cwd, configPath, deferBootMaintenance: true, sessionProxy });
   app.addHook("onRequest", async (r, reply) => {
     if (r.url === "/healthz" && r.method === "GET") return;
     if (r.headers.authorization !== `Bearer ${secrets.internal}`)
@@ -62,6 +63,7 @@ async function main() {
     await queue.pending;
     await app.close();
     await queue.close();
+    await sessionProxy.close();
     await db.close();
     process.exit(0);
   };

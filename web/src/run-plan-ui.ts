@@ -49,6 +49,7 @@ export function maintenanceProxyAssignments(workerConcurrency: number): ProxyAss
 }
 
 export function resizeProxyAssignments(current: ProxyAssignment[], workerConcurrency: number, catalog?: ProxyCatalogSnapshot) {
+  if (current.length && current.every(p => p.kind === 'sessionProxy')) return Array.from({ length: workerConcurrency }, (_, i) => ({ workerSlot: i + 1, kind: 'sessionProxy' as const }));
   const retained = current.filter((assignment) => assignment.workerSlot <= workerConcurrency);
   const defaults = defaultProxyAssignments(workerConcurrency, catalog);
   // A new slot copies the pool the operator already chose for the others. The
@@ -114,6 +115,7 @@ export function balancedPoolAssignments(workerConcurrency: number, catalog?: Pro
 }
 
 export function proxyAssignmentsAreReady(assignments: ProxyAssignment[], catalog?: ProxyCatalogSnapshot) {
+  if (assignments.length && assignments.every(p => p.kind === 'sessionProxy')) return true;
   if (!assignments.length || !catalog) return false;
   const localIds = new Set((catalog.local?.proxies || catalog.proxies || []).map((proxy) => proxy.id));
   const selectedLocalIds = new Set(assignments.flatMap((assignment) => assignment.kind === 'local' ? [assignment.localProxyId] : []));
@@ -143,6 +145,7 @@ export function proxyAssignmentsAreReady(assignments: ProxyAssignment[], catalog
       // The forwarder is configured server-side, so there is nothing in the
       // catalog to check and a maintenance lane is always ready.
       if (assignment.kind === 'maintenance') return true;
+      if (assignment.kind === 'sessionProxy') return false;
       return assignment.kind === 'local'
         ? localIds.has(assignment.localProxyId)
         : Number(poolCapacity.get(assignment.countryCode) || 0) >= Number(poolDemand.get(assignment.countryCode) || 0);

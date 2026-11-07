@@ -4,7 +4,7 @@ import { PlatformConfigPage } from './PlatformConfigPage';
 import { DeviceFingerprintsPage } from './DeviceFingerprintsPage';
 import { OAuthProxyDialog } from './OAuthProxyDialog';
 import { SmsSettingsDialog } from './SmsSettingsDialog';
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, lazy, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
@@ -103,10 +103,14 @@ import { Link, NavLink, useNavigate, useParams, useRouter } from './router';
 import { ChainsPage } from './ChainsPage';
 import { CPA_PUSH_GROUP, SESSION_CHECK_GROUP, localActivity, pageResults, useLocalActivity, usePageResult } from './local-activity';
 import { RobotsPage, durationLabel } from './RobotsPage';
-import { SessionAssetsPage } from './SessionAssetsPage';
+const SessionAssetsPage = lazy(() => import('./SessionAssetsPage').then(m => ({ default: m.SessionAssetsPage })));
 import { RebindPage } from './RebindPage';
 import { SmsbowerMailConfig } from './SmsbowerMailConfig';
 import { IPRoyalFields, iproyalSettingsReady } from './IPRoyalFields';
+const ProxyWorkspace = lazy(() => import('./AdminSessionProxy').then(m => ({ default: m.ProxyWorkspace })));
+const SessionProxyRegions = lazy(() => import('./AdminSessionProxy').then(m => ({ default: m.SessionProxyRegions })));
+const SessionProxySessions = lazy(() => import('./AdminSessionProxy').then(m => ({ default: m.SessionProxySessions })));
+import { useSessionProxySettings } from './session-proxy-api';
 import type { IPRoyalSettings } from './types';
 import type { OAuthSkippedCounts, BalanceReconciliation, CpaArtifact, CpaArtifactSelectionItem, CpaCredentialPreflight, CpaExportSelection, JobSummary, LogRecord, MailRentalConfigureBody, MailcomAliasDomains, MailcomImportProgress, NvtokensPushResult, PreflightSnapshot, ProxyAssignment, ProxyCatalogSnapshot, ProxyRecord, RegistrationOutcomeCounts, RegistrationSkippedCounts, RobotRun, RunListSnapshot, RunPlan, RunSummary, ServiceStatus, SessionAssetResolveMatch, TaskCapacitySnapshot, TaskSlotCapacity, SettableSessionAssetLifecycle, Sub2ApiFailedAccounts } from './types';
 
@@ -118,6 +122,8 @@ const navItems = [
   { to: '/robots', label: '机器人', icon: Bot },
   { to: '/chains', label: '提链', icon: Link2 },
   { to: '/proxies', label: '代理', icon: Network },
+  { to: '/proxies/regions', label: '注册地区', icon: Network },
+  { to: '/proxies/sessions', label: '代理会话', icon: Network },
   { to: '/history', label: '历史与产物', icon: History },
   { to: '/platform-config', label: '平台配置', icon: Settings2 },
   { to: '/device-fingerprints', label: '设备指纹', icon: Fingerprint },
@@ -1935,6 +1941,9 @@ function DashboardPage() {
     refetchInterval: 15_000,
   });
   const proxyCatalog = useQuery({ queryKey: ['proxies'], queryFn: endpoints.proxies });
+  const sessionProxySettings = useSessionProxySettings();
+  const usingSessionProxy = (plan.proxyMode || sessionProxySettings.data?.defaultMode) === 'sessionProxy';
+  const usingLocalProxy = (plan.proxyMode || sessionProxySettings.data?.defaultMode) === 'local';
   const sourceCount = plan.oauthSource?.kind === 'credentials'
       ? plan.oauthSource.accounts.length
       : plan.oauthSource?.kind === 'session_assets'
@@ -1946,12 +1955,14 @@ function DashboardPage() {
   // twice a second from the run poll. `preflightQueryKey` also stringifies the
   // whole plan, which React Query then hashes again on each render.
   const proxyAssignmentsReady = useMemo(
-    () => proxyAssignmentsAreReady(plan.proxyAssignments, proxyCatalog.data),
-    [plan.proxyAssignments, proxyCatalog.data],
+    () => usingSessionProxy ? Boolean(sessionProxySettings.data?.ready && sessionProxySettings.data?.enabled && sessionProxySettings.data?.country_count)
+      : usingLocalProxy ? (proxyCatalog.data?.local?.proxies.length || 0) >= plan.workerConcurrency
+        : proxyAssignmentsAreReady(plan.proxyAssignments, proxyCatalog.data),
+    [plan.proxyAssignments, plan.workerConcurrency, proxyCatalog.data, usingSessionProxy, usingLocalProxy, sessionProxySettings.data],
   );
   const resourcesQueryKey = useMemo(() => preflightQueryKey(plan), [plan]);
   const resources = useQuery({
-    queryKey: resourcesQueryKey,
+    queryKey: [...resourcesQueryKey, sessionProxySettings.data?.revision],
     queryFn: () => endpoints.preflight(plan),
     enabled: planInitialized.current && Boolean(config.data && proxyCatalog.data) && sourceReady && proxyAssignmentsReady,
     refetchInterval: String(plan.mailProvider || '').toLowerCase() === 'smsbower' ? 20_000 : 60_000,
@@ -2363,12 +2374,12 @@ function DashboardPage() {
       && Number.isInteger(plan.aliasMaxAttempts) && plan.aliasMaxAttempts >= plan.aliasCount && plan.aliasMaxAttempts <= 8
     ))
     && Boolean(plan.aliasRunTag.trim())
-    && plan.proxyAssignments.length === plan.workerConcurrency
+    && (usingSessionProxy || usingLocalProxy || (plan.proxyAssignments.length === plan.workerConcurrency
     && new Set(plan.proxyAssignments.map((assignment) => assignment.workerSlot)).size === plan.workerConcurrency
     && (() => {
       const localIds = plan.proxyAssignments.flatMap((assignment) => assignment.kind === 'local' ? [assignment.localProxyId] : []);
       return new Set(localIds).size === localIds.length;
-    })()
+    })()))
     && proxyAssignmentsReady
     && (!mailRentalWatch || (
       plan.mailRentalTarget === plan.mailCount
@@ -2699,6 +2710,8 @@ function DashboardPage() {
               </div>
               <div className="task-proxy-column">
             <div className="worker-proxy-plan">
+              <div className="worker-proxy-bulk"><span>本次任务代理模式</span><AppSelect ariaLabel="本次任务代理模式" value={plan.proxyMode || 'default'} onValueChange={value => setPlan(p => ({ ...p, proxyMode: value === 'default' ? undefined : value }))} options={[{ value: 'default', label: '跟随平台默认' }, { value: 'countryPool', label: '国家代理池' }, { value: 'local', label: '本地代理' }, { value: 'sessionProxy', label: '独立会话代理' }]} /></div>
+              {usingSessionProxy ? <Notice>使用独立会话代理：每个账号执行时分配会话，默认随机注册地区。共享容量 {sessionProxySettings.data?.maxParallel || 0}，无需预先拉取代理。{!proxyAssignmentsReady && '请先在代理页面配置并开放注册地区。'}</Notice> : usingLocalProxy ? <Notice>按本地代理列表顺序为每个 Worker 分配一条代理。{!proxyAssignmentsReady && '本地代理数量不足，请补充代理或降低并发。'}</Notice> : <>
               <div className="section-heading"><div><h2>Worker 代理</h2><p>本地端口固定绑定；国家池在启动前随机检测</p></div><div className="worker-proxy-heading-actions">
                 <IconButton label={pullAllProxies.pending ? '正在刷新全部国家池' : '立即刷新全部国家池'} onClick={() => pullAllProxies.trigger.mutate()} disabled={pullAllProxies.pending}>{pullAllProxies.pending ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}</IconButton>
                 <IconLink to="/proxies" label="管理代理"><Network size={16} /></IconLink>
@@ -2738,6 +2751,7 @@ function DashboardPage() {
               </div>
               {!hasAnyProxyResources && <Notice tone="warning">没有可分配代理，请先进入代理页导入本地端口或拉取国家池。</Notice>}
                {hasAnyProxyResources && !proxyAssignmentsReady && <Notice tone="warning">Worker 代理分配无效。固定本地端口会优先保留，请检查已选国家池或试用池的剩余容量和重复地址。</Notice>}
+              </>}
              </div>
               </div>
               </div>
@@ -5845,7 +5859,7 @@ export default function App() {
       navigate('/', { replace: true });
       return;
     }
-    const known = path === '/' || path === '/run' || /^\/run\/[^/]+$/.test(path) || ['/sessions', '/rebind', '/robots', '/chains', '/proxies', '/history', '/platform-config', '/device-fingerprints'].includes(path);
+    const known = path === '/' || path === '/run' || /^\/run\/[^/]+$/.test(path) || ['/sessions', '/rebind', '/robots', '/chains', '/proxies', '/proxies/regions', '/proxies/sessions', '/history', '/platform-config', '/device-fingerprints'].includes(path);
     if (!known) navigate('/', { replace: true });
   }, [path, navigate]);
   let page: ReactNode = <DashboardPage />;
@@ -5854,9 +5868,11 @@ export default function App() {
   else if (path === '/rebind') page = <RebindPage />;
   else if (path === '/robots') page = <RobotsPage />;
   else if (path === '/chains') page = <ChainsPage />;
-  else if (path === '/proxies') page = <ProxyPage />;
+  else if (path === '/proxies') page = <ProxyWorkspace><ProxyPage /></ProxyWorkspace>;
+  else if (path === '/proxies/regions') page = <SessionProxyRegions />;
+  else if (path === '/proxies/sessions') page = <SessionProxySessions />;
   else if (path === '/history') page = <HistoryPage />;
   else if (path === '/platform-config') page = <PlatformConfigPage />;
   else if (path === '/device-fingerprints') page = <DeviceFingerprintsPage />;
-  return <AppLayout>{page}</AppLayout>;
+  return <AppLayout><Suspense fallback={<Notice>正在加载页面…</Notice>}>{page}</Suspense></AppLayout>;
 }

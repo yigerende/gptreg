@@ -786,6 +786,7 @@ export function SessionAssetsPage() {
       aliasRunTag: String(config.data?.config.aliases?.runTag || 'gptre'),
       totalAccounts: count,
       proxyAssignments: chosenProxies.slice(0, concurrency),
+      proxyMode: chosenProxies.some(p => p.kind === 'sessionProxy') ? 'sessionProxy' : 'countryPool',
       oauthSource: { kind: 'session_assets', assetIds: ids },
       postRegistrationOAuth: false,
       security: { setPassword: false, enrollTotp: false },

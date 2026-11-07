@@ -24,7 +24,7 @@ function defaultOAuthAssignments(count, catalog = {}, { random = Math.random, cl
 
 function assertOAuthProxySelection(plan) {
   if (plan.taskKind !== 'oauth') return;
-  if (!plan.proxyAssignments?.length || plan.proxyAssignments.some((p) => !['local', 'countryPool'].includes(p.kind))) {
+  if (!plan.proxyAssignments?.length || plan.proxyAssignments.some((p) => !['local', 'countryPool', 'sessionProxy'].includes(p.kind))) {
     const error = new Error('请为独立 OAuth 选择国家池或固定代理；旧本机转发任务需要重新选择代理');
     error.code = 'OAUTH_PROXY_SELECTION_REQUIRED';
     throw error;

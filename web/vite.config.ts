@@ -22,7 +22,10 @@ export default defineConfig(({ mode }) => {
       sourcemap: false,
       rollupOptions: {
         output: {
-          chunkFileNames: (chunk) => /^Admin/.test(chunk.name)
+          codeSplitting: { includeDependenciesRecursively: false, groups: [
+            { name: 'AdminSessionProxyApi', test: /[/\\]src[/\\]session-proxy-api\.ts$/ },
+          ] },
+          chunkFileNames: (chunk) => /^(Admin|SessionAssetsPage)/.test(chunk.name)
             ? 'admin-assets/[name]-[hash].js'
             : 'assets/[name]-[hash].js',
         },

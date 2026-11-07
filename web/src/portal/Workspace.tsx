@@ -14,6 +14,7 @@ import ServiceFeatures from "./ServiceFeatures";
 import { useOrderSubmission } from "./orderSubmission";
 import { registrationRegionName } from "./registrationRegion";
 const AdminOrderActions = lazy(() => import("./AdminOrderActions"));
+const AdminOrderProxySessions = lazy(() => import('../AdminSessionProxy').then(m => ({ default: m.SessionProxySessions })));
 export function Modal({
   title,
   onClose,
@@ -144,6 +145,7 @@ export function OrderDetail({
   const a = useAction();
   return (
     <Modal title="订单详情" onClose={onClose}>
+      {admin && <details><summary>独立代理会话与注册地区</summary><Suspense fallback={<p>加载代理记录…</p>}><AdminOrderProxySessions orderId={id} /></Suspense></details>}
       <button className="p-button secondary" onClick={() => refetch()}>
         刷新订单
       </button>

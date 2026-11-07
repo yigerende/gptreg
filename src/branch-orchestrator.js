@@ -618,6 +618,7 @@ function mailboxForEmail(accounts, email, preferredId = '') {
 }
 
 function event(state, type, details = {}, context = {}) {
+  if (state.runPlan?.proxyPolicy) details = require('./platform/session-proxy-runtime').redact(details);
   const record = { at: nowIso(context), type, ...details };
   state.events.push(record);
   // Every checkpoint serializes the whole state, so an append-only event log
@@ -994,6 +995,7 @@ async function authenticatedMailboxClient(config, options = {}) {
  * on accounts, which is worth saying before the launch rather than after.
  */
 function proxyPreflight(config, plan, proxyEntries) {
+  if (plan.proxyPolicy?.mode === 'sessionProxy') return { required: true, requiredCount: plan.workerConcurrency, available: plan.workerConcurrency, leanestLane: 1, expectedYield: plan.workerConcurrency, thin: false, ready: !!plan.proxyPolicy.configVersion, mode: 'sessionProxy' };
   const required = Boolean(config.proxyPool.required);
   const requiredCount = required ? plan.workerConcurrency : 0;
   const entries = proxyEntries || [];
@@ -4663,6 +4665,7 @@ async function refreshProxyEntriesForWaitingWorker(job, worker, context) {
  * safely replay.
  */
 async function rotateJobProxyForRecovery(job, worker, context) {
+  if (context.plan?.proxyPolicy?.mode === 'sessionProxy') return false;
   // A created account has a portable callback checkpoint. Keep the current
   // exit for its two callback retries; this function is the generic one-shot
   // transport fallback and would rotate too early.
@@ -4702,6 +4705,10 @@ async function rotateJobProxyForRecovery(job, worker, context) {
  * next candidate is tried in the same bind operation.
  */
 async function bindWorkerProxy(worker, context) {
+  if (context.plan?.proxyPolicy?.mode === 'sessionProxy') {
+    if (!context.sessionProxyRuntime) throw Object.assign(new Error('独立会话执行器未配置'), { code: 'SESSION_PROXY_CONFIG_INVALID' });
+    return context.sessionProxyRuntime.bind(worker, context.state.jobs.find(j => j.id === worker.currentJobId), context);
+  }
   if (worker.proxy?.url) {
     const health = context.state.proxyHealth[worker.proxyId] || {};
     if (proxyRetiredForRun(health, worker.proxy, context)) {
@@ -5472,6 +5479,7 @@ function cloudflareChallengeHandler(job, worker, context) {
 
 function runnerOptions(job, worker, context) {
   return {
+    ...(context.sessionProxyExecutor ? { executor: context.sessionProxyExecutor } : {}),
     proxy: worker.proxy?.url || '',
     signal: context.signal(),
     dynamicSentinel: context.config.registration.dynamicSentinel,
@@ -6074,6 +6082,7 @@ function assetPayload(job, state, context, sourceKind) {
  * the same place instead of guessing.
  */
 function registrationExitRecord(proxy) {
+  if (proxy?.resourceKind === 'sessionProxy') return { id: proxy.id, countryCode: proxy.countryCode, protocol: proxy.protocol, resourceKind: 'sessionProxy', bindingId: proxy.bindingId };
   if (!proxy?.url) return null;
   let endpoint = '';
   try {
@@ -6100,7 +6109,7 @@ async function tagSessionAssetTrial(asset, job, context) {
     // The promo endpoint is asked from the exit the account was just built on.
     // A different IP right after registration is the one thing this call can
     // control, and it is cheap to get right while the lease is still held.
-    const result = await checker(asset, { proxy: String(job.proxy?.url || '') });
+    const result = await checker(asset, { proxy: String(job.proxy?.url || ''), ...(context.sessionProxyExecutor ? { executor: context.sessionProxyExecutor, signal: context.signal() } : {}) });
     trial = trialRecord(result, {
       checkedAt: String(result.checkedAt || nowIso(context)),
       latencyMs: Number(result.latencyMs || 0),
@@ -7679,7 +7688,7 @@ async function establishSession(job, worker, context, options = {}) {
       && job.proxy?.url && job.registrationProxy?.url !== job.proxy.url) {
     // A custom runner owns its transport; it must supply a probe executor too.
     // This keeps simulations/offline runners from making a hidden network call.
-    const probe = context.registrationProxyProbeExecutor || (context.sessionRunnerFactory ? null : executePureHttpUrl);
+    const probe = context.registrationProxyProbeExecutor || (context.sessionRunnerFactory ? null : context.sessionProxyExecutor || executePureHttpUrl);
     job.registrationProxy = {
       ...registrationExitRecord(job.proxy),
       ...(probe ? await probeRegistrationExit(job.proxy, { executor: probe, signal: context.signal(), now: () => nowIso(context) })
@@ -7825,6 +7834,7 @@ async function establishSession(job, worker, context, options = {}) {
     }
     job.assetId = asset.id;
     job.sessionAssetId = asset.id;
+    if (context.sessionProxyRuntime?.enabled) await context.sessionProxyRuntime.check(job);
     if (state.accountCreated && !job.accountCreatedAt) job.accountCreatedAt = nowIso(context);
     job.sessionState = state;
     return asset;
@@ -8487,6 +8497,7 @@ async function runOAuthAuthorization(job, worker, context, asset, source) {
   job.oauthState = job.oauthState || oauthStateFromAsset(asset);
   await restartExpiredOAuthAfterInventoryWait(job, asset, context);
   const optionsForRunner = {
+    ...(context.sessionProxyExecutor ? { executor: context.sessionProxyExecutor } : {}),
     proxy: worker.proxy?.url || '',
     signal: context.signal(),
     dynamicSentinel: context.config.registration.dynamicSentinel,
@@ -8706,6 +8717,7 @@ async function scheduleSecurityRetry(job, worker, context) {
 }
 
 function scheduleSecurityProxyRotation(job, worker, context) {
+  if (context.plan?.proxyPolicy?.mode === 'sessionProxy') return false;
   if (!job?.sessionState || !['register_session', 'session_refresh'].includes(context.state.taskKind)) return false;
   const failures = job.sessionState.security?.failures || [];
   const failure = [...failures].reverse().find((candidate) => retryablePersistedSecurityFailure(candidate));
@@ -9004,6 +9016,7 @@ async function bindJobWorkerAffinity(job, worker, context) {
     updatedAt: at,
   };
   job.proxy = clone(worker.proxy);
+  if (worker.proxy?.resourceKind === 'sessionProxy') Object.defineProperty(job.proxy, 'url', { value: worker.proxy.url, enumerable: false, configurable: true });
   job.proxyId = currentProxyId;
   if (callbackPending) {
     const recovery = ensureAuthCallbackProxyRecovery(job);
@@ -9033,6 +9046,7 @@ function retryDelayMs(policy, attempt, context) {
 
 /** Drop the bound exit so the next bind takes a fresh one. */
 function unbindWorkerProxy(worker, job, context, options = {}) {
+  if (context.plan?.proxyPolicy?.mode === 'sessionProxy') return String(worker?.proxyId || job.proxyId || '');
   const proxyId = String(worker?.proxyId || job.proxyId || '');
   if (!proxyId) return '';
   const maintenance = boundMaintenanceProxy(job, worker, context)
@@ -9089,6 +9103,7 @@ function unbindWorkerProxy(worker, job, context, options = {}) {
  * the passwordless login path instead of creating a duplicate.
  */
 async function restartRegistrationOnFreshExit(job, worker, context) {
+  if (context.plan?.proxyPolicy?.mode === 'sessionProxy') return false;
   if (jobHasSmsContinuity(job) && !await cleanupSms(job, context, 'proxy_restart')) return false;
   const callbackPending = createdAccountCallbackPending(job);
   const callbackRecovery = callbackPending ? ensureAuthCallbackProxyRecovery(job) : null;
@@ -9968,6 +9983,7 @@ async function runJob(job, worker, context) {
     if (context.state.taskKind === 'register_session') await runRegistrationSessionJob(job, worker, context);
     else if (context.state.taskKind === 'session_refresh') await runRefreshJob(job, worker, context);
     else await runOAuthJob(job, worker, context);
+    if (context.sessionProxyRuntime?.enabled) await context.sessionProxyRuntime.check(job);
     if (preserveRentalStartTimeout(job, context)) return;
     await finalizeRemoteMailbox(job, context);
     if (job.status === 'partial') {
@@ -9991,7 +10007,10 @@ async function runJob(job, worker, context) {
     compactCompletedJob(job);
   } catch (error) {
     const rentalTimeout = rentalStartTimeoutRecord(job, context);
-    if (rentalTimeout) {
+    if (String(error.code || '').startsWith('SESSION_PROXY_')) {
+      job.status = 'failed'; job.phase = 'failed';
+      job.error = { code: error.code, message: error.message };
+    } else if (rentalTimeout) {
       preserveRentalStartTimeout(job, context, rentalTimeout);
     } else if (context.action()) {
       job.status = 'queued';
@@ -10435,6 +10454,7 @@ async function runJob(job, worker, context) {
       }
     }
   } finally {
+    await context.sessionProxyRuntime?.finish(job);
     // One exit per *account*. The operator chose this over sharing one exit
     // across a root and its `+alias`: the next account, even on the same
     // mailbox, must not be seen from the address the finished one used. The
@@ -10513,6 +10533,15 @@ async function recordProxyBindFailure(job, worker, error, context) {
   if (context.action()) return;
   const callbackPending = createdAccountCallbackPending(job);
   job.error = { code: error.code || 'PROXY_BIND_FAILED', message: error.message };
+  if (['SESSION_PROXY_CAPACITY', 'SESSION_PROXY_BUSY'].includes(error.code)) {
+    job.sessionProxyWaitStartedAt ||= nowIso(context);
+    if (nowMs(context) - Date.parse(job.sessionProxyWaitStartedAt) < Number(context.plan.proxyPolicy?.timeoutMinutes || 20) * 60000) {
+      job.status = 'waiting'; job.phase = 'waiting_session_proxy';
+      job.nextRunAt = new Date(nowMs(context) + 5000).toISOString();
+    } else { job.status = 'failed'; job.phase = 'failed'; job.error = { code: 'SESSION_PROXY_EXPIRED', message: '代理资源等待超时' }; }
+    await context.checkpoint('session_proxy_wait');
+    return;
+  }
   const recoveryExhausted = !callbackPending && job.proxyTransportRecovery?.attempted === true
     && ['PROXY_POOL_EXHAUSTED', 'HEALTHY_PROXY_REQUIRED', 'PROXY_BIND_FAILED'].includes(String(error.code || ''));
   if (recoveryExhausted) {
@@ -10586,6 +10615,7 @@ async function recordProxyBindFailure(job, worker, error, context) {
  * SMS numbers), so holding costs nothing a released Worker would have earned.
  */
 const LANE_HOLDING_WAIT_PHASES = new Set([
+  'waiting_session_proxy',
   SMS_INVENTORY_RETRY_PHASE,
   SMS_INVENTORY_EXHAUSTED_PHASE,
   PROXY_RETRY_PHASE,
@@ -12551,13 +12581,14 @@ async function runBranchOrchestrator(har, state, config, options = {}) {
       worker.currentJobId = job.id;
       worker.mailboxId = job.mailboxId;
       worker.updatedAt = nowIso(context);
-      const settled = bindWorkerProxy(worker, context).then(
+      const jobContext = context.sessionProxyRuntime?.context(job, context) || context;
+      const settled = bindWorkerProxy(worker, jobContext).then(
         // Tracked individually rather than awaited as a batch: the moment any
         // one of these finishes its Worker has to be able to pick up queued work.
-        () => runJob(job, worker, context).catch(() => { /* runJob records every outcome on the job itself. */ }),
+        () => runJob(job, worker, jobContext).catch(() => { /* runJob records every outcome on the job itself. */ }),
         // Two-argument `then` on purpose: only a bind rejection lands here, so a
         // failure thrown by the job itself is never mistaken for a proxy fault.
-        (error) => recordProxyBindFailure(job, worker, error, context),
+        async (error) => { await recordProxyBindFailure(job, worker, error, jobContext); await context.sessionProxyRuntime?.finish(job); },
       ).finally(() => inflight.delete(job.id));
       inflight.set(job.id, settled);
     }
