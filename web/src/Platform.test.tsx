@@ -79,6 +79,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("portal refresh behavior", () => {
+  it('redirects visitors to login with the original destination', async () => {
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    window.history.replaceState({}, '', '/admin/engine/proxies?country=JP');
+    mockFetch(null);mount();
+    await screen.findByLabelText('登录账号');
+    expect(location.pathname).toBe('/login');
+    expect(new URLSearchParams(location.search).get('next')).toBe('/admin/engine/proxies?country=JP');
+  });
+  it('unmounts the workspace after an authenticated request reports session expiry', async () => {
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    window.history.replaceState({}, '', '/orders');
+    mockFetch(member);mount();
+    await screen.findByRole('button', { name: '退出登录' });
+    act(() => window.dispatchEvent(new Event('gptreg:session-expired')));
+    await screen.findByLabelText('登录账号');
+    expect(location.pathname).toBe('/login');
+    expect(screen.queryByRole('button', { name: '退出登录' })).toBeNull();
+  });
   it("uses server navigation even for administrators in the customer workspace", async () => {
     window.history.replaceState({}, "", "/");
     mockFetch({...member,role:"admin",navigation:member.navigation.filter(path=>path!=="/partners")});

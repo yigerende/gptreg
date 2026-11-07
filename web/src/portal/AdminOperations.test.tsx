@@ -18,12 +18,13 @@ it.each([true,false])('admin credentials display complete AT Session RT and devi
   const token='full-session-'+'x'.repeat(12000);
   vi.spyOn(client,'call').mockImplementation(async path=>{
     if(path.endsWith('/credentials'))return {email:'one@gmail.com',password:'test',totp_secret:'TEST_2FA',totp_code:'123456',access_token:'WEB_AT',session_token:token,oauth:hasOAuth?{access_token:'OAUTH_AT',refresh_token:'FULL_RT'}:undefined,delivery:{id:'a',order_id:'one',owner_email:'owner@example.test'}};
-    if(path.endsWith('/device-fingerprint'))return {device_fingerprint:{fingerprint:'ADMIN_FP',profile:{}}};
+    if(path.endsWith('/device-fingerprint'))return {device_fingerprint:{fingerprint:'ADMIN_FP',exitIp:'203.0.113.8',profile:{}}};
     return {total:1,items:[{id:'a',email:'one@gmail.com',order_id:'one'}]};
   });
   mount(<AdminAccounts rows={[group('one')]} onOrder={()=>{}}/>);
   fireEvent.click(screen.getByRole('button',{name:/订单 one/}));await screen.findByText('one@gmail.com');
   fireEvent.click(screen.getByRole('button',{name:'查看设备指纹'}));expect(await screen.findByDisplayValue('ADMIN_FP')).toBeVisible();
+  expect(screen.getByRole('textbox',{name:'注册代理出口 IP'})).toHaveValue('203.0.113.8');
   fireEvent.click(screen.getByRole('button',{name:'关闭'}));
   fireEvent.click(screen.getByRole('button',{name:'查看凭据'}));
   expect(await screen.findByDisplayValue(token)).toHaveValue(token);

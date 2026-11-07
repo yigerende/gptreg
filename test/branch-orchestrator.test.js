@@ -7975,6 +7975,10 @@ test('the login state records which pool and exit registered it, and the promo c
 
   await runBranchOrchestrator({ log: { entries: [] } }, state, config, {
     assetStore: store,
+    registrationProxyProbeExecutor: async (_request, options) => {
+      assert.equal(options.proxy, 'socks5://user:secret@162.128.157.89:7279');
+      return { response: { status: 200, text: '{"ip":"203.0.113.42"}' } };
+    },
     mailClient: mailboxClient([{ id: 'mail-exit', email: 'exit@example.test', tokenValid: true, bound: false }]),
     proxyEntries: [{
       id: 'proxy-gb-1',
@@ -7999,6 +8003,8 @@ test('the login state records which pool and exit registered it, and the promo c
 
   assert.equal(state.status, 'complete');
   const stored = store.get(store.list()[0].id);
+  assert.equal(stored.sourceProxy.exitIp, '203.0.113.42');
+  assert.ok(stored.registeredAt);
   assert.equal(stored.sourceProxy.countryCode, 'GB');
   assert.equal(stored.sourceProxy.endpoint, '162.128.157.89:7279');
   assert.equal(stored.sourceProxy.protocol, 'socks5');

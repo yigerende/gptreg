@@ -22,6 +22,21 @@ test('authentication credential races, mail eligibility and trusted proxy bounda
   const req=(method,url,payload,cookie,extra={})=>app.inject({method,url,payload,...extra,headers:{'x-requested-with':'gptreg',...(cookie?{cookie}:{}),...extra.headers}});
   const settings=async(p)=>db.query('UPDATE platform_settings SET value=$1 WHERE id=1',[{...await db.settings(),...p}]);
   const login=async(password)=>{const r=await req('POST','/api/auth/login',{email:'admin@example.test',password});assert.equal(r.statusCode,200,r.body);return r.headers['set-cookie'].split(';')[0]};
+  await t.test('browser pages redirect to login, API and private bundles remain 401', async () => {
+   for (const url of ['/admin','/admin/engine/proxies','/orders?status=running','/accounts','/?invite=friend']) {
+    const r=await req('GET',url,undefined,undefined,{headers:{accept:'text/html'}});
+    assert.equal(r.statusCode,302,r.body);
+    const destination=new URL(r.headers.location,'http://test');
+    assert.equal(destination.pathname,'/login');assert.equal(destination.searchParams.get('next'),url);
+    if(url.includes('invite='))assert.equal(destination.searchParams.get('invite'),'friend');
+   }
+   for(const url of ['/api/user/v1/me','/api/v1/proxies/inventory','/admin-assets/private.js']) {
+    const r=await req('GET',url,undefined,undefined,{headers:{accept:'text/html'}});
+    assert.equal(r.statusCode,401);assert.equal(r.headers.location,undefined);
+   }
+   const loginPage=await req('GET','/login',undefined,undefined,{headers:{accept:'text/html'}});
+   assert.notEqual(loginPage.statusCode,302);
+  });
   const send=async(email='admin@example.test',purpose='reset')=>{const r=await req('POST','/api/auth/email-code',{email,purpose});assert.equal(r.statusCode,200,r.body);return messages.at(-1).code};
   await settings({email_verify_enabled:true,smtp:{host:'fixture.invalid',from:'sender@example.test'}});
   await t.test('a verified old password cannot create a session after reset',async()=>{

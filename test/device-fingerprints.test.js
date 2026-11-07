@@ -18,7 +18,7 @@ test('device inventory paginates, counts archived duplicates globally and never 
     email: `account-${i}@example.test`, accountId: `account-${i}`,
     clientProfileFingerprint: i === 122 ? 'fingerprint-0' : `fingerprint-${i}`,
     oaiDid: i === 121 ? 'device-2' : i === 10 ? '' : `device-${i}`,
-    sourceProxy: { id: `proxy-${i}`, countryCode: 'PH', url: 'http://secret-user:secret-password@proxy.invalid:8080' },
+    sourceProxy: { id: `proxy-${i}`, countryCode: 'PH', exitIp: i === 122 ? '203.0.113.10' : `203.0.113.${i + 10}`, url: 'http://secret-user:secret-password@proxy.invalid:8080' },
     clientProfile: { schemaVersion: 2, browser: 'firefox', browserVersion: '156.0', userAgent: 'fixture UA', screen: { width: 1920, height: 1080 }, viewport: null, password: 'profile-secret' },
     password: 'account-secret', totpSecret: 'totp-secret', accessToken: 'token-secret',
     cookieJar: { cookies: [{ key: 'secret-cookie', value: 'cookie-secret' }] },
@@ -42,6 +42,11 @@ test('device inventory paginates, counts archived duplicates globally and never 
   assert.equal(first.summary.uniqueDeviceIds, 121);
   assert.equal(first.summary.duplicateDeviceAccounts, 2);
   assert.equal(first.summary.missing, 1);
+  assert.equal(first.summary.duplicateExitIpAccounts, 2);
+  assert.equal(first.summary.uniqueExitIps, 122);
+  assert.equal((await get('match=exitIp&limit=1')).json().total, 2);
+  assert.equal((await get('q=203.0.113.10')).json().total, 2, 'exact IP must not match .100 through .109');
+
   const duplicates = (await get('match=fingerprint&limit=1')).json();
   assert.equal(duplicates.total, 2);
   assert.equal(duplicates.items[0].fingerprintAccounts, 2);
@@ -50,12 +55,17 @@ test('device inventory paginates, counts archived duplicates globally and never 
   assert.equal(archived.total, 1);
   assert.equal(archived.items[0].archived, true);
   assert.equal(archived.items[0].fingerprintAccounts, 2);
+  assert.equal(archived.items[0].exitIpAccounts, 2);
+  const proxyDetail = await app.inject(`/api/v1/device-fingerprints/${records[122].id}/proxy`);
+  assert.equal(proxyDetail.json().proxyUrl, 'http://secret-user:secret-password@proxy.invalid:8080');
+  assert.equal(proxyDetail.headers['cache-control'], 'no-store');
+  assert.equal((await app.inject('/api/v1/device-fingerprints/unknown/proxy')).statusCode, 404);
   assert.equal((await get('q=device-2&match=device')).json().total, 2);
   assert.equal((await get('match=missing')).json().items[0].email, 'account-10@example.test');
   const lastPage = (await get('offset=9999&limit=50')).json();
   assert.equal(lastPage.offset, 100); assert.equal(lastPage.items.length, 23);
   for (const query of ['limit=201', 'offset=-1', 'offset=NaN', 'match=unknown', `q=${'a'.repeat(257)}`]) assert.equal((await get(query)).statusCode, 400);
-  for (const secret of ['account-secret', 'totp-secret', 'token-secret', 'cookie-secret', 'secret-password', 'profile-secret', 'proxy.invalid']) assert.ok(!firstResponse.body.includes(secret), secret);
+  for (const secret of ['account-secret', 'totp-secret', 'token-secret', 'cookie-secret', 'secret-password', 'profile-secret']) assert.ok(!firstResponse.body.includes(secret), secret);
   // An updated device must be reflected immediately; this inventory does not
   // persist another copy of the account or change its original fingerprint.
   store.update(records[121].id, { oaiDid: 'new-device-121' });

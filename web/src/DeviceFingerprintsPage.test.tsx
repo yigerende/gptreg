@@ -80,3 +80,23 @@ it('shows request failures with a manual retry', async () => {
   fireEvent.click(screen.getByRole('button', { name: '刷新' }));
   expect(await screen.findByText('没有匹配的账号')).toBeInTheDocument();
 });
+
+
+it('displays and filters duplicate exit IPs independently and loads original proxy only on expansion', async () => {
+  const calls: URL[] = [];
+  vi.stubGlobal('fetch', vi.fn(async input => {
+    const url = new URL(String(input), 'http://local'); calls.push(url);
+    return new Response(JSON.stringify(url.pathname.endsWith('/proxy') ? { proxyUrl: 'socks5://fixture:secret@entry.test:9000' }
+      : { items: [{...item(), registeredAt: '2026-11-07T00:00:00Z', fingerprintAccounts: 1, exitIp: '203.0.113.7', exitIpAccounts: 2}], total: 1, offset: 0, limit: 50, summary: {...summary, uniqueExitIps: 1, duplicateExitIpAccounts: 2} }));
+  }));
+  show();
+  expect(await screen.findByText('203.0.113.7')).toBeInTheDocument();
+  expect(calls.some(url => url.pathname.endsWith('/proxy'))).toBe(false);
+  fireEvent.click(screen.getByRole('button', {name:'重复 · 2 个账号'}));
+  await waitFor(() => expect(calls.at(-1)?.searchParams.get('q')).toBe('203.0.113.7'));
+  fireEvent.change(screen.getByLabelText('设备记录筛选'), {target:{value:'exitIp'}});
+  await waitFor(() => expect(calls.at(-1)?.searchParams.get('match')).toBe('exitIp'));
+  await waitFor(() => expect(screen.getByRole('table').parentElement).toHaveAttribute('aria-busy', 'false'));
+  fireEvent.click(screen.getByRole('button', {name:/查看 account-0.*设备详情/}));
+  expect(await screen.findByText('socks5://fixture:secret@entry.test:9000')).toBeVisible();
+});

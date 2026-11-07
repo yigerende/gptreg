@@ -991,7 +991,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .session-list-refresh:hover:not(:disabled) { text-decoration: underline; }
 .session-list-refresh:disabled { color: var(--faint); cursor: default; }
 .session-list-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-.session-list-head, .session-list-row { min-width: 924px; display: grid; grid-template-columns: 28px minmax(185px, 1fr) 66px 62px 78px 78px 78px 102px 98px; align-items: center; gap: 7px; }
+.session-list-head, .session-list-row { min-width: 1074px; display: grid; grid-template-columns: 28px minmax(185px, 1fr) 66px 62px 78px 78px 78px 143px 102px 98px; align-items: center; gap: 7px; }
 .session-list-head { position: sticky; top: 0; z-index: 2; min-height: 33px; padding: 0 11px; border-bottom: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font-size: 9px; font-weight: 650; }
 .session-list-row { width: 100%; min-height: 58px; padding: 7px 11px; border: 0; border-bottom: 1px solid var(--border); background: var(--surface); cursor: pointer; text-align: left; touch-action: pan-y; transition: background 120ms ease, box-shadow 120ms ease; }
 /* Not `:last-child`: under virtualization that is whichever row the window
@@ -1030,6 +1030,10 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .session-account .session-row-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 7px; color: var(--info); font-family: inherit; }
 .session-account .session-source-exit { flex: 0 1 auto; max-width: 100%; min-width: 0; overflow: hidden; color: var(--faint); font: 9px/1.35 Consolas, "Cascadia Code", monospace; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .session-list-row time { color: var(--muted); font-size: 9px; }
+.session-registration { display: grid; gap: 5px; font-size: 10px; }
+.session-registration code { overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
+.session-registration-proxy { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.session-registration-proxy code { overflow-wrap: anywhere; }
 .session-row-action { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .session-row-action .icon-button { width: 28px; height: 28px; flex-basis: 28px; }
 .session-inspector { overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
@@ -1053,7 +1057,8 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   .session-list-body { min-width: 0; }
   .session-list-head, .session-list-row {
     min-width: 0;
-    grid-template-columns: 28px minmax(150px, 1fr) 54px 58px 68px 66px 58px 84px 84px;
+    grid-template-columns: 28px minmax(150px, 1fr) 54px 58px 68px 66px 58px 143px 102px 84px;
+    min-width: 1030px;
     gap: 5px;
   }
   .session-list-head, .session-list-row { padding-left: 8px; padding-right: 8px; }
@@ -1066,7 +1071,8 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
    in the queue and AT badges, rather than creating a second horizontal scroll. */
 @container session-list (max-width: 680px) {
   .session-list-head, .session-list-row {
-    grid-template-columns: 28px minmax(130px, 1fr) 48px 68px 58px 76px 84px;
+    grid-template-columns: 28px minmax(130px, 1fr) 48px 68px 58px 143px 102px 84px;
+    min-width: 840px;
     gap: 5px;
   }
   .session-list-head > :nth-child(4), .session-list-head > :nth-child(6),

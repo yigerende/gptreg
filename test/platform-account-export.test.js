@@ -82,7 +82,7 @@ test("delivery token backfill matches asset ownership, preserves existing encryp
   for(const [i,item] of items.entries()) {
     const creds={asset_id:'asset-'+i,email:`token-${i}@gmail.com`,password:'keep-password',totp_secret:'JBSWY3DPEHPK3PXP',...(i===0?{access_token:'keep-existing-at'}:{})};
     await orders.finish(item.id,creds);
-    assets.set(creds.asset_id,{id:creds.asset_id,email:i===1?'wrong-owner@gmail.com':creds.email,accessToken:'web-at-'+i,sessionToken:'FULL_SESSION_'+'x'.repeat(18000),password:creds.password,totpSecret:creds.totp_secret,security:{passwordStatus:'configured',totpStatus:'configured'},clientProfileFingerprint:'fingerprint-'+i,oaiDid:'device-'+i,sourceProxy:{countryCode:'PH',url:'http://proxy-secret@example.test'},clientProfile:{browser:'firefox',userAgent:'fixture UA',password:'profile-secret',hardwareConcurrency:8,screen:{width:1920,height:1080}}});
+    assets.set(creds.asset_id,{id:creds.asset_id,email:i===1?'wrong-owner@gmail.com':creds.email,accessToken:'web-at-'+i,sessionToken:'FULL_SESSION_'+'x'.repeat(18000),password:creds.password,totpSecret:creds.totp_secret,security:{passwordStatus:'configured',totpStatus:'configured'},clientProfileFingerprint:'fingerprint-'+i,oaiDid:'device-'+i,sourceProxy:{countryCode:'PH',exitIp:'203.0.113.8',exitIpCheckedAt:'2026-11-07T00:00:00Z',url:'http://proxy-secret@example.test'},clientProfile:{browser:'firefox',userAgent:'fixture UA',password:'profile-secret',hardwareConcurrency:8,screen:{width:1920,height:1080}}});
   }
   const manager={sessionAssets:()=>({get:assetId=>{if(assetId==='asset-2')throw new Error('pruned');return assets.get(assetId);}})};
   const before=await db.one('SELECT count(*)::int AS n FROM platform_ledger');
@@ -109,7 +109,7 @@ test("delivery token backfill matches asset ownership, preserves existing encryp
   assert.equal((await get(other)).statusCode,404);
   assert.equal((await get(user,true)).statusCode,403);
   const own=await get(user);assert.equal(own.statusCode,200,own.body);
-  assert.equal(own.json().device_fingerprint.deviceId,'device-0');assert.ok(own.json().download_expires_at);
+  assert.equal(own.json().device_fingerprint.exitIp,'203.0.113.8');assert.equal(own.json().device_fingerprint.exitIpAccounts,undefined);assert.equal(own.json().device_fingerprint.proxyAddress,undefined);assert.equal(own.json().device_fingerprint.deviceId,'device-0');assert.ok(own.json().download_expires_at);
   for(const secret of ['keep-password','FULL_SESSION','proxy-secret','profile-secret','web-at','other@example'])assert.ok(!own.body.includes(secret));
   assert.equal((await get(user,false,rows[1].id)).json().device_fingerprint,null);
   await db.query("UPDATE platform_accounts SET created_at=now()-interval '73 hours' WHERE id=$1",[rows[0].id]);

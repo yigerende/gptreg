@@ -4,6 +4,7 @@ export type DeviceFingerprint = {
   id: string; email: string; archived: boolean; lifecycle: string; status: string;
   createdAt: string; sourceRunId: string; countryCode: string;
   fingerprint: string; deviceId: string; fingerprintAccounts: number; deviceAccounts: number;
+  registeredAt?: string; exitIp?: string; exitIpCheckedAt?: string; exitIpAccounts?: number; proxyAddress?: string;
   profile: {
     schemaVersion: number | null; browser: string; browserVersion: string; userAgent: string;
     platform: string; oscpu: string; language: string; languages: string[];
@@ -13,12 +14,13 @@ export type DeviceFingerprint = {
     gpu: { vendor: string; renderer: string };
   };
 };
-export type DeviceFingerprintFilter = 'all' | 'fingerprint' | 'device' | 'missing';
+export type DeviceFingerprintFilter = 'all' | 'fingerprint' | 'device' | 'exitIp' | 'missing';
 export type DeviceFingerprintPage = PageInfo & {
   items: DeviceFingerprint[];
   summary: {
     total: number; uniqueFingerprints: number; uniqueDeviceIds: number;
     duplicateFingerprintGroups: number; duplicateFingerprintAccounts: number;
     duplicateDeviceAccounts: number; missing: number; unreadable: number;
+    uniqueExitIps?: number; duplicateExitIpAccounts?: number; missingExitIps?: number;
   };
 };

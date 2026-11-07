@@ -2,6 +2,7 @@
 
 const { pagination, pageRows } = require('./pagination');
 const { HttpError } = require('./utils');
+const { exitIp, registrationTime, proxyAddress } = require('../registration-network');
 
 const text = (value) => typeof value === 'string' ? value : '';
 const number = (value) => typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -21,6 +22,10 @@ function deviceRow(asset, archived) {
     createdAt: text(asset.createdAt), sourceRunId: text(asset.sourceRunId),
     fingerprint: text(asset.clientProfileFingerprint), deviceId: text(asset.oaiDid),
     countryCode: text(asset.sourceProxy?.countryCode),
+    registeredAt: registrationTime(asset),
+    exitIp: exitIp(asset.sourceProxy?.exitIp),
+    exitIpCheckedAt: text(asset.sourceProxy?.exitIpCheckedAt),
+    proxyAddress: proxyAddress(asset.sourceProxy),
     profile: {
       schemaVersion: number(profile.schemaVersion), browser: text(profile.browser),
       browserVersion: text(profile.browserVersion), userAgent: text(profile.userAgent),
@@ -38,7 +43,7 @@ function deviceRow(asset, archived) {
 function deviceFingerprintPage(store, query = {}) {
   pagination(query);
   const match = query.match || 'all';
-  if (!['all', 'fingerprint', 'device', 'missing'].includes(match)) throw new HttpError(400, 'Invalid device filter');
+  if (!['all', 'fingerprint', 'device', 'exitIp', 'missing'].includes(match)) throw new HttpError(400, 'Invalid device filter');
   if (query.q !== undefined && (typeof query.q !== 'string' || query.q.length > 256)) throw new HttpError(400, 'Search must be at most 256 characters');
   const search = String(query.q || '').trim().toLowerCase();
   const rows = [], ids = new Set();
@@ -51,10 +56,10 @@ function deviceFingerprintPage(store, query = {}) {
       rows.push(deviceRow(asset, archived));
     }
   }
-  const fingerprints = new Map(), devices = new Map();
+  const fingerprints = new Map(), devices = new Map(), exits = new Map();
   for (const row of rows) {
     const account = row.email.trim().toLowerCase() || row.id;
-    for (const [index, value] of [[fingerprints, row.fingerprint], [devices, row.deviceId]]) {
+    for (const [index, value] of [[fingerprints, row.fingerprint], [devices, row.deviceId], [exits, row.exitIp]]) {
       if (!value) continue;
       if (!index.has(value)) index.set(value, new Set());
       index.get(value).add(account);
@@ -63,6 +68,7 @@ function deviceFingerprintPage(store, query = {}) {
   for (const row of rows) {
     row.fingerprintAccounts = fingerprints.get(row.fingerprint)?.size || 0;
     row.deviceAccounts = devices.get(row.deviceId)?.size || 0;
+    row.exitIpAccounts = exits.get(row.exitIp)?.size || 0;
   }
   const duplicateAccounts = (index) => new Set([...index.values()].filter(accounts => accounts.size > 1).flatMap(accounts => [...accounts])).size;
   const summary = {
@@ -70,16 +76,32 @@ function deviceFingerprintPage(store, query = {}) {
     duplicateFingerprintGroups: [...fingerprints.values()].filter(accounts => accounts.size > 1).length,
     duplicateFingerprintAccounts: duplicateAccounts(fingerprints),
     duplicateDeviceAccounts: duplicateAccounts(devices),
+    uniqueExitIps: exits.size,
+    duplicateExitIpAccounts: duplicateAccounts(exits),
+    missingExitIps: rows.filter(row => !row.exitIp).length,
     missing: rows.filter(row => !row.fingerprint || !row.deviceId).length,
     unreadable: rows.filter(row => row.status === 'corrupt').length,
   };
   const filtered = rows.filter(row => (
-    (!search || [row.email, row.id, row.fingerprint, row.deviceId, row.countryCode, row.sourceRunId].some(value => value.toLowerCase().includes(search)))
+    (!search || (exitIp(search) ? row.exitIp === exitIp(search)
+      : [row.email, row.id, row.fingerprint, row.deviceId, row.countryCode, row.sourceRunId, row.exitIp].some(value => value.toLowerCase().includes(search))))
     && (match === 'all' || (match === 'fingerprint' && row.fingerprintAccounts > 1)
-      || (match === 'device' && row.deviceAccounts > 1) || (match === 'missing' && (!row.fingerprint || !row.deviceId)))
+      || (match === 'device' && row.deviceAccounts > 1) || (match === 'exitIp' && row.exitIpAccounts > 1)
+      || (match === 'missing' && (!row.fingerprint || !row.deviceId)))
   ));
-  filtered.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+  filtered.sort((a, b) => (Date.parse(b.registeredAt) || 0) - (Date.parse(a.registeredAt) || 0)
+    || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
   return { ...pageRows(filtered, query), summary };
 }
 
-module.exports = { deviceFingerprintPage, deviceRow };
+// Original connection strings are admin-only detail data, never list payloads
+// or delivery snapshots. Archived accounts remain inspectable by exact ID.
+function deviceProxyDetail(store, id) {
+  for (const file of [...store.files(), ...store.archivedFiles()]) {
+    const asset = store.readAssetForListing(file);
+    if (asset?.id === id) return { proxyUrl: text(asset.sourceProxy?.url), proxyAddress: proxyAddress(asset.sourceProxy) };
+  }
+  throw new HttpError(404, 'Account not found');
+}
+
+module.exports = { deviceFingerprintPage, deviceRow, deviceProxyDetail };

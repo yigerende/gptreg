@@ -1,3 +1,4 @@
+import { notifySessionExpired } from '../auth-navigation';
 export type Row = Record<string, any>;
 export class ApiError extends Error {
   constructor(
@@ -24,6 +25,7 @@ export async function call(
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const data = await response.json();
+  if (response.status === 401 && !path.startsWith('/api/auth/') && path !== '/api/user/v1/me') notifySessionExpired();
   if (!response.ok)
     throw new ApiError(
       data.error || data.message || `请求失败 (${response.status})`,

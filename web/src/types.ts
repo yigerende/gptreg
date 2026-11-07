@@ -806,6 +806,7 @@ export type SessionAssetHealth = {
 
 /** The exit an account was registered through, recorded on its login state. */
 export type SessionAssetSourceProxy = {
+  address?: string; exitIp?: string; exitIpCheckedAt?: string; exitIpStatus?: string;
   id: string;
   endpoint: string;
   protocol: string;
@@ -967,6 +968,7 @@ export type SessionAssetListRow = {
   planType?: string;
   sourceRunId?: string;
   createdAt?: string;
+  registeredAt?: string;
   updatedAt?: string;
   lastValidatedAt?: string;
   accessTokenExpiresAt?: string;
@@ -1026,6 +1028,8 @@ export type SessionAsset = SessionAssetListRow & {
   health: SessionAssetHealth | null;
   trial: SessionAssetTrial | null;
   sourceProxy: SessionAssetSourceProxy | null;
+  registeredAt?: string;
+  registrationProxyUrl?: string;
   oauth?: {
     successful: boolean;
     successCount: number;
@@ -1071,7 +1075,7 @@ export type DynamicProxyEntry = {
 
 export type ProxyApiSource = {
   id: string;
-  provider: '711proxy' | 'b2proxy' | '1024proxy' | 'cliproxy';
+  provider: '711proxy' | 'b2proxy' | '1024proxy' | 'cliproxy' | 'iproyal';
   url: string;
   countryCode: string;
   count: number;
@@ -1115,7 +1119,9 @@ export type ProxyCatalogSnapshot = {
   proxies: ProxyRecord[];
 };
 
-export type ProxyProviderSettings = { count: number; protocol: string; sessionMinutes: number; apiBaseUrl?: string };
+export type IPRoyalSettings = { authMode?: 'credentials' | 'subuser'; apiToken?: string; username?: string; password?: string; subuserHash?: string };
+export type IPRoyalSettingsSnapshot = Omit<IPRoyalSettings, 'apiToken' | 'password'> & { apiTokenConfigured: boolean; passwordConfigured: boolean };
+export type ProxyProviderSettings = { count: number; protocol: string; sessionMinutes: number; apiBaseUrl?: string; iproyal?: IPRoyalSettingsSnapshot };
 export type ProxySettingsRefresh = {
   provider: string;
   status: 'running' | 'success' | 'partial' | 'failed';

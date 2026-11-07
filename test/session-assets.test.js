@@ -18,6 +18,25 @@ const {
 } = require('../src/session-asset-store');
 const { OAUTH_FAILURE_COOLDOWN_MS } = require('../src/session-asset-grouping');
 
+test('registration metadata is immutable and default paginated order ignores later refreshes', t => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gptreg-registration-order-'));
+  let clock = Date.parse('2026-11-07T01:00:00Z');
+  const store = new SessionAssetStore({ cwd, stateDir: 'state', now: () => clock });
+  t.after(() => { store.close(); fs.rmSync(cwd, { recursive: true, force: true }); });
+  const old = store.upsert({ email: 'old@example.test', registeredAt: '2026-11-06T01:00:00Z', sourceProxy: { url: 'socks5://user:secret@entry.test:9000', exitIp: '203.0.113.7' } });
+  const recent = store.upsert({ email: 'new@example.test', registeredAt: '2026-11-07T00:00:00Z', sourceProxy: { url: 'http://new.test:8080', exitIp: '203.0.113.8' } });
+  clock += 3600000;
+  store.upsert({ id: old.id, email: old.email, sourceKind: 'session_refresh', accessToken: 'fresh-at' });
+  store.upsert({ id: old.id, email: old.email, registeredAt: new Date(clock).toISOString(), sourceProxy: { url: 'http://maintenance.test', exitIp: '192.0.2.1' } });
+  const first = store.query({ limit: 1 }), second = store.query({ limit: 1, cursor: '1' });
+  assert.equal(first.assets[0].id, recent.id); assert.equal(second.assets[0].id, old.id);
+  assert.equal(second.assets[0].registeredAt, '2026-11-06T01:00:00Z');
+  assert.equal(second.assets[0].sourceProxy.exitIp, '203.0.113.7');
+  assert.equal(JSON.stringify(second).includes('secret'), false);
+  assert.equal(store.detail(old.id).registrationProxyUrl, 'socks5://user:secret@entry.test:9000');
+  assert.notEqual(store.detail(old.id).updatedAt, old.updatedAt);
+});
+
 test('scoped cookie jars preserve domain, path, and host isolation', () => {
   let jar = createCookieJar();
   jar = updateCookieJar(jar, 'https://auth.openai.com/log-in', {

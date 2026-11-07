@@ -1,4 +1,5 @@
 import { Pagination, type PageInfo } from './components/Pagination';
+import ProxyInventory from './ProxyInventory';
 import { PlatformConfigPage } from './PlatformConfigPage';
 import { DeviceFingerprintsPage } from './DeviceFingerprintsPage';
 import { OAuthProxyDialog } from './OAuthProxyDialog';
@@ -105,6 +106,8 @@ import { RobotsPage, durationLabel } from './RobotsPage';
 import { SessionAssetsPage } from './SessionAssetsPage';
 import { RebindPage } from './RebindPage';
 import { SmsbowerMailConfig } from './SmsbowerMailConfig';
+import { IPRoyalFields, iproyalSettingsReady } from './IPRoyalFields';
+import type { IPRoyalSettings } from './types';
 import type { OAuthSkippedCounts, BalanceReconciliation, CpaArtifact, CpaArtifactSelectionItem, CpaCredentialPreflight, CpaExportSelection, JobSummary, LogRecord, MailRentalConfigureBody, MailcomAliasDomains, MailcomImportProgress, NvtokensPushResult, PreflightSnapshot, ProxyAssignment, ProxyCatalogSnapshot, ProxyRecord, RegistrationOutcomeCounts, RegistrationSkippedCounts, RobotRun, RunListSnapshot, RunPlan, RunSummary, ServiceStatus, SessionAssetResolveMatch, TaskCapacitySnapshot, TaskSlotCapacity, SettableSessionAssetLifecycle, Sub2ApiFailedAccounts } from './types';
 
 const navItems = [
@@ -135,6 +138,7 @@ const PROXY_API_PROVIDER_OPTIONS = [
   { value: 'b2proxy', label: 'B2Proxy' },
   { value: '1024proxy', label: '1024 Proxy' },
   { value: 'cliproxy', label: 'CLI Proxy' },
+  { value: 'iproyal', label: 'IPRoyal' },
 ];
 const DEFAULT_PROXY_API_COUNT = 600;
 const PROXY_API_PROVIDER_META: Record<string, { label: string; sessionMinutes: number; regionalOnly: boolean; defaultProtocol: 'http' | 'socks5'; apiBaseUrl: string; defaultCount?: number; maxCount?: number }> = {
@@ -142,6 +146,7 @@ const PROXY_API_PROVIDER_META: Record<string, { label: string; sessionMinutes: n
   b2proxy: { apiBaseUrl: 'http://global.rrp.bestgo.work:8089/gen', label: 'B2Proxy', sessionMinutes: 60, regionalOnly: true, defaultProtocol: 'socks5', defaultCount: DEFAULT_PROXY_API_COUNT, maxCount: 900 },
   '1024proxy': { apiBaseUrl: 'https://white.1024proxy.com/white/api', label: '1024 Proxy', sessionMinutes: 120, regionalOnly: true, defaultProtocol: 'socks5', defaultCount: DEFAULT_PROXY_API_COUNT },
   cliproxy: { apiBaseUrl: 'https://api.cliproxy.io/white/api', label: 'CLI Proxy', sessionMinutes: 15, regionalOnly: true, defaultProtocol: 'http', defaultCount: DEFAULT_PROXY_API_COUNT },
+  iproyal: { apiBaseUrl: 'https://resi-api.iproyal.com/v1/access/generate-proxy-list', label: 'IPRoyal', sessionMinutes: 120, regionalOnly: false, defaultProtocol: 'http', defaultCount: DEFAULT_PROXY_API_COUNT },
 };
 
 function formatUsd(value: unknown, minimumFractionDigits = 2) {
@@ -3659,7 +3664,7 @@ function ProxyPage() {
   const [dynamicMode, setDynamicMode] = useState<'append' | 'replace'>('append');
   const [quickProvider, setQuickProvider] = useState('711proxy');
   const [quickCountry, setQuickCountry] = useState('GLOBAL');
-  const [providerDrafts, setProviderDrafts] = useState<Record<string, { count?: number; protocol?: string; sessionText?: string; apiBaseUrl?: string }>>({});
+  const [providerDrafts, setProviderDrafts] = useState<Record<string, { count?: number; protocol?: string; sessionText?: string; apiBaseUrl?: string; iproyal?: IPRoyalSettings }>>({});
   const [localPreview, setLocalPreview] = useState<any>(null);
   const [dynamicPreview, setDynamicPreview] = useState<any>(null);
   const [dynamicOverrides, setDynamicOverrides] = useState<Array<{ line: number; countryCode: string; count?: number; protocol: string }>>([]);
@@ -3711,25 +3716,30 @@ function ProxyPage() {
   const sessionText = draft.sessionText ?? String(savedSettings?.sessionMinutes ?? quickProviderMeta.sessionMinutes);
   const updateProviderDraft = (patch: typeof draft) => setProviderDrafts(current => ({ ...current, [quickProvider]: { ...current[quickProvider], ...patch } }));
   const sessionMinutes = Number(sessionText);
-  const maxSessionMinutes = quickProvider === '1024proxy' ? 120 : 1440;
+  const maxSessionMinutes = quickProvider === '1024proxy' ? 120 : quickProvider === 'iproyal' ? 10080 : 1440;
   const validSessionMinutes = !!sessionText.trim() && Number.isInteger(sessionMinutes) && sessionMinutes >= 1 && sessionMinutes <= maxSessionMinutes;
+  const iproyalDraft = draft.iproyal || {};
+  const providerReady = quickProvider !== 'iproyal' || iproyalSettingsReady(iproyalDraft, savedSettings?.iproyal);
+  const providerPayload = { provider: quickProvider, count: quickCount, protocol: quickProtocol, sessionMinutes, apiBaseUrl, ...(quickProvider === 'iproyal' ? { iproyal: iproyalDraft } : {}) };
   const settingsRefresh = proxies.data?.dynamic?.settingsRefresh;
   const settingsRefreshing = settingsRefresh?.status === 'running';
   const saveSettings = useMutation({
-    mutationFn: (value: { provider: string; count: number; protocol: string; sessionMinutes: number; apiBaseUrl: string }) => endpoints.saveProxyProviderSettings(value),
+    mutationFn: (value: typeof providerPayload) => endpoints.saveProxyProviderSettings(value),
     onSuccess: async (data) => {
       await refresh();
       setProviderDrafts(previous => { const next = { ...previous }; delete next[data.provider]; return next; });
       setDynamicPreview(null);
-      setNotice({ tone: 'success', text: `${PROXY_API_PROVIDER_META[data.provider].label} API 地址、条数、协议和粘性时间已保存，正在更新该厂商已有国家池。` });
+      setNotice({ tone: 'success', text: `${PROXY_API_PROVIDER_META[data.provider].label} 配置已保存，正在更新该厂商已有国家池。` });
     },
     onError: error => setNotice({ tone: 'danger', text: errorMessage(error) }),
   });
   const quickPull = useMutation({
-    mutationFn: () => endpoints.buildAndPullProxyApi({ provider: quickProvider, countryCode: quickCountry, count: quickCount, protocol: quickProtocol, sessionMinutes, apiBaseUrl }),
-    onSuccess: async () => {
-      setNotice({ tone: 'success', text: `已拉取 ${quickCountry === 'GLOBAL' ? '全球' : quickCountry} 国家池，目标 ${quickCount} 条` });
+    mutationFn: () => endpoints.buildAndPullProxyApi({ ...providerPayload, countryCode: quickCountry }),
+    onSuccess: async (snapshot) => {
+      const actual = snapshot.dynamic.countryPools.find(pool => pool.countryCode === quickCountry)?.sources.find(source => source.provider === quickProvider)?.cachedCount;
+      setNotice({ tone: 'success', text: `已拉取 ${quickCountry === 'GLOBAL' ? '全球' : quickCountry} 国家池${actual === undefined ? '' : ` ${actual} 条`}，目标 ${quickCount} 条` });
       await refresh();
+      if (quickProvider === 'iproyal') setProviderDrafts(previous => ({ ...previous, iproyal: { ...previous.iproyal, iproyal: {} } }));
     },
     onError: (error) => { setNotice({ tone: 'danger', text: errorMessage(error) }); refresh(); },
   });
@@ -3816,11 +3826,12 @@ function ProxyPage() {
             <div className="quick-field"><span>国家</span><ProxyCountrySelect value={quickCountry} onValueChange={setQuickCountry} includeGlobal={!quickProviderMeta.regionalOnly} /></div>
             <label><span>数量</span><ConfigNumberInput min={1} max={quickProviderMeta.maxCount || (quickProvider === '711proxy' ? 900 : undefined)} value={quickCount} disabled={saveSettings.isPending || quickPull.isPending} onValueChange={count => updateProviderDraft({ count })} /></label>
             <div className="quick-field"><span>协议</span><AppSelect ariaLabel="协议" value={quickProtocol} disabled={saveSettings.isPending || quickPull.isPending} onValueChange={protocol => updateProviderDraft({ protocol })} options={[{ value: 'http', label: 'HTTP' }, { value: 'socks5', label: 'SOCKS5' }]} /></div>
-            <label className="proxy-api-url-field"><span>API 地址（问号前）</span><input aria-label="API 地址（问号前）" type="text" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={apiBaseUrl} placeholder={quickProviderMeta.apiBaseUrl} disabled={saveSettings.isPending || quickPull.isPending || proxies.isLoading || !!proxies.error} onChange={event => updateProviderDraft({ apiBaseUrl: event.target.value })} /><small>填写完整的 http(s)://域名:端口/路径，后面的国家等参数由系统生成。</small></label>
+            <label className="proxy-api-url-field"><span>API 地址（问号前）</span><input aria-label="API 地址（问号前）" type="text" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={apiBaseUrl} placeholder={quickProviderMeta.apiBaseUrl} disabled={saveSettings.isPending || quickPull.isPending || proxies.isLoading || !!proxies.error} onChange={event => updateProviderDraft({ apiBaseUrl: event.target.value })} /><small>{quickProvider === 'iproyal' ? '默认使用官方批量生成接口，国家、数量和粘性时间由系统提交。' : '填写完整的 http(s)://域名:端口/路径，后面的国家等参数由系统生成。'}</small></label>
+            {quickProvider === 'iproyal' && <IPRoyalFields draft={iproyalDraft} saved={savedSettings?.iproyal} disabled={saveSettings.isPending || quickPull.isPending || proxies.isLoading || !!proxies.error} onChange={patch => updateProviderDraft({ iproyal: { ...iproyalDraft, ...patch } })} />}
             <div className="proxy-session-controls">
               <label><span>会话粘性时间（分钟）</span><input type="number" aria-label="会话粘性时间（分钟）" min={1} max={maxSessionMinutes} step={1} value={sessionText} disabled={saveSettings.isPending || quickPull.isPending || proxies.isLoading || !!proxies.error} onChange={event => updateProviderDraft({ sessionText: event.target.value })} /></label>
-              <Button icon={saveSettings.isPending || settingsRefreshing ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />} disabled={saveSettings.isPending || settingsRefreshing || quickPull.isPending || pullAll.pending || pull.isPending || proxies.isLoading || !!proxies.error || !validSessionMinutes || !apiBaseUrl.trim()} onClick={() => saveSettings.mutate({ provider: quickProvider, count: quickCount, protocol: quickProtocol, sessionMinutes, apiBaseUrl })}>{saveSettings.isPending ? '保存中' : settingsRefreshing ? '更新中' : '保存'}</Button>
-              <Button tone="primary" icon={quickPull.isPending ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} onClick={() => quickPull.mutate()} disabled={quickPull.isPending || saveSettings.isPending || settingsRefreshing || pullAll.pending || pull.isPending || proxies.isLoading || !!proxies.error || !validSessionMinutes || !apiBaseUrl.trim() || !(quickProviderMeta.regionalOnly ? /^[A-Z]{2}$/.test(quickCountry) : /^(GLOBAL|[A-Z]{2})$/.test(quickCountry))}>{quickPull.isPending ? '拉取中' : '构建并拉取'}</Button>
+              <Button icon={saveSettings.isPending || settingsRefreshing ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />} disabled={saveSettings.isPending || settingsRefreshing || quickPull.isPending || pullAll.pending || pull.isPending || proxies.isLoading || !!proxies.error || !validSessionMinutes || !apiBaseUrl.trim() || !providerReady} onClick={() => saveSettings.mutate(providerPayload)}>{saveSettings.isPending ? '保存中' : settingsRefreshing ? '更新中' : '保存'}</Button>
+              <Button tone="primary" icon={quickPull.isPending ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />} onClick={() => quickPull.mutate()} disabled={quickPull.isPending || saveSettings.isPending || settingsRefreshing || pullAll.pending || pull.isPending || proxies.isLoading || !!proxies.error || !validSessionMinutes || !apiBaseUrl.trim() || !providerReady || !(quickProviderMeta.regionalOnly ? /^[A-Z]{2}$/.test(quickCountry) : /^(GLOBAL|[A-Z]{2})$/.test(quickCountry))}>{quickPull.isPending ? '拉取中' : '构建并拉取'}</Button>
             </div>
             <p className="proxy-session-help">保存API 地址、条数、协议和粘性时间，并重新拉取该厂商全部已有国家池；各国家保持不变。构建并拉取仅更新所选国家。</p>
             {settingsRefresh && <div className="proxy-settings-progress" role="status">
@@ -3840,6 +3851,7 @@ function ProxyPage() {
         </div>
       </section>
     </div>
+    <ProxyInventory />
   </div>;
 }
 

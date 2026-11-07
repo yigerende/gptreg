@@ -25,6 +25,7 @@ import CustomPage from "./portal/CustomPage";
 import Docs from "./portal/Docs";
 import Shell, { type NavGroup } from "./portal/Shell";
 import { call, currentUser } from "./portal/client";
+import { loginLocation, loginReturnLocation } from "./auth-navigation";
 import "./portal/portal.css";
 import "./portal/workspace.css";
 import "./portal/center.css";
@@ -68,6 +69,20 @@ export default function Platform() {
     refetchOnWindowFocus: false,
   });
   useEffect(() => {
+    const expired = () => {
+      void q.cancelQueries();
+      q.removeQueries({ predicate: query => !['me', 'public'].includes(String(query.queryKey[0])) });
+      q.setQueryData(['me'], null);
+    };
+    window.addEventListener('gptreg:session-expired', expired);
+    return () => window.removeEventListener('gptreg:session-expired', expired);
+  }, [q]);
+  useEffect(() => {
+    if (me.isLoading || me.error || me.data === undefined) return;
+    if (!me.data && path !== '/login' && path !== '/docs') navigate(loginLocation(path, search), { replace: true });
+    else if (me.data && path === '/login') navigate(loginReturnLocation(search, me.data.role), { replace: true });
+  }, [me.isLoading, me.error, me.data, path, search, navigate]);
+  useEffect(() => {
     if (q.getQueryData(["me"])) void q.invalidateQueries({ queryKey: ["me"] });
   }, [path, q]);
   useEffect(() => {
@@ -81,7 +96,7 @@ export default function Platform() {
       await call("/api/auth/logout", "POST", {});
     } finally {
       q.clear();
-      navigate("/");
+      navigate("/login", { replace: true });
       location.reload();
     }
   }
@@ -105,9 +120,8 @@ export default function Platform() {
       <div className="portal">
         <Auth
           pub={pub.data}
-          onLogin={() => {
-            q.invalidateQueries({ queryKey: ["me"] });
-            navigate(path.startsWith("/admin") ? "/admin" : "/");
+          onLogin={async () => {
+            await q.invalidateQueries({ queryKey: ["me"] });
           }}
         />
       </div>

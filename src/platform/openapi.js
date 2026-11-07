@@ -238,8 +238,11 @@ const schemas = {
     fingerprint: str("注册时保存的完整浏览器指纹哈希，未记录时为空"),
     deviceId: str("保存的设备 ID，未记录时为空"),
     countryCode: str("记录的注册地区代码，不代表已核验的出口 IP"),
+    exitIp: str("注册前通过当时代理检测到的出口 IP；历史未记录或检测失败时为空，不以代理入口地址代替"),
+    exitIpCheckedAt: str("出口 IP 检测时间，ISO 8601；未记录时为空"),
+    registeredAt: str("注册时间，ISO 8601；历史引擎账号使用首次保存时间，未知时为空"),
     profile: { type: "object", description: "白名单设备配置：browser/browserVersion/userAgent/platform/oscpu/language/languages/acceptLanguage/timeZone/hardwareConcurrency/maxTouchPoints/storageQuotaBytes/screen/viewport/gpu/schemaVersion；不含密码、Cookie 或代理凭据", additionalProperties: true },
-  }),
+  }, ["fingerprint", "deviceId", "countryCode", "profile"]),
   StoredCredentials: obj(
     {
       asset_id: str("交付资产参考标识；查询接口使用 Account.id"),

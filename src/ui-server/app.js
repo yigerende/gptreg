@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const Fastify = require('fastify');
 const { pagination, pageRows, artifactPage } = require('./pagination');
-const { deviceFingerprintPage } = require('./device-fingerprints');
+const { deviceFingerprintPage, deviceProxyDetail } = require('./device-fingerprints');
 const { ConfigService, withoutSecrets } = require('./config-service');
 const { SmsbowerMailService } = require('./smsbower-mail-service');
 const { LogStore } = require('./log-store');
@@ -670,6 +670,10 @@ function buildApp(options = {}) {
     reply.header('Cache-Control', 'no-store');
     return deviceFingerprintPage(runManager.sessionAssets(), request.query);
   });
+  app.get('/api/v1/device-fingerprints/:id/proxy', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return deviceProxyDetail(runManager.sessionAssets(), request.params.id);
+  });
 
   app.get('/api/v1/session-assets', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -1185,6 +1189,7 @@ function buildApp(options = {}) {
     // and overlap checks even when the address rows are loaded by page.
     const dynamic = { ...snapshot.dynamic, countryPools: (snapshot.dynamic?.countryPools || []).map(pool => ({
       ...pool, entryIds: [...new Set((pool.entries || []).map(entry => entry.id))], entries: [],
+      sources: (pool.sources || []).map(source => ({ ...source, entries: [] })),
     })) };
     if (request.query?.paged !== '1') return { ...snapshot, dynamic };
     const { items, ...page } = pageRows(snapshot.local?.proxies || snapshot.proxies || [], request.query);
@@ -1195,6 +1200,12 @@ function buildApp(options = {}) {
     const pool = snapshot.dynamic?.countryPools?.find(pool => pool.countryCode === request.params.country);
     return pageRows((pool?.entries || []).filter(entry => entry.sourceId === 'manual'), request.query);
   });
+  app.get('/api/v1/proxies/inventory', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    return proxyService.inventory.list(request.query || {});
+  });
+  app.get('/api/v1/proxies/inventory/test', async () => ({ test: proxyService.inventory.status() }));
+  app.post('/api/v1/proxies/inventory/test', async (request) => proxyService.inventory.start(request.body || {}));
   app.post('/api/v1/proxies/preview', async (request) => proxyService.preview(request.body || {}));
   app.post('/api/v1/proxies/import', async (request) => proxyService.import(request.body || {}));
   app.post('/api/v1/proxies/api/build-pull', async (request) => proxyService.buildAndPullApi(request.body || {}));

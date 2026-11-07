@@ -23,6 +23,7 @@ const {
 } = require('./config-v2');
 const { deriveRegistrationEmails, splitEmail } = require('./email-alias');
 const { executePureHttpUrl } = require('./pure-url');
+const { probeRegistrationExit } = require('./registration-network');
 const { failedSmsPreflight, skippedSmsPreflight, summarizeSmsPreflight } = require('./preflight-resources');
 const { probeProxy } = require('./proxy-pool');
 const {
@@ -6041,7 +6042,10 @@ function assetPayload(job, state, context, sourceKind) {
     // (usually the local forwarder), and overwriting would turn this into "the
     // last proxy that touched the account", which is not what it is for. The
     // key is omitted rather than set to null so `upsert` keeps what is stored.
-    ...(REGISTRATION_TASK_KINDS.has(sourceKind) ? { sourceProxy: registrationExitRecord(job.proxy) } : {}),
+    ...(REGISTRATION_TASK_KINDS.has(sourceKind) ? {
+      sourceProxy: job.registrationProxy || registrationExitRecord(job.proxy),
+      registeredAt: job.accountCreatedAt || job.sessionVerifiedAt || nowIso(context),
+    } : {}),
   };
 }
 
@@ -7655,6 +7659,18 @@ async function reconcileAcceptedPhoneCheckpoint(job, runnerState, context, scope
 
 async function establishSession(job, worker, context, options = {}) {
   let asset = job.assetId ? context.assetStore.get(job.assetId) : null;
+  if (REGISTRATION_TASK_KINDS.has(options.sourceKind) && !asset && !job.sessionState?.accountCreated
+      && job.proxy?.url && job.registrationProxy?.url !== job.proxy.url) {
+    // A custom runner owns its transport; it must supply a probe executor too.
+    // This keeps simulations/offline runners from making a hidden network call.
+    const probe = context.registrationProxyProbeExecutor || (context.sessionRunnerFactory ? null : executePureHttpUrl);
+    job.registrationProxy = {
+      ...registrationExitRecord(job.proxy),
+      ...(probe ? await probeRegistrationExit(job.proxy, { executor: probe, signal: context.signal(), now: () => nowIso(context) })
+        : { exitIp: '', exitIpCheckedAt: '', exitIpStatus: 'unrecorded' }),
+    };
+    await context.checkpoint('registration_proxy_recorded');
+  }
   const security = options.security || {};
   let state = job.sessionState;
   if (state) migrateSessionCheckpoint(state, asset);

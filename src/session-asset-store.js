@@ -1,5 +1,6 @@
 'use strict';
 const runtimeSecrets = require('./platform/runtime-secrets');
+const { exitIp, registrationTime, proxyAddress } = require('./registration-network');
 
 const { exportFileName } = require('./export-file-name');
 const crypto = require('node:crypto');
@@ -410,6 +411,7 @@ function assetSummary(asset, now = Date.now) {
     sourceKind: asset.sourceKind || '',
     sourceRunId: asset.sourceRunId || '',
     createdAt: asset.createdAt || '',
+    registeredAt: registrationTime(asset),
     updatedAt: asset.updatedAt || '',
     lastValidatedAt: asset.lastValidatedAt || '',
     accessTokenExpiresAt: asset.accessTokenExpiresAt || '',
@@ -473,6 +475,7 @@ function listSummary(asset, now = Date.now) {
     planType: asset.planType || 'unknown',
     sourceRunId: asset.sourceRunId || '',
     createdAt: asset.createdAt || '',
+    registeredAt: registrationTime(asset),
     updatedAt: asset.updatedAt || '',
     lastValidatedAt: asset.lastValidatedAt || '',
     accessTokenExpiresAt: asset.accessTokenExpiresAt || '',
@@ -526,6 +529,7 @@ function listSummary(asset, now = Date.now) {
       endpoint: proxy.endpoint,
       countryCode: proxy.countryCode,
       protocol: proxy.protocol,
+      exitIp: proxy.exitIp,
     }) : null,
     rebindProxy: rebindProxy ? compact({ endpoint: rebindProxy.endpoint, countryCode: rebindProxy.countryCode, protocol: rebindProxy.protocol }) : null,
     // Only the code is read, to spot a deactivation the health record missed.
@@ -549,6 +553,10 @@ function sourceProxySummary(sourceProxy) {
     protocol: String(sourceProxy.protocol || '').toLowerCase(),
     countryCode: String(sourceProxy.countryCode || '').toUpperCase(),
     resourceKind: String(sourceProxy.resourceKind || ''),
+    address: proxyAddress(sourceProxy),
+    exitIp: exitIp(sourceProxy.exitIp),
+    exitIpCheckedAt: String(sourceProxy.exitIpCheckedAt || ''),
+    exitIpStatus: String(sourceProxy.exitIpStatus || 'unrecorded'),
   };
 }
 
@@ -573,7 +581,7 @@ function statSignature(filePath) {
 
 // Bumped when the shape of an index row changes, so an older cache is
 // ignored rather than trusted into a wrong listing.
-const INDEX_CACHE_VERSION = 1;
+const INDEX_CACHE_VERSION = 2;
 
 /** Newest first, then by path so the order is total and stable. */
 function compareIndexEntries(left, right) {
@@ -1017,6 +1025,7 @@ class SessionAssetStore {
       sourceRunId: String(value.sourceRunId || ''),
       updatedAt: String(value.updatedAt || ''),
       createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : Infinity,
+      registeredAtMs: Date.parse(registrationTime(value)) || 0,
       search: [value.email, value.accountId, value.id, value.planType, value.sourceRunId]
         .map((value) => String(value || '').toLowerCase())
         .join(' '),
@@ -1418,6 +1427,9 @@ class SessionAssetStore {
     const { matched, counts } = this.matchEntries(options);
     if (options.sort === 'createdAtAsc') {
       matched.sort((left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id));
+    } else {
+      matched.sort((left, right) => right.registeredAtMs - left.registeredAtMs
+        || right.createdAtMs - left.createdAtMs || left.id.localeCompare(right.id));
     }
     const page = matched.slice(offset, offset + limit);
     return {
@@ -1484,6 +1496,8 @@ class SessionAssetStore {
       security: clone(asset.security),
       securitySummary: securitySummary(asset.security),
       sourceProxy: sourceProxySummary(asset.sourceProxy),
+      registeredAt: registrationTime(asset),
+      registrationProxyUrl: String(asset.sourceProxy?.url || ''),
       rebindProxy: sourceProxySummary(asset.rebindProxy),
       oauthCooldown: oauthCooldownSummary(asset, this.now),
     };
@@ -1590,7 +1604,7 @@ class SessionAssetStore {
       clientProfileFingerprint: String(input.clientProfileFingerprint ?? existing?.clientProfileFingerprint ?? ''),
       oaiDid: String(input.oaiDid ?? existing?.oaiDid ?? ''),
       sessionToken: String(input.sessionToken ?? existing?.sessionToken ?? ''),
-      sourceProxy: clone(retained('sourceProxy', null)),
+      sourceProxy: clone(existing?.sourceProxy && input.registeredAt ? existing.sourceProxy : retained('sourceProxy', null)),
       rebindProxy: clone(retained('rebindProxy', null)),
       session: clone(retained('session', null)),
       me: clone(retained('me', null)),
@@ -1604,6 +1618,7 @@ class SessionAssetStore {
       sourceKind: String(input.sourceKind ?? existing?.sourceKind ?? ''),
       sourceRunId: String(input.sourceRunId ?? existing?.sourceRunId ?? ''),
       createdAt: existing?.createdAt || input.createdAt || timestamp,
+      registeredAt: registrationTime(existing) || String(input.registeredAt || ''),
       updatedAt: timestamp,
       lastValidatedAt: input.lastValidatedAt ?? existing?.lastValidatedAt ?? '',
       lastError: clone(Object.hasOwn(input, 'lastError') ? input.lastError : existing?.lastError ?? null),

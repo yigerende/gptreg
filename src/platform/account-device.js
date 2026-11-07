@@ -7,13 +7,14 @@ const { audit } = require("./db");
 // Only the delivered account's saved device configuration. No global inventory,
 // proxy credentials, source tasks, cookies or other accounts are exposed.
 function accountDevice(asset) {
-  const { fingerprint, deviceId, countryCode, profile } = deviceRow(asset || {}, false);
-  return { fingerprint, deviceId, countryCode, profile };
+  const { fingerprint, deviceId, countryCode, profile, exitIp, exitIpCheckedAt, registeredAt } = deviceRow(asset || {}, false);
+  return { fingerprint, deviceId, countryCode, profile, exitIp, exitIpCheckedAt, registeredAt };
 }
 function storedDevice(value) {
   if (!value || typeof value !== "object") return null;
   return accountDevice({ clientProfileFingerprint: value.fingerprint, oaiDid: value.deviceId,
-    sourceProxy: { countryCode: value.countryCode }, clientProfile: value.profile });
+    registeredAt: value.registeredAt,
+    sourceProxy: { countryCode: value.countryCode, exitIp: value.exitIp, exitIpCheckedAt: value.exitIpCheckedAt }, clientProfile: value.profile });
 }
 function registerAccountDevice(app, db, crypt) {
   for (const admin of [false, true]) {

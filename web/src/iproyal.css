@@ -1,0 +1,18 @@
+.iproyal-fields {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 2px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.iproyal-fields legend { padding: 0 6px; font-size: 12px; font-weight: 650; }
+.iproyal-fields-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.iproyal-fields-grid label, .iproyal-fields-grid .quick-field { min-width: 0; display: grid; gap: 4px; font-size: 11px; }
+.iproyal-fields-grid input { width: 100%; min-width: 0; }
+.iproyal-fields-grid label > span { display: flex; justify-content: space-between; gap: 6px; }
+.iproyal-fields-grid small { font-weight: 400; color: var(--muted); }
+.iproyal-fields p { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.iproyal-subuser-field { grid-column: 1 / -1; }
+@media (max-width: 600px) { .iproyal-fields-grid { grid-template-columns: minmax(0, 1fr); } }

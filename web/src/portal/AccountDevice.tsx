@@ -21,6 +21,7 @@ export default function AccountDevice({ account, admin = false, onClose }: {
   const size = (w?: number, h?: number) => w && h ? `${w} × ${h}` : "";
   const fields = [
     ["浏览器指纹", device?.fingerprint], ["设备 ID", device?.deviceId],
+    ["注册代理出口 IP", device?.exitIp],
     ["注册地区", device?.countryCode], ["浏览器", [p.browser, p.browserVersion].filter(Boolean).join(" ")],
     ["User-Agent", p.userAgent], ["操作系统", p.oscpu || p.platform],
     ["语言", p.language], ["语言列表", p.languages?.join(", ")], ["Accept-Language", p.acceptLanguage],
@@ -35,7 +36,7 @@ export default function AccountDevice({ account, admin = false, onClose }: {
   ];
   return <Modal title="账号设备指纹" onClose={onClose}>
     <p>{account.email}</p>
-    <p className="p-muted">注册时保存的设备信息，缺失字段留空。注册地区为记录的配置地区。</p>
+    <p className="p-muted">注册时保存的设备信息，缺失字段留空。出口 IP 为注册时的检测记录，注册地区为配置地区。</p>
     {error ? <div className="p-alert" role="alert">{error}</div> : !data ? <p role="status">正在读取设备指纹…</p> : <>
       {!device && <p className="p-notice">此账号暂未保存设备信息。</p>}
       {notice && <p role="status">{notice}</p>}

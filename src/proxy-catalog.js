@@ -12,7 +12,7 @@ const DEFAULT_PROXY_API_COUNT = 600;
 const B2PROXY_DEFAULT_COUNT = DEFAULT_PROXY_API_COUNT;
 const B2PROXY_SESSION_MINUTES = 60;
 const MAX_1024_SESSION_MINUTES = 120;
-const PROXY_SESSION_DEFAULTS = Object.freeze({ '711proxy': 180, b2proxy: 60, '1024proxy': 120, cliproxy: 15 });
+const PROXY_SESSION_DEFAULTS = Object.freeze({ '711proxy': 180, b2proxy: 60, '1024proxy': 120, cliproxy: 15, iproyal: 120 });
 const DEFAULT_711_API_TEMPLATE = `http://global.rotgbapi.711proxy.com:8089/gen?zone=custom&ptype=1&count=${DEFAULT_PROXY_API_COUNT}&proto=http&stype=text&split=%5Cr%5Cn&sessType=sticky&sessTime=180&sessAuto=0`;
 const DEFAULT_B2PROXY_API_TEMPLATE = `http://global.rrp.bestgo.work:8089/gen?zone=custom&ptype=1&region=US&count=${B2PROXY_DEFAULT_COUNT}&proto=socks5&stype=txt&split=%5Cr%5Cn&sessType=sticky&sessTime=${B2PROXY_SESSION_MINUTES}&sessAuto=1`;
 const DEFAULT_1024_API_TEMPLATE = `https://white.1024proxy.com/white/api?region=US&num=${DEFAULT_PROXY_API_COUNT}&time=${MAX_1024_SESSION_MINUTES}&format=1&type=txt`;
@@ -22,6 +22,7 @@ const PROXY_API_TEMPLATES = Object.freeze({
   b2proxy: DEFAULT_B2PROXY_API_TEMPLATE,
   '1024proxy': DEFAULT_1024_API_TEMPLATE,
   cliproxy: DEFAULT_CLIPROXY_API_TEMPLATE,
+  iproyal: 'https://resi-api.iproyal.com/v1/access/generate-proxy-list',
 });
 const PROXY_API_BASE_URLS = Object.freeze(Object.fromEntries(
   Object.entries(PROXY_API_TEMPLATES).map(([provider, template]) => [provider, apiBaseUrlOf(template)]),
@@ -31,6 +32,7 @@ const PROXY_API_LABELS = Object.freeze({
   b2proxy: 'B2Proxy',
   '1024proxy': '1024 Proxy',
   cliproxy: 'CLI Proxy',
+  iproyal: 'IPRoyal',
 });
 const DEFAULT_PROXY_API_PROTOCOLS = Object.freeze({
   '711proxy': 'http',
@@ -39,6 +41,7 @@ const DEFAULT_PROXY_API_PROTOCOLS = Object.freeze({
   // project only works reliably when those entries are interpreted as SOCKS5.
   '1024proxy': 'socks5',
   cliproxy: 'http',
+  iproyal: 'http',
 });
 
 function stableId(prefix, value) {
@@ -103,7 +106,7 @@ function normalizeProxyApiCount(value, fallback = DEFAULT_PROXY_API_COUNT, provi
 
 function normalizeSessionMinutes(provider, value = PROXY_SESSION_DEFAULTS[provider]) {
   if (!Object.hasOwn(PROXY_SESSION_DEFAULTS, provider)) throw new Error('不支持的代理厂商');
-  const max = provider === '1024proxy' ? MAX_1024_SESSION_MINUTES : 1440;
+  const max = provider === '1024proxy' ? MAX_1024_SESSION_MINUTES : provider === 'iproyal' ? 10080 : 1440;
   if (!Number.isInteger(value) || value < 1 || value > max) {
     throw new Error(`${PROXY_API_LABELS[provider]} 会话粘性时间须为 1～${max} 分钟的整数`);
   }
@@ -137,6 +140,7 @@ function normalizeProviderBaseUrl(provider, value = PROXY_API_BASE_URLS[provider
   }
   const known = proxyApiProviderFromHost(url.href);
   if (known && known !== provider) throw new Error('API 地址属于其他代理厂商');
+  if (provider === 'iproyal' && url.protocol !== 'https:') throw new Error('IPRoyal API 地址必须使用 HTTPS');
   return url.href;
 }
 
@@ -215,6 +219,7 @@ function proxyApiProviderFromHost(value, settings = {}) {
     if (hostname === 'global.rrp.bestgo.work') return 'b2proxy';
     if (hostname === 'white.1024proxy.com') return '1024proxy';
     if (hostname === 'api.cliproxy.io') return 'cliproxy';
+    if (hostname === 'resi-api.iproyal.com') return 'iproyal';
     for (const [provider, config] of Object.entries(settings)) {
       if (config.apiBaseUrl && apiBaseUrlOf(value) === config.apiBaseUrl) return provider;
     }
@@ -337,6 +342,12 @@ function normalizeProxyApiUrl(value, options = {}) {
   const provider = String(options.provider || detected || '').toLowerCase();
   if (detected && detected !== provider) throw new Error('Proxy API provider does not match the URL host');
   if (options.apiBaseUrl !== undefined) options = { ...options, apiBaseUrl: normalizeProviderBaseUrl(provider, options.apiBaseUrl) };
+  if (provider === 'iproyal') {
+    const apiBaseUrl = normalizeProviderBaseUrl(provider, value);
+    if (apiBaseUrl !== (options.apiBaseUrl || PROXY_API_BASE_URLS.iproyal)) throw new Error('IPRoyal 请使用生成代理列表的 API 地址');
+    return { provider, url: apiBaseUrl, countryCode: normalizeCountryCode(options.countryCode),
+      ...normalizeProviderSettings(provider, { ...options, apiBaseUrl }), sessionType: 'sticky', earlyRotation: false };
+  }
   if (provider === '711proxy') return { provider, ...normalize711ApiUrl(value, options) };
   if (provider === 'b2proxy') {
     if (detected && detected !== provider) throw new Error('Proxy API provider does not match the URL host');
@@ -521,7 +532,7 @@ function parseDynamicContent(content, options = {}) {
           id: stableProxyId(entry.url),
         };
       }
-      const duplicateKey = item.kind === 'api' ? `api:${item.url}` : `proxy:${item.countryCode}:${item.url}`;
+      const duplicateKey = item.kind === 'api' ? `api:${item.provider === 'iproyal' ? item.countryCode + ':' : ''}${item.url}` : `proxy:${item.countryCode}:${item.url}`;
       if (seen.has(duplicateKey)) {
         duplicates.push({ line, kind: item.kind, value: item.url });
         return;

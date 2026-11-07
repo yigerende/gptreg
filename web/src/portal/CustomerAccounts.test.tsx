@@ -95,7 +95,7 @@ it.each([["邮箱+AT","email_at"],["邮箱+Session","email_session"]])("exports 
 it('opens only the selected account device without fetching credentials',async()=>{
   const row=account('device');
   const calls=vi.spyOn(client,'call').mockImplementation(async path=>{
-    if(path.endsWith('/device-fingerprint'))return {id:row.id,email:row.email,device_fingerprint:{fingerprint:'FULL_FINGERPRINT',deviceId:'DID',profile:{browser:'firefox'}}};
+    if(path.endsWith('/device-fingerprint'))return {id:row.id,email:row.email,device_fingerprint:{fingerprint:'FULL_FINGERPRINT',deviceId:'DID',exitIp:'203.0.113.8',profile:{browser:'firefox'}}};
     if(path.includes('account-orders'))return page([group('one',1)],1,{accounts_total:1});
     return page([row]);
   });
@@ -103,6 +103,8 @@ it('opens only the selected account device without fetching credentials',async()
   fireEvent.click(screen.getByRole('button',{name:'按账号'}));await screen.findByText(row.email);
   fireEvent.click(screen.getByRole('button',{name:'查看设备指纹'}));
   expect(await screen.findByDisplayValue('FULL_FINGERPRINT')).toBeVisible();
+  expect(screen.getByRole('textbox',{name:'注册代理出口 IP'})).toHaveValue('203.0.113.8');
+  expect(screen.queryByText(/重复.*个账号/)).not.toBeInTheDocument();
   expect(calls).toHaveBeenCalledWith('/api/user/v1/accounts/device/device-fingerprint');
   expect(calls.mock.calls.some(([path])=>path.includes('/credentials'))).toBe(false);
 });

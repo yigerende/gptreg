@@ -19,6 +19,8 @@ const {
 const { parseProxyLine, probeProxy, stableProxyId } = require('../proxy-pool');
 const { atomicWriteText, HttpError, mapLimit } = require('./utils');
 const { clone } = require('../util/shared');
+const { ProxyInventory } = require('./proxy-inventory');
+const { IPRoyalCredentials, IPRoyalError, parseIPRoyalResponse, iproyalHttpError } = require('./iproyal');
 
 function parseProxyContent(content, options = {}) {
   const entries = [];
@@ -74,6 +76,8 @@ class ProxyService {
     this.fetch = options.fetch || globalThis.fetch;
     this.executor = options.executor || executePureHttpUrl;
     this.checks = new Map();
+    this.inventory = new ProxyInventory(this);
+    this.iproyal = new IPRoyalCredentials(configService.cwd);
     this.catalogBusy = false;
     this.catalogRefreshFlight = null;
     this.catalogRefreshCountries = null;
@@ -89,22 +93,25 @@ class ProxyService {
   async fetchApiSource(url, options = {}) {
     const config = this.configService.readRaw();
     const apiRequestProxy = String(config.proxyPool?.apiRequestProxy || '').trim();
+    const method = options.method || 'GET';
+    const headers = { Accept: 'text/plain', ...options.headers };
     if (!apiRequestProxy) {
       return this.fetch(url, {
-        method: 'GET',
+        method,
         redirect: 'manual',
         signal: options.signal,
-        headers: { Accept: 'text/plain' },
+        headers,
+        ...(options.body ? { body: options.body } : {}),
       });
     }
     const result = await this.executor({
       index: -1024,
-      method: 'GET',
+      method,
       url,
-      headers: { Accept: 'text/plain', 'User-Agent': 'gpt-re-proxy-source/0.1' },
+      headers: { ...headers, 'User-Agent': 'gpt-re-proxy-source/0.1' },
       cookies: {},
-      body: '',
-      contentType: '',
+      body: options.body || '',
+      contentType: headers['Content-Type'] || '',
       expectStatus: 200,
       redirect: '',
     }, {
@@ -213,6 +220,8 @@ class ProxyService {
 
   dynamicSnapshot() {
     const catalog = this.catalogSnapshot();
+    const providerSettings = providerSettingsSnapshot(catalog.providerSettings);
+    providerSettings.iproyal.iproyal = this.iproyal.snapshot();
     const countryPools = Object.values(catalog.countryPools || {})
       .map((pool) => {
         const entries = flattenedPoolEntries(pool);
@@ -235,7 +244,7 @@ class ProxyService {
       .sort((left, right) => left.countryCode === 'GLOBAL' ? -1 : right.countryCode === 'GLOBAL' ? 1 : left.countryCode.localeCompare(right.countryCode));
     return {
       total: countryPools.reduce((sum, pool) => sum + pool.total, 0),
-      providerSettings: providerSettingsSnapshot(catalog.providerSettings),
+      providerSettings,
       settingsRefresh: this.settingsRefresh ? clone(this.settingsRefresh) : null,
       countryPools,
     };
@@ -514,16 +523,19 @@ class ProxyService {
     if (callerSignal?.aborted) controller.abort();
     else callerSignal?.addEventListener?.('abort', abortFromCaller, { once: true });
     const providerLabel = PROXY_API_LABELS[found.source.provider] || 'Dynamic proxy';
+    const isIPRoyal = found.source.provider === 'iproyal';
     try {
-      const response = await this.fetchApiSource(found.source.url, { signal: controller.signal, timeoutMs });
-      if (!response.ok) throw new Error(`${providerLabel} API returned HTTP ${response.status}`);
+      const request = isIPRoyal ? this.iproyal.request(found.source) : {};
+      const response = await this.fetchApiSource(found.source.url, { ...request, signal: controller.signal, timeoutMs });
+      if (!response.ok) throw isIPRoyal ? new IPRoyalError(iproyalHttpError(response.status)) : new Error(`${providerLabel} API returned HTTP ${response.status}`);
       const content = await response.text();
-      const parsed = parseProxyContent(content, { defaultProtocol: found.source.protocol });
+      const parsed = isIPRoyal ? parseIPRoyalResponse(content, found.source.protocol) : parseProxyContent(content, { defaultProtocol: found.source.protocol });
       // A malformed line used to throw away the other 499 proxies in the same
       // response. Bad lines are counted and reported; only a response with
       // nothing usable in it is a failure.
       if (!parsed.entries.length) {
-        throw new Error(parsed.errors.length
+        const EmptyError = isIPRoyal ? IPRoyalError : Error;
+        throw new EmptyError(parsed.errors.length
           ? `${providerLabel} returned ${parsed.errors.length} invalid proxy line(s) and no usable proxy`
           : `${providerLabel} returned an empty proxy list`);
       }
@@ -551,7 +563,8 @@ class ProxyService {
     } catch (error) {
       const message = error.name === 'AbortError'
         ? `Dynamic proxy pull timed out after ${timeoutMs} ms`
-        : error.message;
+        : isIPRoyal && !(error instanceof IPRoyalError) && !(error instanceof HttpError)
+          ? 'IPRoyal 连接失败，请检查 API 地址、网络或供应商状态' : error.message;
       found.source.lastError = message;
       return { ok: false, countryCode: found.pool.countryCode, sourceId: found.source.id, pulled: 0, error: message };
     } finally {
@@ -722,6 +735,7 @@ class ProxyService {
 
   async buildAndPullApi(payload = {}) {
     let source;
+    let iproyalCredentials;
     try {
       const defaults = this.catalogSnapshot().providerSettings[payload.provider || '711proxy'] || {};
       source = buildProxyApiUrl(payload.provider || '711proxy', {
@@ -731,14 +745,19 @@ class ProxyService {
         sessionMinutes: payload.sessionMinutes ?? defaults.sessionMinutes,
         apiBaseUrl: payload.apiBaseUrl ?? defaults.apiBaseUrl,
       });
+      if (source.provider === 'iproyal') iproyalCredentials = this.iproyal.prepare(payload.iproyal);
     } catch (error) {
       throw new HttpError(400, error.message);
+    }
+    if (iproyalCredentials) {
+      if (this.catalogBusy || this.catalogRefreshFlight || this.settingsRefreshFlight) throw new HttpError(409, '代理正在刷新，请刷新完成后拉取');
+      this.iproyal.save(iproyalCredentials);
     }
     this.importDynamic({
       mode: 'append',
       content: source.url,
       defaultProtocol: source.protocol,
-      overrides: [{ line: 1, provider: source.provider, apiBaseUrl: apiBaseUrlOf(source.url), count: source.count, protocol: source.protocol, sessionMinutes: source.sessionMinutes }],
+      overrides: [{ line: 1, provider: source.provider, countryCode: source.countryCode, apiBaseUrl: apiBaseUrlOf(source.url), count: source.count, protocol: source.protocol, sessionMinutes: source.sessionMinutes }],
     });
     return this.pull(proxyApiSourceId(source), { timeoutMs: payload.timeoutMs });
   }
@@ -746,6 +765,7 @@ class ProxyService {
   saveProviderSettings(payload = {}) {
     if (this.catalogBusy || this.catalogRefreshFlight || this.settingsRefreshFlight) throw new HttpError(409, '代理正在刷新，请刷新完成后保存');
     let settings;
+    let iproyalCredentials;
     try {
       if (!Number.isSafeInteger(payload.count) || payload.count < 1) throw new Error('请填写有效的代理条数');
       if (payload.sessionMinutes === undefined || payload.protocol === undefined) throw new Error('请填写协议和会话粘性时间');
@@ -756,6 +776,7 @@ class ProxyService {
       for (const [provider, config] of Object.entries(this.catalogSnapshot().providerSettings)) {
         if (provider !== payload.provider && config.apiBaseUrl === settings.apiBaseUrl) throw new Error('此 API 地址已用于其他代理厂商');
       }
+      if (payload.provider === 'iproyal') iproyalCredentials = this.iproyal.prepare(payload.iproyal);
     }
     catch (error) { throw new HttpError(400, error.message); }
     const catalog = this.readCatalog();
@@ -773,6 +794,7 @@ class ProxyService {
         Object.assign(source, normalizeProxyApiUrl(url.href, { provider: source.provider, countryCode: pool.countryCode, ...settings }), { apiBaseUrl: settings.apiBaseUrl });
       }
     }
+    if (iproyalCredentials) this.iproyal.save(iproyalCredentials);
     const updated = this.writeCatalog(catalog);
     const total = Object.values(updated.countryPools).reduce((sum, pool) => sum + pool.sources.filter(source => source.provider === payload.provider).length, 0);
     const job = { provider: payload.provider, status: 'running', done: 0, total, startedAt: new Date().toISOString(), finishedAt: '', result: null, error: '' };
@@ -799,6 +821,7 @@ class ProxyService {
   }
 
   async shutdown() {
+    await this.inventory.shutdown();
     this.settingsRefreshController?.abort();
     await this.settingsRefreshFlight;
   }

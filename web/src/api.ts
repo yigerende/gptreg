@@ -1,4 +1,5 @@
 import type { PageInfo } from './components/Pagination';
+import { notifySessionExpired } from './auth-navigation';
 import type { DeviceFingerprintFilter, DeviceFingerprintPage } from './device-fingerprint-types';
 import type { CpaCredentialPreflight, ChainPaymentSettings, LinkOpsProxyPool, ChainDispatchResult, LinkOpsStatus, LinkOpsJobPage, LinkOpsJobDeleteResult, ChainCountryRule, ChainExtractPlan, ChainTokenHealth, ChainImportResult, ChainRecord, ChainSnapshot, ConfigSnapshot, CpaArtifact, LogRecord, MailboxOption, MailcomAliasDomains, MailcomImportProgress, MailcomStatus, MailRentalConfigureBody, PreflightSnapshot, ProxyAssignment, ProxyCatalogSnapshot, RobotRecord, RobotSnapshot, RunListSnapshot, RunPlan, RunSummary, ServiceStatus, SessionAsset, SessionAssetPage, SessionAssetProbeBatch, SessionAssetQuery, SessionAssetResolveResult, SessionAssetTrialBatch, SettableSessionAssetLifecycle, SmsMarketSnapshot, Sub2ApiDeleteResult, Sub2ApiDocument, Sub2ApiFailedAccounts, Sub2ApiPushResult, NvtokensPushResult, TaskCapacitySnapshot, CpaArtifactSelectionItem, CpaExportSelection, RebindProviders, RebindPreflight, RebindStatus, RebindStartBody, RebindStartResult, RebindQueue, RebindQueueAddResult } from './types';
 
@@ -27,6 +28,7 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   const payload = await response.json().catch(() => ({}));
+  if (response.status === 401) notifySessionExpired();
   if (!response.ok) throw new ApiError(response.status, payload.message || payload.error || `HTTP ${response.status}`, payload.details);
   return payload as T;
 }
@@ -48,6 +50,7 @@ async function apiDownload(path: string, init: RequestInit = {}): Promise<{ blob
     },
   });
   if (!response.ok) {
+    if (response.status === 401) notifySessionExpired();
     const payload = await response.json().catch(() => ({} as any));
     throw new ApiError(response.status, payload.message || payload.error || `HTTP ${response.status}`, payload.details);
   }
@@ -79,6 +82,8 @@ function sessionAssetSearch(query: SessionAssetQuery = {}) {
 }
 
 export const endpoints = {
+  proxyInventory: (query: Record<string, string>) => api<import('./ProxyInventory').ProxyInventoryPage>(`/proxies/inventory?${new URLSearchParams(query)}`),
+  testProxyInventory: (body: unknown) => api<import('./ProxyInventory').ProxyTest>('/proxies/inventory/test', { method: 'POST', body: JSON.stringify(body) }),
   platformConfig: () => api<{ fields: import('./PlatformConfigPage').ExecutionSetting[] }>('/platform-config'),
   deviceFingerprints: (query: { q: string; match: DeviceFingerprintFilter; offset: number; limit: number }) => api<DeviceFingerprintPage>(`/device-fingerprints?${new URLSearchParams({ q: query.q, match: query.match, offset: String(query.offset), limit: String(query.limit) })}`),
   savePlatformConfig: (values: Record<string, number | number[]>) => api<{ fields: import('./PlatformConfigPage').ExecutionSetting[] }>('/platform-config', { method: 'PUT', body: JSON.stringify({ values }) }),
@@ -155,6 +160,7 @@ export const endpoints = {
   sessionAssetIds: (query: SessionAssetQuery = {}) => api<{ ids: string[]; total: number }>(`/session-assets/ids${sessionAssetSearch(query)}`),
   resolveSessionAssetEmails: (emails: string[]) => api<SessionAssetResolveResult>('/session-assets/resolve', { method: 'POST', body: JSON.stringify({ emails }) }),
   sessionAsset: (id: string) => api<SessionAsset>(`/session-assets/${encodeURIComponent(id)}`),
+  deviceProxy: (id: string) => api<{ proxyUrl: string; proxyAddress: string }>(`/device-fingerprints/${encodeURIComponent(id)}/proxy`),
   clearSessionAssetOAuthCooldown: (id: string) => api<{ id: string; cleared: boolean; asset: SessionAsset }>(`/session-assets/${encodeURIComponent(id)}/oauth-cooldown/clear`, { method: 'POST', body: '{}' }),
   moveSessionAssetLifecycle: (assetIds: string[], lifecycle: SettableSessionAssetLifecycle = 'sold') => api<{ requested: number; lifecycle: string; classification: string; changed: string[]; missing: string[] }>('/session-assets/lifecycle', { method: 'POST', body: JSON.stringify({ assetIds, lifecycle }) }),
   sessionAssetTotp: (id: string) => api<{ code: string; expiresIn: number }>(`/session-assets/${encodeURIComponent(id)}/totp`),
@@ -218,8 +224,8 @@ export const endpoints = {
   proxies: () => api<ProxyCatalogSnapshot>('/proxies?compact=1'),
   previewProxies: (body: unknown) => api<any>('/proxies/preview', { method: 'POST', body: JSON.stringify(body) }),
   importProxies: (body: unknown) => api<any>('/proxies/import', { method: 'POST', body: JSON.stringify(body) }),
-  buildAndPullProxyApi: (body: { provider: string; countryCode: string; count: number; protocol: string; sessionMinutes?: number; apiBaseUrl?: string }) => api<ProxyCatalogSnapshot>('/proxies/api/build-pull', { method: 'POST', body: JSON.stringify(body) }),
-  saveProxyProviderSettings: (body: { provider: string; count: number; protocol: string; sessionMinutes: number; apiBaseUrl?: string }) => api<{ ok: boolean; provider: string }>('/proxies/provider-settings', { method: 'PUT', body: JSON.stringify(body) }),
+  buildAndPullProxyApi: (body: { provider: string; countryCode: string; count: number; protocol: string; sessionMinutes?: number; apiBaseUrl?: string; iproyal?: import('./types').IPRoyalSettings }) => api<ProxyCatalogSnapshot>('/proxies/api/build-pull', { method: 'POST', body: JSON.stringify(body) }),
+  saveProxyProviderSettings: (body: { provider: string; count: number; protocol: string; sessionMinutes: number; apiBaseUrl?: string; iproyal?: import('./types').IPRoyalSettings }) => api<{ ok: boolean; provider: string }>('/proxies/provider-settings', { method: 'PUT', body: JSON.stringify(body) }),
   buildAndPull711: (body: { countryCode: string; count: number; protocol: string }) => api<ProxyCatalogSnapshot>('/proxies/711/build-pull', { method: 'POST', body: JSON.stringify(body) }),
   checkProxies: (ids?: string[]) => api<any>('/proxies/check', { method: 'POST', body: JSON.stringify({ ids }) }),
   pullProxySource: (sourceId: string) => api<ProxyCatalogSnapshot>(`/proxies/sources/${encodeURIComponent(sourceId)}/pull`, { method: 'POST', body: '{}' }),

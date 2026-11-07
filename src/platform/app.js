@@ -101,6 +101,11 @@ function buildPlatform({
   app.setErrorHandler((e, r, reply) => {
     let status = e.statusCode || 500,
       message = e.message;
+    if (status === 401 && ['GET', 'HEAD'].includes(r.method)
+      && String(r.headers.accept || '').includes('text/html')
+      && /^\/admin(?:\/|\?|$)/.test(r.url)) {
+      return reply.redirect('/login?next=' + encodeURIComponent(r.url));
+    }
     if (e.code === "23505") {
       status = 409;
       message = "记录已存在，请勿重复提交";
@@ -175,13 +180,24 @@ function buildPlatform({
   };
   app.get("/assets/*", serveAsset("assets"));
   app.get("/admin-assets/*", serveAsset("admin-assets"));
-  app.setNotFoundHandler((r, reply) => {
+  app.setNotFoundHandler(async (r, reply) => {
     if (
       r.method !== "GET" ||
       r.url.startsWith("/api/") ||
       r.url.startsWith("/open/")
     )
       return reply.code(404).send({ error: "接口不存在" });
+    const pathname = new URL(r.url, 'http://local').pathname;
+    if (!['/login', '/docs'].includes(pathname) && !r.user && String(r.headers.accept || '').includes('text/html')) {
+      try { await authenticate(db, r, false); }
+      catch (error) {
+        if (error.statusCode !== 401) throw error;
+        const query = new URLSearchParams({ next: r.url });
+        const invite = new URL(r.url, 'http://local').searchParams.get('invite');
+        if (invite) query.set('invite', invite);
+        return reply.redirect('/login?' + query);
+      }
+    }
     const index = path.join(root, "index.html");
     if (!fs.existsSync(index))
       return reply.code(503).send({ error: "请先构建前端" });

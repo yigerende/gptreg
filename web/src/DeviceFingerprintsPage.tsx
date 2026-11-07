@@ -8,10 +8,15 @@ import type { DeviceFingerprint, DeviceFingerprintFilter } from './device-finger
 import './device-fingerprints.css';
 
 function DeviceDetails({ item }: { item: DeviceFingerprint }) {
+  const proxy = useQuery({ queryKey: ['device-proxy', item.id], queryFn: () => endpoints.deviceProxy(item.id), gcTime: 0 });
   const p = item.profile;
   const size = (w?: number, h?: number) => w && h ? `${w} × ${h}` : '未记录';
   const fields = [
     ['资产 ID', item.id], ['来源任务', item.sourceRunId],
+    ['注册时间', item.registeredAt ? formatTime(item.registeredAt) : '未记录'],
+    ['注册代理出口 IP', item.exitIp],
+    ['出口 IP 检测时间', item.exitIpCheckedAt ? formatTime(item.exitIpCheckedAt) : '未记录'],
+    ['注册代理连接地址', proxy.isPending ? '正在读取…' : proxy.isError ? '读取失败，请重新展开' : proxy.data?.proxyUrl || proxy.data?.proxyAddress || item.proxyAddress],
     ['User-Agent', p.userAgent], ['操作系统', p.oscpu || p.platform],
     ['语言列表', p.languages.join(', ')], ['Accept-Language', p.acceptLanguage],
     ['时区', p.timeZone], ['CPU 线程', p.hardwareConcurrency],
@@ -58,31 +63,34 @@ export function DeviceFingerprintsPage() {
       <div className="panel"><span>不同指纹</span><strong>{summary?.uniqueFingerprints ?? '—'}</strong><small>按已保存的完整指纹哈希统计</small></div>
       <div className="panel"><span>指纹重复账号</span><strong className={summary?.duplicateFingerprintAccounts ? 'device-warning' : ''}>{summary?.duplicateFingerprintAccounts ?? '—'}</strong><small>{summary?.duplicateFingerprintGroups ?? 0} 组相同指纹</small></div>
       <div className="panel"><span>不同设备 ID</span><strong>{summary?.uniqueDeviceIds ?? '—'}</strong><small>{summary?.duplicateDeviceAccounts ?? 0} 个账号的设备 ID 重复</small></div>
+      <div className="panel"><span>不同出口 IP</span><strong>{summary?.uniqueExitIps ?? '—'}</strong><small>{summary?.missingExitIps ?? 0} 个账号未记录出口 IP</small></div>
+      <div className="panel"><span>出口 IP 重复账号</span><strong className={summary?.duplicateExitIpAccounts ? 'device-warning' : ''}>{summary?.duplicateExitIpAccounts ?? '—'}</strong><small>按注册时检测到的 IP 统计</small></div>
     </div>
-    <p className="device-explanation">指纹与设备 ID 分别统计，设备 ID 不同不代表指纹不同。点击重复标记可查询相关账号。注册地区来自保存的代理配置，不代表已核验实际出口 IP。</p>
+    <p className="device-explanation">指纹、设备 ID、注册出口 IP 分别查重，点击重复标记可查询相关账号。出口 IP 为注册前通过当时代理检测的记录；历史未检测的显示“未记录”。代理连接地址在详情中查看，不参与查重。</p>
     {notice && <Notice tone={notice.tone} onClose={() => setNotice(null)}>{notice.text}</Notice>}
     {query.error && <Notice tone="danger">读取失败：{errorMessage(query.error)}。请点击刷新重试。</Notice>}
     {!!summary?.unreadable && <Notice tone="warning">有 {summary.unreadable} 条账号记录暂时无法读取，重复统计可能不完整。</Notice>}
     <section className="panel device-list">
       <form className="device-toolbar" onSubmit={event => { event.preventDefault(); applySearch(draft); }}>
-        <label className="device-search"><Search size={17} /><input aria-label="搜索设备指纹" maxLength={256} placeholder="邮箱、指纹、设备 ID、地区或任务 ID" value={draft} onChange={event => setDraft(event.target.value)} /></label>
+        <label className="device-search"><Search size={17} /><input aria-label="搜索设备指纹" maxLength={256} placeholder="邮箱、指纹、设备 ID、出口 IP、地区或任务 ID" value={draft} onChange={event => setDraft(event.target.value)} /></label>
         <select aria-label="设备记录筛选" value={match} onChange={event => { setMatch(event.target.value as DeviceFingerprintFilter); setOffset(0); setExpanded(''); }}>
-          <option value="all">全部记录</option><option value="fingerprint">仅指纹重复</option><option value="device">仅设备 ID 重复</option><option value="missing">信息缺失</option>
+          <option value="all">全部记录</option><option value="fingerprint">仅指纹重复</option><option value="device">仅设备 ID 重复</option><option value="exitIp">仅出口 IP 重复</option><option value="missing">信息缺失</option>
         </select>
         <Button type="submit" tone="primary">查询</Button>
         {(search || match !== 'all') && <Button type="button" tone="quiet" onClick={() => { setMatch('all'); applySearch(''); }}>重置</Button>}
       </form>
-      <p className="device-list-note">每页 50 条，按创建时间倒序。顶部为全库统计，筛选只影响下方列表。{query.isFetching && <span role="status"> 正在加载…</span>}</p>
+      <p className="device-list-note">每页 50 条，默认按注册时间倒序，未记录的排在后面。顶部为全库统计，筛选只影响下方列表。{query.isFetching && <span role="status"> 正在加载…</span>}</p>
       <div className="device-table-scroll" aria-busy={query.isFetching} inert={query.isPlaceholderData || undefined}>
-        <table className="device-table"><thead><tr><th>账号邮箱</th><th>浏览器指纹</th><th>设备 ID</th><th>注册地区 / 浏览器</th><th>创建时间</th><th>操作</th></tr></thead>
+        <table className="device-table"><thead><tr><th>账号邮箱</th><th>浏览器指纹</th><th>设备 ID</th><th>注册代理出口 IP</th><th>注册地区 / 浏览器</th><th>注册时间</th><th>操作</th></tr></thead>
           <tbody>{data?.items.map(item => <Fragment key={item.id}>
             <tr><td><strong className="device-email">{item.email || '邮箱未记录'}</strong><span className="device-row-note">{item.archived ? '已归档' : item.lifecycle === 'sold' ? '已卖出' : '在库'}{item.status === 'corrupt' ? ' · 读取异常' : ''}</span></td>
               <td>{identity(item.fingerprint, '指纹', item.fingerprintAccounts)}</td><td>{identity(item.deviceId, '设备 ID', item.deviceAccounts)}</td>
+              <td>{identity(item.exitIp || '', '出口 IP', item.exitIpAccounts || 0)}</td>
               <td><span>{item.countryCode || '未记录'}</span><span className="device-row-note">{[item.profile.browser, item.profile.browserVersion].filter(Boolean).join(' ') || '浏览器未记录'}</span><span className="device-row-note">{item.profile.timeZone || '时区未记录'}</span></td>
-              <td className="device-time">{formatTime(item.createdAt)}</td>
+              <td className="device-time">{item.registeredAt ? formatTime(item.registeredAt) : '未记录'}</td>
               <td><Button tone="quiet" aria-label={`${expanded === item.id ? '收起' : '查看'} ${item.email || item.id} 的设备详情`} aria-expanded={expanded === item.id} onClick={() => setExpanded(expanded === item.id ? '' : item.id)} icon={<ChevronDown size={14} className={expanded === item.id ? 'device-chevron-open' : ''} />}>{expanded === item.id ? '收起' : '详情'}</Button></td>
             </tr>
-            {expanded === item.id && <tr><td colSpan={6}><DeviceDetails item={item} /></td></tr>}
+            {expanded === item.id && <tr><td colSpan={7}><DeviceDetails item={item} /></td></tr>}
           </Fragment>)}</tbody></table>
       </div>
       {!query.isLoading && !query.error && data?.items.length === 0 && <EmptyState icon={<Fingerprint size={24} />} title="没有匹配的账号" detail="可修改搜索条件，或等待账号资料保存后刷新。" />}
