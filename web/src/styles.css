@@ -844,6 +844,12 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .sms-inline-country-field { min-width: 0; display: grid; grid-column: 1 / -1; gap: 5px; }
 .sms-inline-country-field > span { color: var(--muted); font-size: 10px; font-weight: 650; }
 .sms-settings-actions { margin-top: 16px; }
+.sms-settings-dialog .sms-bower-country-option { grid-template-columns: 14px minmax(0, 1fr) minmax(0, 1fr); }
+.sms-settings-dialog .sms-bower-country-option > span small { white-space: normal; overflow-wrap: anywhere; }
+.sms-settings-dialog progress { display: block; width: 100%; margin-top: 6px; }
+@media (max-width: 620px) {
+  .sms-settings-dialog .sms-bower-country-selector { grid-template-columns: 1fr; }
+}
 .sms-mail-settings-dialog { width: min(540px, calc(100vw - 28px)); }
 .sms-mail-tab[data-state="inactive"] { display: none; }
 .sms-mail-api-help, .sms-mail-api-fields small { color: var(--muted); font-size: 11px; line-height: 1.6; }
