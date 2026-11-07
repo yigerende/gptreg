@@ -11645,3 +11645,45 @@ test('a created account without a callback moved to a fresh exit signs in there'
   assert.equal(last.existingOnly, true);
   assert.equal(state.jobs[0].callbackLoginRecovery.causeCode, 'CALLBACK_CONTINUATION_UNAVAILABLE');
 });
+
+test('storage failure after a successful proxy probe is not reported as pool exhaustion', async t => {
+  const { ProxyClaims } = require('../src/oauth-proxies');
+  const config = branchConfig(1); config.proxyPool.required = true;
+  const plan = normalizeRunPlan({ taskKind: 'register_session', mailCount: 1, workerConcurrency: 1, aliasStrategy: 'root' }, config);
+  const state = makeInitialBranchState(config, plan, { runId: 'usage-storage-failure' });
+  const retired = [], probes = [], registry = new Map();
+  const usage = { begin() { throw Object.assign(new Error('Usage storage failed'), { code: 'PROXY_USAGE_STORAGE_ERROR' }); }, release() {} };
+  const gate = new ControlGate(), timer = setTimeout(() => gate.request('cancel'), 5000);
+  t.after(() => clearTimeout(timer));
+  await runBranchOrchestrator({ log: { entries: [] } }, state, config, {
+    assetStore: temporaryStore(t), control: gate,
+    mailClient: mailboxClient([{ id: 'mail-storage', email: 'storage@example.test', tokenValid: true, bound: false }]),
+    usedProxyIds: new ProxyClaims(registry, state.runId, usage),
+    proxyEntries: ['one', 'two'].map(id => ({ id, url: `http://${id}.example.test:9000`, workerSlots: [1], resourceKind: 'countryPool', countryCode: 'JP' })),
+    proxyProbeExecutor: async () => { probes.push(true); return { response: { status: 200 } }; },
+    retireCountryPoolProxy: async x => retired.push(x),
+    sessionRunnerFactory: () => { assert.fail('Storage failure must stop before account traffic'); },
+  });
+  assert.equal(probes.length, 1);
+  assert.equal(registry.size, 0);
+  assert.deepEqual(retired, []);
+  assert.equal(state.jobs[0].error.code, 'PROXY_USAGE_STORAGE_ERROR');
+  assert.equal(Object.values(state.proxyHealth).some(x => x.status === 'failed'), false);
+  assert.equal(state.events.some(x => x.type === 'worker_proxy_rejected'), false);
+});
+
+test('resume discards only proxy health failures caused by the legacy read-only usage path', () => {
+  const config = branchConfig(1);
+  const plan = normalizeRunPlan({ taskKind: 'register_session', mailCount: 1, workerConcurrency: 1, aliasStrategy: 'root' }, config);
+  const state = makeInitialBranchState(config, plan, { runId: 'usage-storage-recovery' });
+  state.status = 'waiting';
+  state.proxyHealth = {
+    storage: { status: 'failed', reason: "EROFS: read-only file system, open '/app/proxy-usage.json.7.123abc.tmp'" },
+    network: { status: 'failed', reason: 'Connection timed out' },
+    unrelated: { status: 'failed', reason: "EROFS: read-only file system, open '/app/other.json'" },
+  };
+  resumeBranchState(state);
+  assert.equal(state.proxyHealth.storage, undefined);
+  assert.equal(state.proxyHealth.network.status, 'failed');
+  assert.equal(state.proxyHealth.unrelated.status, 'failed');
+});

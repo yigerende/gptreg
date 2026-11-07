@@ -15,6 +15,32 @@ function fixture(t) {
   return { file, now: () => clock, advance: ms => clock += ms, usage: new ProxyUsage(file, { now: () => clock }) };
 }
 
+test('usage write failure is classified as storage failure and preserves existing records', t => {
+  const f = fixture(t), entry = { id: 'saved', sessionMinutes: 10 };
+  f.usage.begin(entry);
+  const previous = fs.readFileSync(f.file, 'utf8');
+  f.usage.file = path.join(f.file, 'not-a-directory', 'proxy-usage.json');
+  assert.throws(() => f.usage.begin({ id: 'unsaved' }), { code: 'PROXY_USAGE_STORAGE_ERROR' });
+  assert.equal(f.usage.get('unsaved').inUse, false);
+  assert.throws(() => f.usage.release('saved'), { code: 'PROXY_USAGE_STORAGE_ERROR' });
+  assert.equal(f.usage.get('saved').inUse, true);
+  assert.equal(fs.readFileSync(f.file, 'utf8'), previous);
+});
+
+test('rebind stops on usage storage failure without retiring healthy candidates', async t => {
+  const f = fixture(t);
+  f.usage.begin({ id: 'saved' });
+  f.usage.file = path.join(f.file, 'blocked', 'proxy-usage.json');
+  const registry = new Map(), retired = [], probes = [];
+  const pool = createRebindProxyPool([{ workerSlot: 1, kind: 'countryPool', countryCode: 'JP' }], {
+    dynamic: { countryPools: [{ countryCode: 'JP', entries: ['one', 'two'].map(name => ({ url: `http://${name}.example.test:9000` })) }] },
+  }, { claims: registry, usage: f.usage, executor: async () => { probes.push(true); return { response: { status: 200 } }; }, retireProxy: async x => retired.push(x) });
+  await assert.rejects(pool.acquire(1), { code: 'PROXY_USAGE_STORAGE_ERROR' });
+  assert.equal(probes.length, 1);
+  assert.deepEqual(retired, []);
+  assert.equal(registry.size, 0);
+});
+
 test('cooldown starts at release for the full sticky duration and persists through reloading', t => {
   const f = fixture(t), entry = { id: 'proxy-a', sessionMinutes: 10, url: 'http://secret:password@example.test:9000' };
   f.usage.begin(entry); f.advance(120000);

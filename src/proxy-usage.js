@@ -21,7 +21,13 @@ class ProxyUsage {
   }
 
   write(entries) {
-    atomicWriteText(this.file, JSON.stringify({ version: 1, entries }) + '\n');
+    try {
+      atomicWriteText(this.file, JSON.stringify({ version: 1, entries }) + '\n');
+    } catch (cause) {
+      throw Object.assign(new Error(`代理使用记录保存失败（${cause.code || 'IO_ERROR'}），请检查运行数据目录的写入权限与磁盘空间`, { cause }), {
+        code: 'PROXY_USAGE_STORAGE_ERROR', causeCode: cause.code || 'IO_ERROR',
+      });
+    }
     this.entries = entries;
   }
 

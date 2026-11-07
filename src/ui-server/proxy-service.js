@@ -80,7 +80,8 @@ class ProxyService {
     this.executor = options.executor || executePureHttpUrl;
     this.checks = new Map();
     this.claims = new Map();
-    this.usage = options.usage || new ProxyUsage(path.join(configService.cwd, 'proxy-usage.json'), {
+    // Docker mounts the configuration directory (.runtime), while cwd is read-only.
+    this.usage = options.usage || new ProxyUsage(path.join(path.dirname(configService.filePath), 'proxy-usage.json'), {
       now: options.now,
       sessionMinutesFor: entry => {
         if (entry.sessionMinutes != null) return entry.sessionMinutes;

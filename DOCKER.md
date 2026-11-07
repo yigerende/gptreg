@@ -46,6 +46,14 @@ docker compose -p gptreg -f compose.yml up -d --no-deps --no-build --force-recre
 
 数据库容器和卷保持。镜像提前构建，切换阶段不重复构建。验证 /healthz、/health/ready、登录后的 /api/v1/health、新前台 /api/user/v1/me，以及数据库、主密钥、原配置和其他容器 ID/启动时间。
 
+代理使用与冷却记录保存在配置文件同级的 `proxy-usage.json`，正式环境即 `.runtime/proxy-usage.json`，随 `.runtime` 一起备份。不要为记录写入开放应用根目录的写权限。预构建后须用空的临时运行目录验证只读容器中的占用、释放和重启恢复（不会请求外部服务）：
+
+```bash
+docker run --rm --read-only --network none --tmpfs /app/.runtime:rw,size=16m -e GPTREG_RUNTIME_SMOKE_TEST=1 --entrypoint node gptreg:<提交版本> scripts/check-proxy-runtime.js
+```
+
+此命令不能挂载正式 `.runtime`；检测脚本要求空目录，以免碰到业务配置。
+
 回滚到本平台版本只切换已验证旧镜像，保留新增数据。若回滚到最早的单容器版本，先停止 worker，用**新镜像**执行 `node scripts/runtime-encryption.js decrypt` 解密当前运行文件，再恢复旧 app/Compose；保留 PostgreSQL 卷，不能用旧备份覆盖新订单。失去主密钥将无法恢复加密凭据。
 
 禁止全局 prune、其他项目 Compose 操作、down -v 或上传本地源码覆盖正式目录。SSH 走当前默认路由、22 端口、单会话串行，不绑定源 IP/网卡；失败等待约 5 秒后重试。GitHub 自动镜像发布流水线尚未配置。

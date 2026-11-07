@@ -4436,6 +4436,12 @@ function normalizePersistedProxyState(state) {
   const maintenanceIds = maintenanceProxyIdsForState(state);
   for (const [proxyId, value] of Object.entries(state.proxyHealth)) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    // The old Docker path wrote usage into read-only /app after a successful
+    // probe. Only discard this exact misclassification; network failures stay.
+    if (value.status === 'failed' && /^EROFS: read-only file system, open '[^'\r\n]*[/\\]proxy-usage\.json(?:\.[^'\r\n]*)?'$/.test(String(value.reason || ''))) {
+      delete state.proxyHealth[proxyId];
+      continue;
+    }
     const record = { ...value };
     const legacyReason = String(record.recheckReason || '').trim();
     const retired = ['burned', 'recheck_required'].includes(String(record.status || ''));
@@ -4807,6 +4813,7 @@ async function bindWorkerProxy(worker, context) {
     } catch (error) {
       // The claim only holds for a candidate that worked out.
       context.usedProxyIds.delete(candidate.id);
+      if (error?.code === 'PROXY_USAGE_STORAGE_ERROR') throw error;
       const maintenance = sharedProxyEntry(candidate, context);
       if (maintenance) {
         const at = nowIso(context);

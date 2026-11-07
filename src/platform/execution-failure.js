@@ -20,6 +20,7 @@ const reasons = {
     "OAuth 任务需要重新指定国家池或固定代理",
   ],
   PROXY_POOL_BUSY: ["waiting", "代理正在被其他任务占用", true],
+  PROXY_USAGE_STORAGE_ERROR: ["configuration", "代理使用记录保存失败，请管理员检查运行数据目录的写入权限与磁盘空间"],
   TASK_SLOT_BUSY: ["waiting", "执行槽正在被其他任务占用", true],
   MAIN_TASK_CAPACITY: ["waiting", "注册执行槽正在被其他任务占用", true],
   CUSTOMER_TASK_CAPACITY: ["waiting", "客户注册并发已满", true],

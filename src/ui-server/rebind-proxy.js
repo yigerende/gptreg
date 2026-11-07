@@ -113,6 +113,10 @@ function createRebindProxyPool(assignments, catalog, options = {}) {
           return entry.url;
         } catch (error) {
           claims?.delete(entry.id);
+          if (error?.code === 'PROXY_USAGE_STORAGE_ERROR') {
+            allocator.release(key);
+            throw error;
+          }
           lastError = sanitizeValue({ code: String(error.code || 'PROXY_PROBE_FAILED'), message: String(error.message || '').slice(0, 180) }, { redactPii: false });
           allocator.fail(entry, lastError.message);
           let retired = false;

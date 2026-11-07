@@ -9,6 +9,27 @@ const Fastify = require('fastify');
 const { initializeRuntime, installAccessControl } = require('../docker/runtime');
 const { validateV2Config } = require('../src/config-v2');
 const { providerApiProxiesFromConfig } = require('../src/provider-api-egress');
+const { ConfigService } = require('../src/ui-server/config-service');
+const { ProxyService } = require('../src/ui-server/proxy-service');
+const { ProxyClaims } = require('../src/oauth-proxies');
+
+test('Docker proxy usage persists alongside runtime configuration through release and restart', t => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gptreg-proxy-runtime-'));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  fs.copyFileSync(path.join(__dirname, '../gpt-re.config.example.json'), path.join(cwd, 'gpt-re.config.example.json'));
+  const { configPath } = initializeRuntime(cwd);
+  const create = () => new ProxyService(new ConfigService({ cwd, configPath }));
+  const service = create(), claims = new ProxyClaims(service.claims, 'test-run', service.usage);
+  const entry = { id: 'fixture-proxy', sessionMinutes: 10 };
+  claims.add(entry.id); claims.markUsed(entry);
+  assert.equal(create().usage.get(entry.id).inUse, true);
+  assert.equal(fs.existsSync(path.join(cwd, 'proxy-usage.json')), false);
+  assert.equal(fs.existsSync(path.join(cwd, '.runtime/proxy-usage.json')), true);
+  claims.delete(entry.id);
+  const restarted = create();
+  assert.equal(restarted.usage.get(entry.id).inUse, false);
+  assert.equal(restarted.usage.isCooling(entry.id), true);
+});
 
 test('container initializes empty persistent data and preserves configuration on restart', (t) => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gptreg-docker-'));

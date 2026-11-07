@@ -18,6 +18,14 @@ const connection =
   (fs.existsSync(".local/platform-test/connection.json")
     ? JSON.parse(fs.readFileSync(".local/platform-test/connection.json")).url
     : "");
+test('proxy usage storage errors retain an explicit configuration diagnosis without leaking paths', () => {
+  const failure = executionFailure({ code: 'PROXY_USAGE_STORAGE_ERROR', message: '/private/runtime/path' });
+  assert.equal(failure.code, 'PROXY_USAGE_STORAGE_ERROR');
+  assert.equal(failure.category, 'configuration');
+  assert.equal(failure.wait, false);
+  assert.match(failure.detail, /运行数据目录/);
+  assert.equal(JSON.stringify(failure).includes('/private'), false);
+});
 function engine() {
   const config = validateV2Config({
     aliases: { strategy: "root" },
