@@ -107,6 +107,13 @@ class SessionProxyConfig {
     });
     return this.regions();
   }
+  async regionSelection(query = {}) {
+    return this.db.tx(async q => {
+      const c = await this.control(q, true);
+      const rows = (await q.query('SELECT code FROM session_proxy_regions WHERE NOT suppressed AND (code ILIKE $1 OR name ILIKE $1) ORDER BY sort,code', [`%${String(query.search || '').slice(0, 100)}%`])).rows;
+      return { codes: rows.map(r => r.code), revision: Number(c.revision) };
+    });
+  }
   async editRegion(code, input, tx) {
     fail(/^[A-Z]{2}$/.test(code), '国家代码无效');
     fail(Object.keys(input).every(k => ['name', 'sort', 'enabled', 'suppressed', 'expected_revision'].includes(k)), '地区字段无效');

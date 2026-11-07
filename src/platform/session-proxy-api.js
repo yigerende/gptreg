@@ -27,11 +27,12 @@ function registerSessionProxy(app, config, allocator) {
     return { ok: true, countryCount: rows.length, message: action === 'test' ? 'API 连通；账号密码请使用指定国家测试验证' : '同步完成，新国家默认关闭' };
   });
   app.get(`${base}/regions`, r => config.regions(r.query));
+  app.get(`${base}/regions/selection`, r => config.regionSelection(r.query));
   app.patch(`${base}/regions/:code`, async r => { await limited(r, 'regions', 60); const result = await config.editRegion(r.params.code, r.body || {}); await record(r, 'region.edit', r.params.code, 'ok'); return result; });
   app.delete(`${base}/regions/:code`, async r => { await limited(r, 'regions', 60); const result = await config.editRegion(r.params.code, { suppressed: true, expected_revision: r.body?.expected_revision }); await record(r, 'region.delete', r.params.code, 'ok'); return result; });
   app.post(`${base}/regions/batch`, async r => {
     const { codes, enabled } = r.body || {};
-    fail(Array.isArray(codes) && codes.length <= 100 && typeof enabled === 'boolean', '批量地区参数无效');
+    fail(Array.isArray(codes) && codes.length > 0 && codes.length <= 676 && typeof enabled === 'boolean', '批量地区参数无效');
     await limited(r, 'regions', 60);
     const result = await config.batchRegions(codes, enabled, r.body.expected_revision);
     await record(r, 'region.batch', codes.join(','), enabled ? 'enabled' : 'disabled');

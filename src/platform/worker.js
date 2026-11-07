@@ -88,6 +88,11 @@ class OrderWorker {
       COALESCE(LEAST(i.execution_started_at,(SELECT min(a.created_at) FROM platform_attempts a WHERE a.item_id=i.id)),i.attempt_started_at) AS execution_started_at
       FROM platform_items i JOIN platform_orders o ON o.id=i.order_id WHERE i.id=$1`, [itemId]);
   }
+  async cancelEngineRun(runId) {
+    const link = await this.db.one('SELECT item_id FROM platform_attempts WHERE run_id=$1', [runId]);
+    if (!link) return null;
+    return this.operation(link.item_id, () => this.orders.cancelEngineRun(runId));
+  }
   async refund(item, reason) {
     return this.orders.finish(item.id, null, `${reason}，未交付部分积分已退回`, item.run_id);
   }
@@ -237,6 +242,9 @@ class OrderWorker {
       [excludedUsers],
     );
     if (!candidate) return false;
+    return this.operation(candidate.id, () => this.startCandidate(candidate));
+  }
+  async startCandidate(candidate) {
     if (expired(candidate)) { await this.refund(candidate, "执行超过总时限"); return; }
     // Each customer receives one account per turn. Durable run IDs are written
     // before invoking the engine so a restart can never silently start a duplicate.

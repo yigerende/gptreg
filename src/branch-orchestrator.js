@@ -6082,7 +6082,7 @@ function assetPayload(job, state, context, sourceKind) {
  * the same place instead of guessing.
  */
 function registrationExitRecord(proxy) {
-  if (proxy?.resourceKind === 'sessionProxy') return { id: proxy.id, countryCode: proxy.countryCode, protocol: proxy.protocol, resourceKind: 'sessionProxy', bindingId: proxy.bindingId };
+  if (proxy?.resourceKind === 'sessionProxy') return { id: proxy.id, countryCode: proxy.countryCode, protocol: proxy.protocol, endpoint: proxy.url ? new URL(proxy.url).host : '', resourceKind: 'sessionProxy', bindingId: proxy.bindingId };
   if (!proxy?.url) return null;
   let endpoint = '';
   try {

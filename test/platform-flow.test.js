@@ -262,6 +262,56 @@ async function fixture(t) {
     asset,
   };
 }
+test('operator cancellation follows an older registration attempt through OAuth cooldown and refunds once', { skip: !connection }, async t => {
+  const f = await fixture(t), order = await f.create(true);
+  await f.worker.cycle();
+  const first = await f.item(order), asset = f.asset();
+  f.states.get(first.run_id).jobs = [{ sessionAssetId: asset.id }];
+  await f.worker.cycle();
+  f.manager.start = async () => { throw Object.assign(new Error('cooldown'), { code: 'OAUTH_ASSET_COOLDOWN' }); };
+  await f.db.query('UPDATE platform_items SET available_at=now()');
+  await f.worker.cycle();
+  const waiting = await f.item(order);
+  assert.equal(waiting.status, 'oauth_pending');
+  assert.notEqual(waiting.run_id, first.run_id);
+  await Promise.all(Array.from({ length: 12 }, () => f.worker.cancelEngineRun(first.run_id)));
+  const restarted = new OrderWorker(f.db, f.orders, f.manager);
+  await restarted.cycle();
+  assert.equal((await f.item(order)).status, 'cancelled');
+  assert.equal((await f.orders.detail(f.user.id, order.id)).status, 'cancelled');
+  assert.equal((await f.db.one("SELECT count(*)::int n FROM platform_ledger WHERE kind='release'")).n, 1);
+  assert.equal((await f.db.one('SELECT frozen FROM platform_users WHERE id=$1', [f.user.id])).frozen, 0);
+  assert.equal((await f.db.one('SELECT count(*)::int n FROM platform_run_cleanup')).n, 2);
+  await f.db.query("UPDATE platform_items SET status='running'");
+  await restarted.cycle();
+  assert.equal((await f.item(order)).status, 'cancelled');
+});
+
+test('operator cancellation isolates one account; completed deliveries and standalone runs are unchanged', { skip: !connection }, async t => {
+  const f = await fixture(t);
+  const order = (await f.orders.create(f.user, { quantity: 2, need_oauth: false }, id(), 'web')).order;
+  await f.worker.cycle();
+  const items = (await f.db.query('SELECT * FROM platform_items ORDER BY position')).rows;
+  await f.worker.cancelEngineRun(items[0].run_id);
+  const asset = f.asset(); f.states.get(items[1].run_id).jobs = [{ sessionAssetId: asset.id }];
+  await f.worker.cycle();
+  await f.worker.cancelEngineRun(items[1].run_id);
+  assert.equal(await f.worker.cancelEngineRun('standalone-run'), null);
+  const result = await f.orders.detail(f.user.id, order.id);
+  assert.equal(result.status, 'partial'); assert.equal(result.delivered, 1);
+  assert.equal(result.charged, 50); assert.equal(result.released, 50);
+  assert.equal((await f.db.one("SELECT count(*)::int n FROM platform_accounts")).n, 1);
+});
+
+test('engine fatal stop without an administrator cancellation keeps the existing retry policy', { skip: !connection }, async t => {
+  const f = await fixture(t), order = await f.create(); await f.worker.cycle();
+  const item = await f.item(order);
+  Object.assign(f.states.get(item.run_id), { status: 'cancelled', control: { requestedAction: 'cancel' }, jobs: [{ error: { code: 'EMAIL_OTP_TIMEOUT' } }] });
+  await f.worker.cycle();
+  assert.equal((await f.item(order)).status, 'queued');
+  assert.equal((await f.db.one("SELECT count(*)::int n FROM platform_ledger WHERE kind='release'")).n, 0);
+});
+
 function holdExecutions(f) {
   const live = new Map(),
     original = f.manager.start.bind(f.manager);

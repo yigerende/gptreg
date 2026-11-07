@@ -60,6 +60,23 @@ test('shared capacity, exact release and immutable configuration', { skip: !conn
   assert.ok(!exposed.includes('test-password') && !exposed.includes('new-password'));
 });
 
+test('historical session proxy metadata resolves exact registration ownership and exposes credentials only in admin detail', { skip: !connection }, async t => {
+  const f = await fixture(t), { enrichSessionProxyAssets } = require('../src/platform/session-proxy-assets');
+  const held = await f.allocator.acquire({ ...f.request(), runId: 'registration-origin' });
+  await f.allocator.assert(held, { assetId: 'asset-example' });
+  await f.allocator.release(held);
+  const rows = [{ id: 'asset-example', sourceRunId: 'registration-origin', sourceProxy: { countryCode: held.country, exitIp: '192.0.2.1' } },
+    { id: 'asset-example', sourceRunId: 'unrelated-oauth', sourceProxy: null }];
+  const list = await enrichSessionProxyAssets(f, rows);
+  assert.equal(list[0].sourceProxy.endpoint, 'geo.iproyal.com:12321');
+  assert.equal(list[0].sourceProxy.exitIp, '192.0.2.1');
+  assert.equal(list[1].sourceProxy, null);
+  assert.ok(!JSON.stringify(list).includes('test-password'));
+  assert.equal(list[0].registrationProxyUrl, undefined);
+  const detail = await enrichSessionProxyAssets(f, [list[0]], true);
+  assert.equal(detail[0].registrationProxyUrl, held.endpoint);
+});
+
 test('supplier adapter sends official HTTP/SOCKS5 and auth fields and never echoes supplier secrets', async () => {
   const { SessionProxyGenerator } = require('../src/ui-server/session-proxy-generator');
   for (const protocol of ['http', 'socks5']) for (const authType of ['credentials', 'subuser']) {
@@ -268,7 +285,7 @@ test('admin routes enforce auth and pagination; concurrent order replay survives
   const req = (url, u, method = 'GET', payload) => app.inject({ method, url, payload, headers: { 'x-requested-with': 'gptreg', ...(u ? { cookie: `gptreg_session=${u.id}` } : {}) } });
   try {
     const base = '/api/admin/v1/session-proxy';
-    for (const suffix of ['', '/regions', '/sessions']) { assert.equal((await req(base + suffix)).statusCode, 401); assert.equal((await req(base + suffix, user)).statusCode, 403); }
+    for (const suffix of ['', '/regions', '/regions/selection', '/sessions']) { assert.equal((await req(base + suffix)).statusCode, 401); assert.equal((await req(base + suffix, user)).statusCode, 403); }
     const r = await req(base + '/regions?limit=1&offset=1', admin); assert.equal(r.statusCode, 200); assert.equal(r.json().items.length, 1); assert.equal(r.json().total, 2);
     for (const path of ['/regions', '/sessions']) for (const query of ['limit=1.5', 'offset=Infinity', 'offset=-1']) {
       assert.equal((await req(base + path + '?' + query, admin)).statusCode, 400);
@@ -285,6 +302,17 @@ test('admin routes enforce auth and pagination; concurrent order replay survives
     await f.config.save({ expected_revision: (await f.config.public()).revision, defaultMode: 'countryPool', enabled: false });
     assert.equal((await orders.create(user, { quantity: 2, registration_region: 'GLOBAL' }, 'same-order-key', 'web')).replayed, true);
     assert.equal(JSON.stringify((await req(base, admin)).json()).includes('test-password'), false);
+    const countries = Array.from({ length: 202 }, (_, i) => ({ code: String.fromCharCode(65 + Math.floor(i / 26), 65 + i % 26), name: `Selection country ${i}` }));
+    await f.config.syncRows(countries);
+    await f.config.editRegion('AA', { suppressed: true });
+    const selection = (await req(base + '/regions/selection?search=Selection', admin)).json();
+    assert.equal(selection.codes.length, 201); assert.ok(!selection.codes.includes('AA'));
+    const batch = await req(base + '/regions/batch', admin, 'POST', { codes: selection.codes, enabled: true, expected_revision: selection.revision });
+    assert.equal(batch.statusCode, 200);
+    assert.equal((await f.db.one("SELECT count(*)::int n FROM session_proxy_regions WHERE name LIKE 'Selection%' AND enabled")).n, 201);
+    assert.equal((await req(base + '/regions/batch', admin, 'POST', { codes: selection.codes, enabled: false, expected_revision: selection.revision })).statusCode, 409);
+    assert.equal((await req(base + '/regions?search=Selection&limit=25&offset=25', admin)).json().items.length, 25);
+
   } finally { await app.close(); }
 });
 

@@ -12,9 +12,10 @@ const states: Record<string, string> = { reserved: '预留中', active: '使用�
 
 export function ProxyWorkspace({ children }: { children: ReactNode }) {
   const query = useSessionProxySettings(), client = useQueryClient();
-  const [tab, setTab] = useState('countryPool'), [selected, setSelected] = useState('');
+  const [chosenTab, setTab] = useState(''), [selected, setSelected] = useState('');
+  const tab = chosenTab || query.data?.defaultMode || 'countryPool';
   const save = useMutation({ mutationFn: () => api<SessionProxySettings>('', 'PUT', { expected_revision: query.data?.revision, defaultMode: selected || query.data?.defaultMode }),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: ['session-proxy'] }); } });
+    onSuccess: value => { client.setQueryData(['session-proxy', 'settings'], value); setSelected(''); setTab(''); void client.invalidateQueries({ queryKey: ['session-proxy'] }); } });
   return <div className={`session-workspace proxy-mode-${tab}`}>
     <section className="workspace-band session-mode-bar"><div><strong>新任务默认代理模式</strong><p>只影响新任务。切换下方配置标签不会启用该模式。</p></div>
       <AppSelect ariaLabel="新任务默认代理模式" value={selected || query.data?.defaultMode || 'countryPool'} options={modes} onValueChange={setSelected} disabled={!query.data || save.isPending} />
@@ -78,16 +79,20 @@ export function SessionProxyRegions() {
   const settings = useSessionProxySettings();
   const client = useQueryClient(), [search, setSearch] = useState(''), [deleted, setDeleted] = useState(false), [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<string[]>([]), [editing, setEditing] = useState<SessionRegion>();
+  const [selectionRevision, setSelectionRevision] = useState<number>();
+  const clearSelection = () => { setSelected([]); setSelectionRevision(undefined); };
+  const selectAll = useMutation({ mutationFn: () => api<{ codes: string[]; revision: number }>('/regions/selection?' + new URLSearchParams({ search })),
+    onSuccess: value => { setSelected(value.codes); setSelectionRevision(value.revision); } });
   const query = useQuery({ queryKey: ['session-proxy', 'regions', search, deleted, offset], queryFn: () => api<SessionPage<SessionRegion>>('/regions?' + new URLSearchParams({ search, deleted: deleted ? '1' : '0', offset: String(offset), limit: '25' })) });
-  const action = useMutation({ mutationFn: ({ path, method, body }: { path: string; method: string; body?: unknown }) => api(path, method, { ...(body as object || {}), expected_revision: settings.data?.revision }),
-    onSuccess: () => { setEditing(undefined); setSelected([]); void client.invalidateQueries({ queryKey: ['session-proxy'] }); } });
+  const action = useMutation({ mutationFn: ({ path, method, body }: { path: string; method: string; body?: unknown }) => api(path, method, { ...(body as object || {}), expected_revision: path === '/regions/batch' ? selectionRevision : settings.data?.revision }),
+    onSuccess: () => { setEditing(undefined); clearSelection(); void client.invalidateQueries({ queryKey: ['session-proxy'] }); } });
   const edit = (r: SessionRegion, patch: Partial<SessionRegion>) => action.mutate({ path: '/regions/' + r.code, method: 'PATCH', body: patch });
   return <section className="workspace-band session-directory"><PageHeader title="注册地区" description="独立会话模式的国家目录；停用和删除只影响新任务，已接受订单保留原地区。" actions={<Link to="/proxies">返回代理配置</Link>} />
-    <div className="session-actions"><input aria-label="搜索注册地区" placeholder="搜索国家代码 / 名称" value={search} onChange={e => { setSearch(e.target.value); setOffset(0); }} /><label><input type="checkbox" checked={deleted} onChange={e => { setDeleted(e.target.checked); setOffset(0); }} />显示已删除</label><Button disabled={action.isPending} onClick={() => action.mutate({ path: '/sync', method: 'POST' })}>同步国家</Button>{[true, false].map(enabled => <Button key={String(enabled)} disabled={!selected.length || action.isPending} onClick={() => action.mutate({ path: '/regions/batch', method: 'POST', body: { codes: selected, enabled } })}>{enabled ? '批量启用' : '批量停用'}</Button>)}</div>
-    {(action.error || query.error) && <Notice tone="danger">{(action.error || query.error)?.message}</Notice>}
+    <div className="session-actions"><input aria-label="搜索注册地区" placeholder="搜索国家代码 / 名称" value={search} disabled={selectAll.isPending} onChange={e => { setSearch(e.target.value); setOffset(0); clearSelection(); }} /><label><input type="checkbox" checked={deleted} disabled={selectAll.isPending} onChange={e => { setDeleted(e.target.checked); setOffset(0); clearSelection(); }} />显示已删除</label><Button disabled={action.isPending} onClick={() => action.mutate({ path: '/sync', method: 'POST' })}>同步国家</Button><Button disabled={action.isPending || selectAll.isPending} onClick={() => selectAll.mutate()}>{selectAll.isPending ? <><LoaderCircle className="spin" size={15} />选择中…</> : search ? '选择全部搜索结果' : '一键选择全部'}</Button><Button disabled={!selected.length || action.isPending || selectAll.isPending} onClick={clearSelection}>清空选择</Button><span>已选择 {selected.length} 个地区（跨页）</span>{[true, false].map(enabled => <Button key={String(enabled)} disabled={!selected.length || action.isPending || selectAll.isPending} onClick={() => action.mutate({ path: '/regions/batch', method: 'POST', body: { codes: selected, enabled } })}>{enabled ? '批量启用' : '批量停用'}</Button>)}</div>
+    {(action.error || query.error || selectAll.error) && <Notice tone="danger">{(action.error || query.error || selectAll.error)?.message}</Notice>}
     {query.isFetching && <span role="status">正在加载地区…</span>}
     <div className="session-table-scroll"><table className="session-table"><thead><tr><th>选择</th><th>国家码</th><th>名称</th><th>供应商</th><th>排序</th><th>状态</th><th>操作</th></tr></thead><tbody>{query.data?.items.map(row => <tr key={row.code}>
-      <td><input type="checkbox" aria-label={`选择 ${row.code}`} checked={selected.includes(row.code)} disabled={row.suppressed} onChange={e => setSelected(old => e.target.checked ? [...old, row.code] : old.filter(x => x !== row.code))} /></td><td><code>{row.code}</code></td>
+      <td><input type="checkbox" aria-label={`选择 ${row.code}`} checked={selected.includes(row.code)} disabled={row.suppressed || action.isPending || selectAll.isPending} onChange={e => { setSelectionRevision(old => old ?? settings.data?.revision); setSelected(old => e.target.checked ? [...old, row.code] : old.filter(x => x !== row.code)); }} /></td><td><code>{row.code}</code></td>
       <td>{editing?.code === row.code ? <input aria-label="地区名称" value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} /> : row.name}</td><td>IPRoyal</td>
       <td>{editing?.code === row.code ? <input aria-label="地区排序" type="number" value={editing.sort} onChange={e => setEditing({ ...editing, sort: Number(e.target.value) })} /> : row.sort}</td><td>{row.suppressed ? '已删除' : row.enabled ? '已开放' : '已停用'}</td>
       <td><div className="session-actions">{editing?.code === row.code ? <><Button disabled={action.isPending} onClick={() => edit(row, { name: editing.name, sort: editing.sort })}>保存</Button><Button onClick={() => setEditing(undefined)}>取消</Button></> : <Button onClick={() => setEditing(row)}>编辑</Button>}

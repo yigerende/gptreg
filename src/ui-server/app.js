@@ -470,8 +470,13 @@ function buildApp(options = {}) {
     return runManager.resume(safeRunId(request.params.runId), request.body || {});
   });
   app.post('/api/v1/runs/:runId/cancel', async (request, reply) => {
+    const runId = safeRunId(request.params.runId);
+    if (options.onRunCancel) {
+      runManager.load(runId);
+      await options.onRunCancel(runId);
+    }
     reply.code(202);
-    return runManager.cancel(safeRunId(request.params.runId), request.body?.reason, {
+    return runManager.cancel(runId, request.body?.reason, {
       resolveSmsAcquisition: request.body?.resolveSmsAcquisition,
     });
   });
@@ -680,7 +685,7 @@ function buildApp(options = {}) {
     reply.header('Cache-Control', 'no-store');
     const query = request.query || {};
     const requestedFacets = query.facet ?? query.facets;
-    return runManager.sessionAssets().query({
+    const result = runManager.sessionAssets().query({
       lifecycle: query.lifecycle,
       queue: query.queue,
       facets: Array.isArray(requestedFacets) ? requestedFacets : (requestedFacets ? [requestedFacets] : []),
@@ -690,6 +695,8 @@ function buildApp(options = {}) {
       limit: query.limit,
       sort: query.sort,
     });
+    result.assets = await require('../platform/session-proxy-assets').enrichSessionProxyAssets(options.sessionProxy, result.assets);
+    return result;
   });
   // Registered ahead of `/:assetId` so the literal segment wins the route match.
   app.get('/api/v1/session-assets/ids', async (request, reply) => {
@@ -779,7 +786,10 @@ function buildApp(options = {}) {
   app.get('/api/v1/session-assets/:assetId', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const id = requestedAssetId(request.params.assetId);
-    try { return runManager.sessionAssets().detail(id); } catch (error) {
+    try {
+      const asset = runManager.sessionAssets().detail(id);
+      return (await require('../platform/session-proxy-assets').enrichSessionProxyAssets(options.sessionProxy, [asset], true))[0];
+    } catch (error) {
       if (error.code === 'ENOENT') throw new HttpError(404, `Login-state asset not found: ${id}`);
       throw error;
     }

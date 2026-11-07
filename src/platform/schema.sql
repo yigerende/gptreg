@@ -78,6 +78,7 @@ ALTER TABLE platform_attempts ADD COLUMN IF NOT EXISTS cost_checked_at timestamp
 CREATE INDEX IF NOT EXISTS platform_attempt_item ON platform_attempts(item_id);
 ALTER TABLE platform_items ADD COLUMN IF NOT EXISTS execution_started_at timestamptz;
 ALTER TABLE platform_items ADD COLUMN IF NOT EXISTS recovery_attempts integer NOT NULL DEFAULT 0;
+ALTER TABLE platform_items ADD COLUMN IF NOT EXISTS engine_cancelled_run_id text NOT NULL DEFAULT '';
 UPDATE platform_items i SET execution_started_at=COALESCE(
  (SELECT min(a.created_at) FROM platform_attempts a WHERE a.item_id=i.id),i.attempt_started_at)
  WHERE execution_started_at IS NULL AND attempt_started_at IS NOT NULL;

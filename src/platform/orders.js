@@ -255,7 +255,7 @@ class Orders {
     if (!entries.length) return null;
     fail(entries.length === 1, "结算流水冲突，需要检查账本", 409);
     const delivered = entries[0].kind === "charge";
-    const status = delivered ? "delivered" : o.cancel_requested ? "cancelled" : "failed";
+    const status = delivered ? "delivered" : o.cancel_requested || item.engine_cancelled_run_id ? "cancelled" : "failed";
     await q.query(
       "UPDATE platform_items SET status=$2,message=$3,updated_at=now() WHERE id=$1 AND status<>$2",
       [item.id, status, delivered ? "已交付" : entries[0].note],
@@ -267,6 +267,20 @@ class Orders {
     return this.withItem(itemId, async (q, o, item) => {
       const result = await this.settlement(q, o, item);
       if (result) await this.refresh(q, o.id);
+      return result;
+    });
+  }
+  async cancelEngineRun(runId) {
+    // Only the explicit administrator cancel route calls this. Engine cleanup
+    // and fatal stops must remain eligible for the normal recovery policy.
+    const link = await this.db.one('SELECT item_id FROM platform_attempts WHERE run_id=$1', [runId]);
+    if (!link) return null;
+    return this.withItem(link.item_id, async (q, o, item) => {
+      const settled = await this.settlement(q, o, item);
+      if (settled || ['delivered', 'failed', 'cancelled'].includes(item.status)) return settled;
+      await q.query('UPDATE platform_items SET engine_cancelled_run_id=$2 WHERE id=$1', [item.id, runId]);
+      const result = await this.release(q, o, item, 'cancelled', '管理员在原注册台取消任务，未交付积分已退回');
+      await this.refresh(q, o.id);
       return result;
     });
   }
@@ -378,7 +392,7 @@ class Orders {
             ? "completed"
             : o.delivered > 0
               ? "partial"
-              : o.cancel_requested
+              : o.cancel_requested || items.every(x => x.status === 'cancelled')
                 ? "cancelled"
                 : "failed";
     await q.query(

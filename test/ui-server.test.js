@@ -36,6 +36,21 @@ function temporaryWorkspace() {
   return { cwd, config };
 }
 
+test('explicit engine cancel durably notifies the platform before cleanup and stops if settlement fails', async t => {
+  const { cwd } = temporaryWorkspace(), calls = [];
+  const app = buildApp({ cwd, onRunCancel: async runId => {
+    calls.push(['platform', runId]);
+    if (runId === 'broken') throw new Error('database unavailable');
+  } });
+  t.after(async () => { await app.close(); fs.rmSync(cwd, { recursive: true, force: true }); });
+  app.services.runManager.load = runId => ({ runId });
+  app.services.runManager.cancel = async runId => { calls.push(['engine', runId]); return { status: 'cancelled' }; };
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v1/runs/customer-test/cancel' })).statusCode, 202);
+  assert.deepEqual(calls, [['platform', 'customer-test'], ['engine', 'customer-test']]);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/v1/runs/broken/cancel' })).statusCode, 500);
+  assert.deepEqual(calls.at(-1), ['platform', 'broken']);
+});
+
 
 /** The download name a response carries, decoded from its RFC 5987 form. */
 function downloadName(response) {

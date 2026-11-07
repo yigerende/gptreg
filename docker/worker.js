@@ -30,7 +30,10 @@ async function main() {
     503,
   );
   const sessionProxy = await require('../src/platform/session-proxy-service').createSessionProxy(db, crypt, 'worker');
-  const app = buildApp({ cwd, configPath, deferBootMaintenance: true, sessionProxy });
+  const orders = new Orders(db, crypt);
+  let queue;
+  const app = buildApp({ cwd, configPath, deferBootMaintenance: true, sessionProxy,
+    onRunCancel: runId => queue.cancelEngineRun(runId) });
   app.addHook("onRequest", async (r, reply) => {
     if (r.url === "/healthz" && r.method === "GET") return;
     if (r.headers.authorization !== `Bearer ${secrets.internal}`)
@@ -38,8 +41,7 @@ async function main() {
         .code(401)
         .send({ error: "Internal authentication required" });
   });
-  const orders = new Orders(db, crypt),
-    queue = new OrderWorker(db, orders, app.services.runManager);
+  queue = new OrderWorker(db, orders, app.services.runManager);
   app.get("/healthz", async () => ({ ok: !queue.closed }));
   app.post("/api/v1/platform/items/:id/resolve", async (r) => {
     const action = r.body?.action;
