@@ -1338,7 +1338,7 @@ describe('console shell', () => {
     rendered.unmount(); client.clear();
   });
 
-  it('shows IPRoyal credentials only for that provider and restores saved settings without returning secrets', async () => {
+  it('shows IPRoyal whitelist settings only for that provider and restores saved settings without returning secrets', async () => {
     window.history.replaceState(null, '', '/proxies');
     const settings: Record<string, any> = {};
     const saves: any[] = [];
@@ -1348,7 +1348,7 @@ describe('console shell', () => {
       if (url.pathname === '/api/v1/proxies/provider-settings') {
         const request = JSON.parse(String(init?.body)); saves.push(request);
         settings.iproyal = { count: request.count, protocol: request.protocol, sessionMinutes: request.sessionMinutes, apiBaseUrl: request.apiBaseUrl,
-          iproyal: { authMode: 'credentials', username: request.iproyal.username, subuserHash: '', apiTokenConfigured: true, passwordConfigured: true } };
+          iproyal: { authMode: 'whitelist', whitelistIp: request.iproyal.whitelistIp, apiTokenConfigured: true } };
         payload = { ok: true, provider: 'iproyal' };
       }
       if (url.pathname === '/api/v1/proxies') payload = { ...payload, dynamic: { ...payload.dynamic, providerSettings: settings } };
@@ -1364,39 +1364,40 @@ describe('console shell', () => {
     expect(screen.queryByLabelText('IPRoyal API Token')).not.toBeInTheDocument();
     await choose('IPRoyal');
     expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(120);
-    expect(screen.getByLabelText('API 地址（问号前）')).toHaveValue('https://resi-api.iproyal.com/v1/access/generate-proxy-list');
+    expect(screen.getByLabelText('API 地址（问号前）')).toHaveValue('https://resi-api.iproyal.com/v1');
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('IPRoyal API Token'), { target: { value: 'test-token' } });
-    fireEvent.change(screen.getByLabelText('IPRoyal 代理账号'), { target: { value: 'test-user' } });
-    fireEvent.change(screen.getByLabelText('IPRoyal 代理密码'), { target: { value: 'test-password' } });
+    fireEvent.change(screen.getByLabelText('IPRoyal 白名单 IP'), { target: { value: '192.0.2.10' } });
+    expect(screen.queryByLabelText('IPRoyal 代理账号')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('IPRoyal 代理密码')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('数量'), { target: { value: '200' } }); fireEvent.blur(screen.getByLabelText('数量'));
     fireEvent.change(screen.getByLabelText('会话粘性时间（分钟）'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(saves).toHaveLength(1));
-    expect(saves[0]).toMatchObject({ provider: 'iproyal', count: 200, sessionMinutes: 10, iproyal: { apiToken: 'test-token', username: 'test-user', password: 'test-password' } });
+    expect(saves[0]).toMatchObject({ provider: 'iproyal', count: 200, sessionMinutes: 10, iproyal: { apiToken: 'test-token', whitelistIp: '192.0.2.10' } });
     await waitFor(() => expect(screen.getByLabelText('IPRoyal API Token')).toHaveValue(''));
-    expect(screen.getByLabelText('IPRoyal 代理密码')).toHaveValue('');
+    expect(screen.queryByLabelText('IPRoyal 代理密码')).not.toBeInTheDocument();
     expect(screen.getByLabelText('IPRoyal API Token')).toHaveAttribute('placeholder', '已保存，留空保持不变');
     await choose('711Proxy');
     expect(screen.queryByLabelText('IPRoyal API Token')).not.toBeInTheDocument();
     await choose('IPRoyal');
-    expect(screen.getByLabelText('IPRoyal 代理账号')).toHaveValue('test-user');
+    expect(screen.getByLabelText('IPRoyal 白名单 IP')).toHaveValue('192.0.2.10');
     rendered.unmount(); client.clear(); client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); rendered = render(view());
     await choose('IPRoyal');
     await waitFor(() => expect(screen.getByLabelText('数量')).toHaveValue(200));
     expect(screen.getByLabelText('会话粘性时间（分钟）')).toHaveValue(10);
-    expect(screen.getByLabelText('IPRoyal 代理账号')).toHaveValue('test-user');
+    expect(screen.getByLabelText('IPRoyal 白名单 IP')).toHaveValue('192.0.2.10');
     expect(screen.getByRole('button', { name: '构建并拉取' })).toBeEnabled();
     rendered.unmount(); client.clear();
   });
 
-  it('submits IPRoyal subuser auth for bulk pulls and excludes its fields for other providers', async () => {
+  it('submits IPRoyal whitelist IP without proxy credentials and excludes its fields for other providers', async () => {
     window.history.replaceState(null, '', '/proxies');
     const builds: any[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'http://localhost');
       let payload: any = payloads[url.pathname] || {};
-      if (url.pathname === '/api/v1/proxies') payload = { ...payload, dynamic: { ...payload.dynamic, providerSettings: { iproyal: { count: 200, protocol: 'http', sessionMinutes: 10, iproyal: { authMode: 'subuser', apiTokenConfigured: true, passwordConfigured: false, subuserHash: 'saved-subuser' } } } } };
+      if (url.pathname === '/api/v1/proxies') payload = { ...payload, dynamic: { ...payload.dynamic, providerSettings: { iproyal: { count: 200, protocol: 'http', sessionMinutes: 10, iproyal: { authMode: 'whitelist', apiTokenConfigured: true, whitelistIp: '192.0.2.10' } } } } };
       if (url.pathname === '/api/v1/proxies/api/build-pull') { builds.push(JSON.parse(String(init?.body))); payload = payloads['/api/v1/proxies']; }
       return new Response(JSON.stringify(payload));
     }));
@@ -1404,14 +1405,14 @@ describe('console shell', () => {
     const rendered = render(<QueryClientProvider client={client}><Tooltip.Provider><Router><App /></Router></Tooltip.Provider></QueryClientProvider>);
     const choose = async (name: string) => { fireEvent.click(await screen.findByRole('combobox', { name: '代理商' })); fireEvent.click(await screen.findByRole('option', { name })); };
     await choose('IPRoyal');
-    await waitFor(() => expect(screen.getByLabelText('IPRoyal 子用户 ID')).toHaveValue('saved-subuser'));
+    await waitFor(() => expect(screen.getByLabelText('IPRoyal 白名单 IP')).toHaveValue('192.0.2.10'));
     expect(screen.queryByLabelText('IPRoyal 代理账号')).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('IPRoyal 子用户 ID'), { target: { value: '' } });
-    expect(screen.getByRole('button', { name: '构建并拉取' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('IPRoyal 子用户 ID'), { target: { value: 'changed-subuser' } });
+    fireEvent.change(screen.getByLabelText('IPRoyal 白名单 IP'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: '构建并拉取' })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('IPRoyal 白名单 IP'), { target: { value: '192.0.2.20' } });
     fireEvent.click(screen.getByRole('button', { name: '构建并拉取' }));
     await waitFor(() => expect(builds).toHaveLength(1));
-    expect(builds[0]).toMatchObject({ provider: 'iproyal', countryCode: 'GLOBAL', count: 200, protocol: 'http', sessionMinutes: 10, iproyal: { subuserHash: 'changed-subuser' } });
+    expect(builds[0]).toMatchObject({ provider: 'iproyal', countryCode: 'GLOBAL', count: 200, protocol: 'http', sessionMinutes: 10, iproyal: { whitelistIp: '192.0.2.20' } });
     await waitFor(() => expect(screen.getByRole('button', { name: '构建并拉取' })).toBeEnabled());
     await choose('711Proxy');
     fireEvent.click(screen.getByRole('button', { name: '构建并拉取' }));

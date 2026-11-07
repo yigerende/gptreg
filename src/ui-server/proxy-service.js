@@ -22,7 +22,8 @@ const { parseProxyLine, probeProxy, stableProxyId } = require('../proxy-pool');
 const { atomicWriteText, HttpError, mapLimit } = require('./utils');
 const { clone } = require('../util/shared');
 const { ProxyInventory } = require('./proxy-inventory');
-const { IPRoyalCredentials, IPRoyalError, parseIPRoyalResponse, iproyalHttpError } = require('./iproyal');
+const { IPRoyalCredentials, IPRoyalError } = require('./iproyal');
+const { IPRoyalWhitelist } = require('./iproyal-whitelist');
 
 function parseProxyContent(content, options = {}) {
   const entries = [];
@@ -92,6 +93,7 @@ class ProxyService {
     });
     this.inventory = new ProxyInventory(this);
     this.iproyal = new IPRoyalCredentials(configService.cwd);
+    this.iproyalWhitelist = new IPRoyalWhitelist(this);
     this.catalogBusy = false;
     this.catalogRefreshFlight = null;
     this.catalogRefreshCountries = null;
@@ -527,7 +529,7 @@ class ProxyService {
    */
   async pullInto(found, options = {}) {
     const controller = new AbortController();
-    const timeoutMs = Math.max(1000, Number(options.timeoutMs || 20000));
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs || (found.source.provider === 'iproyal' ? 90000 : 20000)));
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     // The caller's signal has to reach the socket, or stopping the robot and
     // shutting the server down both sit through the full timeout of every
@@ -539,11 +541,13 @@ class ProxyService {
     const providerLabel = PROXY_API_LABELS[found.source.provider] || 'Dynamic proxy';
     const isIPRoyal = found.source.provider === 'iproyal';
     try {
-      const request = isIPRoyal ? this.iproyal.request(found.source) : {};
-      const response = await this.fetchApiSource(found.source.url, { ...request, signal: controller.signal, timeoutMs });
-      if (!response.ok) throw isIPRoyal ? new IPRoyalError(iproyalHttpError(response.status)) : new Error(`${providerLabel} API returned HTTP ${response.status}`);
-      const content = await response.text();
-      const parsed = isIPRoyal ? parseIPRoyalResponse(content, found.source.protocol) : parseProxyContent(content, { defaultProtocol: found.source.protocol });
+      let parsed;
+      if (isIPRoyal) parsed = await this.iproyalWhitelist.pull(found.source, { signal: controller.signal, timeoutMs });
+      else {
+        const response = await this.fetchApiSource(found.source.url, { signal: controller.signal, timeoutMs });
+        if (!response.ok) throw new Error(`${providerLabel} API returned HTTP ${response.status}`);
+        parsed = parseProxyContent(await response.text(), { defaultProtocol: found.source.protocol });
+      }
       // A malformed line used to throw away the other 499 proxies in the same
       // response. Bad lines are counted and reported; only a response with
       // nothing usable in it is a failure.
@@ -561,9 +565,14 @@ class ProxyService {
         sourceId: found.source.id,
       }));
       found.source.entries = entries;
+      if (isIPRoyal) {
+        const restored = new Set(entries.map(entry => entry.id));
+        found.pool.retiredEntries = (found.pool.retiredEntries || []).filter(entry => !restored.has(entry.id));
+      }
       found.source.lastPulledSettings = { count: found.source.count, protocol: found.source.protocol, sessionMinutes: found.source.sessionMinutes, apiBaseUrl: apiBaseUrlOf(found.source.url) };
       found.source.lastPulledAt = new Date().toISOString();
       found.source.lastPullCount = entries.length;
+      found.source.lastNotice = parsed.notice || '';
       found.source.lastError = parsed.errors.length
         ? `已忽略 ${parsed.errors.length} 行无法解析的代理`
         : '';
@@ -575,6 +584,11 @@ class ProxyService {
         skippedLines: parsed.errors.length,
       };
     } catch (error) {
+      if (isIPRoyal && error.invalidatedProxyIds?.length) {
+        const uncertain = new Set(error.invalidatedProxyIds);
+        found.source.entries = found.source.entries.filter(entry => !uncertain.has(entry.id));
+        found.source.lastNotice = '部分端口更新结果不明，已暂停分配这些端口；再次刷新后恢复';
+      }
       const message = error.name === 'AbortError'
         ? `Dynamic proxy pull timed out after ${timeoutMs} ms`
         : isIPRoyal && !(error instanceof IPRoyalError) && !(error instanceof HttpError)

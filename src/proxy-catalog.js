@@ -22,7 +22,7 @@ const PROXY_API_TEMPLATES = Object.freeze({
   b2proxy: DEFAULT_B2PROXY_API_TEMPLATE,
   '1024proxy': DEFAULT_1024_API_TEMPLATE,
   cliproxy: DEFAULT_CLIPROXY_API_TEMPLATE,
-  iproyal: 'https://resi-api.iproyal.com/v1/access/generate-proxy-list',
+  iproyal: 'https://resi-api.iproyal.com/v1',
 });
 const PROXY_API_BASE_URLS = Object.freeze(Object.fromEntries(
   Object.entries(PROXY_API_TEMPLATES).map(([provider, template]) => [provider, apiBaseUrlOf(template)]),
@@ -141,6 +141,9 @@ function normalizeProviderBaseUrl(provider, value = PROXY_API_BASE_URLS[provider
   const known = proxyApiProviderFromHost(url.href);
   if (known && known !== provider) throw new Error('API 地址属于其他代理厂商');
   if (provider === 'iproyal' && url.protocol !== 'https:') throw new Error('IPRoyal API 地址必须使用 HTTPS');
+  // Previous releases saved the credential-based generator endpoint. Whitelist
+  // management uses the API root; keep existing sources and IDs during upgrade.
+  if (provider === 'iproyal') url.pathname = url.pathname.replace(/\/access\/generate-proxy-list\/?$/, '').replace(/\/+$/, '');
   return url.href;
 }
 
@@ -344,7 +347,7 @@ function normalizeProxyApiUrl(value, options = {}) {
   if (options.apiBaseUrl !== undefined) options = { ...options, apiBaseUrl: normalizeProviderBaseUrl(provider, options.apiBaseUrl) };
   if (provider === 'iproyal') {
     const apiBaseUrl = normalizeProviderBaseUrl(provider, value);
-    if (apiBaseUrl !== (options.apiBaseUrl || PROXY_API_BASE_URLS.iproyal)) throw new Error('IPRoyal 请使用生成代理列表的 API 地址');
+    if (apiBaseUrl !== (options.apiBaseUrl || PROXY_API_BASE_URLS.iproyal)) throw new Error('IPRoyal 请使用白名单管理 API 根地址');
     return { provider, url: apiBaseUrl, countryCode: normalizeCountryCode(options.countryCode),
       ...normalizeProviderSettings(provider, { ...options, apiBaseUrl }), sessionType: 'sticky', earlyRotation: false };
   }
@@ -445,6 +448,7 @@ function normalizeProxyCatalog(input = {}) {
       const entries = [];
       for (const rawEntry of rawSource.entries || []) {
         const entry = normalizeCachedEntry(rawEntry, countryCode, id);
+        if (normalized.provider === 'iproyal' && parseProxyLine(entry.url).username) continue;
         if (retiredIds.has(entry.id)) continue;
         if (entrySeen.has(entry.url)) continue;
         entrySeen.add(entry.url);
@@ -477,6 +481,7 @@ function normalizeProxyCatalog(input = {}) {
         lastPulledAt: rawSource.lastPulledAt || '',
         lastPullCount: Number(rawSource.lastPullCount || entries.length),
         lastError: String(rawSource.lastError || ''),
+        lastNotice: String(rawSource.lastNotice || ''),
         lastPulledSettings: rawSource.lastPulledSettings || null,
       });
     }

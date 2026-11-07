@@ -1089,6 +1089,7 @@ export type ProxyApiSource = {
   lastPulledAt: string;
   lastPullCount: number;
   lastError: string;
+  lastNotice?: string;
 };
 
 export type CountryProxyPool = {
@@ -1119,8 +1120,8 @@ export type ProxyCatalogSnapshot = {
   proxies: ProxyRecord[];
 };
 
-export type IPRoyalSettings = { authMode?: 'credentials' | 'subuser'; apiToken?: string; username?: string; password?: string; subuserHash?: string };
-export type IPRoyalSettingsSnapshot = Omit<IPRoyalSettings, 'apiToken' | 'password'> & { apiTokenConfigured: boolean; passwordConfigured: boolean };
+export type IPRoyalSettings = { apiToken?: string; whitelistIp?: string };
+export type IPRoyalSettingsSnapshot = Omit<IPRoyalSettings, 'apiToken'> & { authMode: 'whitelist'; apiTokenConfigured: boolean };
 export type ProxyProviderSettings = { count: number; protocol: string; sessionMinutes: number; apiBaseUrl?: string; iproyal?: IPRoyalSettingsSnapshot };
 export type ProxySettingsRefresh = {
   provider: string;
